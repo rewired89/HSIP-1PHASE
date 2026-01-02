@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    # Phase 1: Core Protocol (Open Source)
     "crates/hsip-core",
     "crates/hsip-session",
     "crates/hsip-net",
@@ -7,8 +8,7 @@ members = [
     "crates/hsip-cli",
     "crates/hsip-auth",
     "crates/hsip-gateway",
-    "crates/hsip-intercept",
-    "crates/hsip-keyboard",
+
     # Phase 2: Enterprise & Commercial Crates
     "crates/hsip-enterprise",
     "crates/hsip-verify",
