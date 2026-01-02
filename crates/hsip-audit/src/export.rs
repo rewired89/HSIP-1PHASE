@@ -4,7 +4,6 @@
 
 use crate::{AuditLog, Result};
 use serde::Serialize;
-use std::io::Write;
 
 /// Export format
 #[derive(Debug, Clone, Copy)]

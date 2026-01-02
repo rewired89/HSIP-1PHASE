@@ -24,6 +24,7 @@ pub struct ConsentProof {
     pub decision: ConsentDecision,
     pub message_hash: [u8; 32],
     pub timestamp: DateTime<Utc>,
+    #[serde(with = "serde_big_array::BigArray")]
     pub signature: [u8; 64],
 }
 

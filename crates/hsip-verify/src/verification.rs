@@ -49,6 +49,7 @@ impl VerificationResult {
 pub struct SignedMessage {
     pub metadata: MessageMetadata,
     pub cert_chain: CertChain,
+    #[serde(with = "serde_big_array::BigArray")]
     pub signature: [u8; 64],
 }
 

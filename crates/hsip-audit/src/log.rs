@@ -15,6 +15,7 @@ pub struct AuditLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignedEntry {
     pub entry: AuditEntry,
+    #[serde(with = "serde_big_array::BigArray")]
     pub signature: [u8; 64],
 }
 
@@ -34,7 +35,7 @@ impl AuditLog {
     }
 
     /// Append an entry to the log
-    pub fn append(&mut self, mut entry: AuditEntry, signing_key: &SigningKey) -> Result<()> {
+    pub fn append(&mut self, entry: AuditEntry, signing_key: &SigningKey) -> Result<()> {
         // Verify sequence number
         let expected_seq = self.entries.len() as u64 + 1;
         if entry.sequence_number != expected_seq {

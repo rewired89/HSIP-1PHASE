@@ -1,6 +1,6 @@
 //! Consent Policy Definitions
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 
 /// A consent policy defining what messages a user allows
