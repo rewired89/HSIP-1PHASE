@@ -2,7 +2,8 @@
 //!
 //! Manages trusted root identities (trust anchors) for verification
 
-use crate::{EnterpriseError, Result, RevocationManager};
+use crate::{EnterpriseError, Result};
+use crate::revocation::RevocationManager;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

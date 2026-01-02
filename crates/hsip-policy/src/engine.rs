@@ -2,7 +2,8 @@
 //!
 //! Main engine for evaluating consent policies
 
-use crate::{ConsentPolicy, ConsentProof, ConsentRule, MessageContext, PolicyError, Result};
+use crate::{ConsentPolicy, ConsentProof, ConsentRule, PolicyError, Result};
+use crate::rules::MessageContext;
 use std::collections::HashMap;
 
 /// Policy check result
@@ -103,10 +104,10 @@ impl ConsentPolicyEngine {
     }
 
     /// Get all consent proofs for a user
-    pub fn get_proofs_for_user(&self, user_id: &str) -> Vec<&ConsentProof> {
+    pub fn get_proofs_for_user(&self, _user_id: &str) -> Vec<&ConsentProof> {
         self.consent_proofs
             .iter()
-            .filter(|p| {
+            .filter(|_p| {
                 // Match by public key (we'd need to map user_id -> public_key in production)
                 // For now, just return all proofs
                 true

@@ -2,6 +2,7 @@
 //!
 //! Advanced rule-based consent conditions
 
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 
 /// A consent rule with conditions

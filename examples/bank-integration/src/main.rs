@@ -11,10 +11,12 @@ use hsip_enterprise::{
 };
 use hsip_policy::{ConsentPolicy, PolicyScope, TimeWindow, ConsentPolicyEngine};
 use hsip_verify::{
-    MessageMetadata, MessageType, Money, SignedMessage, VerificationEngine,
-    MessageClassifier,
+    MessageMetadata, MessageType, VerificationEngine, MessageClassifier,
 };
+use hsip_verify::message_types::{Money, Severity};
+use hsip_verify::verification::SignedMessage;
 use rand::rngs::OsRng;
+use ed25519_dalek::SigningKey;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -146,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
     // Step 9: Log to audit trail
     println!("7. Recording to audit log...");
 
-    let audit_signing_key = ed25519_dalek::SigningKey::generate(&mut OsRng);
+    let audit_signing_key = SigningKey::generate(&mut OsRng);
     let mut audit_log = AuditLog::new("bank_audit_001".to_string(), &audit_signing_key);
 
     let audit_entry = AuditEntry::new(
@@ -188,7 +190,7 @@ async fn main() -> anyhow::Result<()> {
         sender_domain: attacker_identity.domain.clone(),
         recipient: customer_id.to_string(),
         message_type: MessageType::SecurityAlert {
-            severity: hsip_verify::Severity::Critical,
+            severity: Severity::Critical,
             description: "Your account is locked! Click here now!".to_string(),
             action_required: true,
             deadline: Some(Utc::now() + Duration::hours(1)),
