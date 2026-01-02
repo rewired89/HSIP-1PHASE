@@ -9,6 +9,12 @@ members = [
     "crates/hsip-gateway",
     "crates/hsip-intercept",
     "crates/hsip-keyboard",
+    # Phase 2: Enterprise & Commercial Crates
+    "crates/hsip-enterprise",
+    "crates/hsip-verify",
+    "crates/hsip-policy",
+    "crates/hsip-audit",
+    "crates/hsip-api",
 ]
 
 

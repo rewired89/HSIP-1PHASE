@@ -1,0 +1,24 @@
+[package]
+name = "hsip-policy"
+version = "2.0.0"
+edition = "2021"
+license = "SEE LICENSE IN LICENSE-ENTERPRISE"
+description = "HSIP Phase 2: Consent policy engine with time-bounds, scopes, and revocation"
+authors = ["Nyx Systems LLC"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+blake3 = "1.5"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+ed25519-dalek = "2.1"
+
+# Internal dependencies
+hsip-core = { path = "../hsip-core" }
+hsip-enterprise = { path = "../hsip-enterprise" }
+hsip-verify = { path = "../hsip-verify" }
+
+[dev-dependencies]
+tokio = { version = "1.39", features = ["full"] }

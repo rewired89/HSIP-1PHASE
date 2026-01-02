@@ -1,0 +1,25 @@
+[package]
+name = "hsip-enterprise"
+version = "2.0.0"
+edition = "2021"
+license = "SEE LICENSE IN LICENSE-ENTERPRISE"
+description = "HSIP Phase 2: Enterprise identity, delegation, and certificate chain management"
+authors = ["Nyx Systems LLC"]
+
+[dependencies]
+ed25519-dalek = "2.1"
+x25519-dalek = "2.0"
+blake3 = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hex = "0.4"
+rand = "0.8"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+
+# Internal dependencies
+hsip-core = { path = "../hsip-core" }
+
+[dev-dependencies]
+tokio = { version = "1.39", features = ["full"] }
