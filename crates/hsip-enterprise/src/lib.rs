@@ -16,11 +16,11 @@ pub mod cert_chain;
 pub mod revocation;
 pub mod trust_store;
 
-pub use identity::{EnterpriseIdentity, IdentityCapabilities};
+pub use identity::{EnterpriseIdentity, IdentityCapabilities, IdentityMetadata, PublicEnterpriseIdentity};
 pub use delegation::{DelegationCert, SubIdentity};
 pub use cert_chain::{CertChain, CertChainValidator};
 pub use revocation::{RevocationList, RevocationReason};
-pub use trust_store::{TrustStore, TrustAnchor};
+pub use trust_store::{TrustStore, TrustAnchor, TrustAnchorMetadata};
 
 use thiserror::Error;
 

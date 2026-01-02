@@ -15,6 +15,9 @@ members = [
     "crates/hsip-policy",
     "crates/hsip-audit",
     "crates/hsip-api",
+
+    # Examples
+    "examples/bank-integration",
 ]
 
 

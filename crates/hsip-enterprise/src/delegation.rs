@@ -35,6 +35,7 @@ pub struct DelegationCert {
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub nonce: [u8; 16],
+    #[serde(with = "serde_big_array::BigArray")]
     pub parent_signature: [u8; 64],
 }
 

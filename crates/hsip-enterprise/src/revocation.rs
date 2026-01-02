@@ -36,6 +36,7 @@ pub struct RevocationList {
     pub issued_at: DateTime<Utc>,
     pub next_update: DateTime<Utc>,
     pub entries: Vec<RevocationEntry>,
+    #[serde(with = "serde_big_array::BigArray")]
     pub signature: [u8; 64],
 }
 
