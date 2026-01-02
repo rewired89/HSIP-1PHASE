@@ -200,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
         nonce: [1u8; 16],
     };
 
-    let mut fake_cert_chain = CertChain::new(
+    let fake_cert_chain = CertChain::new(
         attacker_identity.domain.clone(),
         attacker_identity.public_key,
     );
