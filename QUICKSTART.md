@@ -1,353 +1,289 @@
-# HSIP Keyboard - Quick Start Guide
+# HSIP Quick Start Guide
 
-**Goal:** Build APK (Android) and IPA (iOS) to test encrypted messaging with your girlfriend.
+**Get HSIP working in 15 minutes**
 
----
-
-## ⚡ Quick Summary
-
-### What You'll Do:
-1. **Android**: Run one script → Get APK → Install on girlfriend's phone
-2. **iOS**: Run one script → Follow Xcode instructions → Install on your iPhone
-3. **Test**: Exchange contacts → Send encrypted messages!
-
-### What You'll Get:
-- ✅ Android APK (for girlfriend)
-- ✅ iOS app (for you)
-- ✅ Emoji fingerprint verification (🐕🌲🚗🎸⚡🍕)
-- ✅ End-to-end encrypted messaging in ANY app
+Eliminate phishing attacks by showing ✅ **VERIFIED** or 🔴 **UNVERIFIED** badges on all bank messages.
 
 ---
 
-## 🤖 Android Build (For Girlfriend's Phone)
+## 30-Second Overview
 
-### Prerequisites:
-1. **Rust** - https://rustup.rs
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
+**What HSIP does:** Banks sign messages → Customers verify signatures → Phishing attempts show red 🔴 warning
 
-2. **Android NDK** - Install via Android Studio:
-   - Android Studio → Settings → SDK Manager → SDK Tools → NDK
-   - Set environment variable:
-     ```bash
-     export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/25.2.9519653
-     ```
+**What you need:**
+1. Python backend to sign messages
+2. iOS/Android apps to verify signatures
 
-### Build Steps:
+---
+
+## Step 1: Generate Keys (2 minutes)
 
 ```bash
-# 1. Navigate to android-app directory
-cd android-app
+# Install Python SDK
+pip install hsip-bank-sdk
 
-# 2. Run build script (does everything automatically!)
-./build-apk.sh
-
-# 3. Wait for build (5-10 minutes first time)
-# Output: android-app/app/build/outputs/apk/debug/app-debug.apk
+# Generate bank keypair
+hsip-keygen --domain yourbank.com --output ./keys
 ```
 
-### What the script does:
-1. ✅ Installs Rust Android targets
-2. ✅ Compiles Rust crypto library for all Android architectures
-3. ✅ Copies `.so` files to correct locations
-4. ✅ Downloads Gradle wrapper
-5. ✅ Builds APK with everything bundled
+**Output:**
+```
+✅ Generated keypair for yourbank.com
+   Private key: keys/yourbank.com_private_key.pem  # Keep SECRET
+   Public key:  keys/yourbank.com_public_key.pem   # Give to mobile apps
+```
 
-### Install on Girlfriend's Phone:
+**⚠️ CRITICAL:** Store private key in secure vault, NOT in git.
 
+---
+
+## Step 2: Sign Messages (Backend) (5 minutes)
+
+**Install:**
 ```bash
-# Connect her phone via USB
-adb devices
+pip install hsip-bank-sdk
+```
 
-# Install APK
-adb install app/build/outputs/apk/debug/app-debug.apk
+**Sign a message:**
 
-# Done! She can now open "HSIP Keyboard" app
+```python
+from hsip_bank import BankMessageSigner, MessageType
+
+# Initialize signer
+signer = BankMessageSigner(
+    private_key_path="./keys/yourbank.com_private_key.pem",
+    domain="yourbank.com"
+)
+
+# Sign a transaction alert
+msg = signer.sign_message(
+    message_text="Transaction: $50.00 at Starbucks",
+    message_type=MessageType.TRANSACTION_ALERT,
+    recipient="customer@email.com"
+)
+
+# Get push notification payload
+payload = msg.to_notification_payload()
+# Send via FCM/APNS: send_push(payload)
+```
+
+**That's it!** Messages are now cryptographically signed.
+
+---
+
+## Step 3: Verify in iOS App (4 minutes)
+
+**Add SDK** (Swift Package Manager):
+```
+File → Add Packages → https://github.com/nyxsystems/hsip-ios → 1.0.0
+```
+
+**Initialize in AppDelegate.swift:**
+
+```swift
+import HSIP
+
+class AppDelegate: UIApplicationDelegate {
+    static var hsipVerifier: HSIPVerifier!
+
+    func application(...) -> Bool {
+        // Get hex from keys/metadata.json
+        AppDelegate.hsipVerifier = try! HSIPVerifier(
+            publicKeyHex: "YOUR_PUBLIC_KEY_HEX_HERE"
+        )
+        return true
+    }
+}
+```
+
+**Verify notifications:**
+
+```swift
+import HSIP
+
+// Parse message from push notification
+let message = SignedMessage(
+    messageId: data["message_id"]!,
+    senderDomain: data["sender_domain"]!,
+    recipient: data["recipient"]!,
+    messageType: data["message_type"]!,
+    messageText: data["message_text"]!,
+    sentAt: data["sent_at"]!,
+    signature: data["signature"]!,
+    publicKey: data["public_key"]!
+)
+
+// Verify
+let result = AppDelegate.hsipVerifier.verificationResult(for: message)
+
+if result.isVerified {
+    // Show: ✅ yourbank.com - Transaction: $50.00...
+    title = "\(result.badge) \(message.senderDomain)"
+} else {
+    // Show: 🔴 Unverified Message - Do not trust
+    title = "\(result.badge) Unverified Message"
+}
 ```
 
 ---
 
-## 🍎 iOS Build (For Your iPhone)
+## Step 4: Verify in Android App (4 minutes)
 
-### Prerequisites:
-1. **macOS** (required for iOS development)
-2. **Xcode** (from Mac App Store)
-3. **Xcode Command Line Tools**:
-   ```bash
-   xcode-select --install
-   ```
-4. **Rust** - https://rustup.rs
-5. **Apple Developer Account** ($99/year) - needed for device installation
-
-### Build Steps:
-
-```bash
-# 1. Navigate to ios-app directory
-cd ios-app
-
-# 2. Run build script (compiles Rust libraries)
-./build-ipa.sh
-
-# 3. Follow on-screen instructions to create Xcode project
+**Add SDK** (build.gradle):
+```gradle
+dependencies {
+    implementation 'com.hsip:hsip-android:1.0.0'
+}
 ```
 
-### What the script does:
-1. ✅ Installs Rust iOS targets
-2. ✅ Compiles Rust crypto library for iOS (device + simulator)
-3. ✅ Creates universal `.a` libraries
-4. ✅ Shows you how to set up Xcode project
+**Initialize in Application.kt:**
 
-### Create Xcode Project (One-Time Setup):
+```kotlin
+import com.hsip.HSIPVerifier
 
-**Follow the instructions printed by `build-ipa.sh`, or:**
+class BankApp : Application() {
+    companion object {
+        lateinit var hsipVerifier: HSIPVerifier
+    }
 
-1. Open Xcode → Create new iOS App
-   - Name: `HSIP Keyboard`
-   - Bundle ID: `io.hsip.keyboard`
-
-2. Add Keyboard Extension
-   - File → New → Target → Custom Keyboard Extension
-   - Name: `HSIPKeyboardExtension`
-
-3. Add Rust library
-   - Build Phases → Link Binary With Libraries → Add `Frameworks/libhsip_keyboard_device.a`
-
-4. Add Swift files
-   - Drag all `.swift` files from `ios-app/` into Xcode
-
-5. Build → Run on your iPhone
-
-**That's it!** Detailed steps are shown by the build script.
-
----
-
-## 🧪 Testing: You ↔ Girlfriend
-
-### Step 1: Both Install Apps
-
-**Her (Android):**
-- Install APK: `adb install app-debug.apk`
-- Open "HSIP Keyboard" app
-- Tap through setup
-- Go to Settings → Keyboard → Enable "HSIP Keyboard"
-
-**You (iOS):**
-- Run app from Xcode on your iPhone
-- Tap through setup
-- Go to Settings → General → Keyboard → Add New Keyboard → "HSIP Keyboard"
-
----
-
-### Step 2: Exchange Contacts
-
-**You send her:**
-```
-Open HSIP app → "Share My Contact" → Copy text → Send via Instagram
-
-She receives:
-🔐 HSIP Contact
-YourName
-hsip://add?pubkey=ABC123...&name=YourName
-
-She clicks the link → HSIP opens → Tap "Accept"
+    override fun onCreate() {
+        super.onCreate()
+        // Get hex from keys/metadata.json
+        hsipVerifier = HSIPVerifier(
+            bankPublicKeyHex = "YOUR_PUBLIC_KEY_HEX_HERE"
+        )
+    }
+}
 ```
 
-**She sends you:**
-```
-Same process - she shares her contact link
-You click it → Accept
+**Verify notifications:**
+
+```kotlin
+import com.hsip.SignedMessage
+
+// Parse message from Firebase
+val message = SignedMessage(
+    messageId = data["message_id"]!!,
+    senderDomain = data["sender_domain"]!!,
+    recipient = data["recipient"]!!,
+    messageType = data["message_type"]!!,
+    messageText = data["message_text"]!!,
+    sentAt = data["sent_at"]!!,
+    signature = data["signature"]!!,
+    publicKey = data["public_key"]!!
+)
+
+// Verify
+val result = BankApp.hsipVerifier.verificationResult(message)
+
+if (result.isVerified) {
+    // Show: ✅ yourbank.com - Transaction: $50.00...
+    showNotification("${result.badge} ${message.senderDomain}", ...)
+} else {
+    // Show: 🔴 Unverified Message
+    showNotification("${result.badge} Unverified Message", ...)
+}
 ```
 
 ---
 
-### Step 3: Verify Emoji Fingerprint
+## You're Done! 🎉
 
-**Both devices show:**
-```
-┌─────────────────────────────┐
-│  Verify with [Name]:        │
-│                             │
-│  🐕 🌲 🚗 🎸 ⚡ 🍕          │
-│                             │
-│  Does it match?             │
-│  [Yes, Match!]              │
-└─────────────────────────────┘
-```
-
-**Video call or in person:**
-- You: "I see dog, tree, car, guitar, lightning, pizza"
-- Her: "Yep, same here!"
-- Both tap "Yes, Match!" ✅
-
-**You only do this ONCE per contact!**
+**Test it:**
+1. Send a signed message from backend
+2. Receive on mobile → See ✅ **VERIFIED** badge
+3. Try sending unsigned message → See 🔴 **UNVERIFIED** warning
 
 ---
 
-### Step 4: Send Encrypted Messages
+## What Customers See
 
-**Her (Android) → You (iOS):**
-
-1. She opens Instagram
-2. Taps text field → HSIP keyboard appears
-3. Taps lock icon 🔒 → Selects your name
-4. Types: "Hello from Android!"
-5. Presses Enter
-
-**What you see:**
+### Before HSIP (No Protection)
 ```
-Instagram message from her:
-🔒hQEMA5k7x9mP2qR8nL4vW6jH3sT1zN5bY0cF8d...
+📱 Chase Bank
+   Transaction: $500 at Amazon
+   [No way to verify authenticity]
 ```
 
-6. You tap the message
-7. HSIP detects it → Shows "Decrypt?"
-8. Tap "Decrypt"
-9. See: "Hello from Android!" ✅
+### After HSIP (Protected)
+```
+📱 ✅ chase.com
+   Transaction: $500 at Amazon
+   [Cryptographically verified]
 
-**You (iOS) → Her (Android):**
-
-Same process but reversed!
+📱 🔴 Unverified Message
+   Urgent: Update your account
+   [Blocked phishing attempt]
+```
 
 ---
 
-## ✅ How to Know It's Working
-
-### Test 1: Visual Confirmation
-**If you see `🔒` followed by gibberish → Encryption is working!**
+## Key Files
 
 ```
-✅ Good:  🔒hQEMA5k7x9mP2qR8nL4vW6jH3sT1zN5bY0cF8d...
-❌ Bad:   Hello from Android! (not encrypted)
+sdk/
+├── python/              # Backend SDK (signing)
+│   ├── hsip_bank/
+│   ├── setup.py
+│   └── README.md
+├── ios/                 # iOS SDK (verification)
+│   └── HSIP/
+│       ├── Sources/
+│       └── README.md
+└── android/             # Android SDK (verification)
+    └── hsip/
+        ├── src/
+        └── README.md
+
+BANK_INTEGRATION_GUIDE.md  # Full integration guide
+QUICKSTART.md              # This file
 ```
-
-### Test 2: Third Person Can't Read
-**Send encrypted message to someone WITHOUT HSIP:**
-
-They see:
-```
-🔒hQEMA5k7x9mP2qR8nL4vW6jH3sT1zN5bY0cF8d...
-```
-
-They can't decrypt it (no key) ✅ **This proves it's really encrypted!**
-
-### Test 3: Cross-Platform Works
-**She (Android) sends → You (iOS) decrypts successfully**
-- Proves: Same Rust crypto core on both platforms
-- Proves: Message format is compatible
-- Proves: Keys are correctly exchanged
-
-### Test 4: Emoji Verification Matches
-**Both sides see same 6 emoji**
-- Proves: No man-in-the-middle attack
-- Proves: Keys are correct
-- Proves: Secure connection established
 
 ---
 
-## 🐛 Troubleshooting
+## Security Checklist
 
-### Android Build Fails
-
-**Problem:** `ANDROID_NDK_HOME not set`
-```bash
-# Solution:
-export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/25.2.9519653
-# Add to ~/.bashrc or ~/.zshrc to make permanent
-```
-
-**Problem:** `Rust not found`
-```bash
-# Solution:
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
-```
-
-**Problem:** Gradle fails
-```bash
-# Solution: Clean and rebuild
-./gradlew clean
-./build-apk.sh
-```
-
-### iOS Build Fails
-
-**Problem:** `xcodebuild not found`
-```bash
-# Solution:
-xcode-select --install
-```
-
-**Problem:** `Library not found: -lhsip_keyboard`
-- **Solution:** Make sure you added the `.a` file in Xcode → Build Phases → Link Binary With Libraries
-
-**Problem:** Code signing error
-- **Solution:** Xcode → Signing & Capabilities → Select your team
-
-### Message Not Decrypting
-
-**Problem:** Emoji fingerprints don't match
-- ⚠️ **Possible MITM attack!**
-- Solution: Exchange keys again, verify carefully
-
-**Problem:** Message shows as gibberish even after "decrypt"
-- Check: Are you both using the same version of the app?
-- Check: Did you complete emoji verification?
-- Try: Delete contact → Re-add → Verify emoji again
+Before production:
+- [ ] Private key stored in HSM/vault (not in code)
+- [ ] Public key hardcoded in mobile apps
+- [ ] Critical messages (transaction/security alerts) blocked if unverified
+- [ ] Monitoring enabled for signature failures
 
 ---
 
-## 📚 Next Steps
+## Common Issues
 
-### After Successful Test:
+**"Signature verification always fails"**
+→ Check public key matches between backend and mobile apps
 
-1. **Build release APK** (signed, optimized):
-   ```bash
-   cd android-app
-   ./gradlew assembleRelease
-   # Then sign with keystore
-   ```
+**"ImportError: No module named hsip_bank"**
+→ Run: `pip install hsip-bank-sdk`
 
-2. **Distribute to friends**:
-   - Host APK on website
-   - Share via direct download
-   - Later: Submit to Play Store / App Store
+**"Cannot find HSIPVerifier in scope" (iOS)**
+→ Add: `import HSIP` at top of file
 
-3. **Add more features**:
-   - Group chat encryption
-   - File encryption
-   - Voice message encryption
-
-4. **Security audit**:
-   - Have Rust crypto code audited
-   - Penetration testing
-   - Bug bounty program
+**"Duplicate BouncyCastle class" (Android)**
+→ Exclude conflicting dependency in build.gradle
 
 ---
 
-## 🎯 Summary
+## Next Steps
 
-| Step | Android (Girlfriend) | iOS (You) | Time |
-|------|---------------------|-----------|------|
-| **1. Build** | `./build-apk.sh` | `./build-ipa.sh` + Xcode setup | 10-30 min |
-| **2. Install** | `adb install` | Xcode → Run | 2 min |
-| **3. Setup** | Open app → Enable keyboard | Open app → Enable keyboard | 2 min |
-| **4. Exchange** | Share contact link | Share contact link | 1 min |
-| **5. Verify** | Check emoji | Check emoji | 30 sec |
-| **6. Test** | Send message → See 🔒 | Receive → Decrypt | 1 min |
-
-**Total time to first encrypted message: ~20-40 minutes**
+1. **Read full guide:** `BANK_INTEGRATION_GUIDE.md`
+2. **Explore examples:** `sdk/python/examples/`, `sdk/ios/HSIP/README.md`
+3. **Get support:** support@nyxsystems.com
 
 ---
 
-## 💡 Key Takeaways
+## Enterprise Support
 
-✅ **Rust = Crypto Brain** (write once, works on both platforms)
-✅ **Kotlin/Swift = UI Layer** (platform-specific, calls Rust)
-✅ **One-time emoji verification** (then automatic key rotation)
-✅ **Works in ANY app** (Instagram, WhatsApp, Gmail, etc.)
-✅ **Even sender can't decrypt** (ephemeral keys, forward secrecy)
+**HSIP Enterprise License:**
+- Free 3-month pilot
+- $15K/year licensing
+- Includes: Priority support, security audits, compliance consulting
 
-**You're building something powerful!** 🚀
+**Contact:** enterprise@nyxsystems.com
 
-For detailed technical info, see [BUILD.md](BUILD.md)
+---
+
+**Questions?** support@nyxsystems.com | https://docs.hsip.io
