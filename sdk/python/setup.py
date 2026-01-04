@@ -5,9 +5,9 @@ HSIP Bank SDK Setup
 from setuptools import setup, find_packages
 from pathlib import Path
 
-# Read README for long description
+# Read README for long description (with UTF-8 encoding for Windows compatibility)
 readme = Path(__file__).parent / "README.md"
-long_description = readme.read_text() if readme.exists() else ""
+long_description = readme.read_text(encoding="utf-8") if readme.exists() else ""
 
 setup(
     name="hsip-bank-sdk",
