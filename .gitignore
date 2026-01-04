@@ -74,3 +74,4 @@ build_rs_cov.profraw
 # Old tools
 tools/
 
+**/__pycache__/
