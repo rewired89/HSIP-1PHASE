@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    # Phase 1: Core Protocol (Open Source)
     "crates/hsip-core",
     "crates/hsip-session",
     "crates/hsip-net",
@@ -8,29 +7,22 @@ members = [
     "crates/hsip-cli",
     "crates/hsip-auth",
     "crates/hsip-gateway",
-
-    # Phase 2: Enterprise & Commercial Crates
-    "crates/hsip-enterprise",
-    "crates/hsip-verify",
-    "crates/hsip-policy",
-    "crates/hsip-audit",
     "crates/hsip-api",
-
-    # Examples
-    "examples/bank-integration",
+    "crates/hsip-audit",
+    "crates/hsip-enterprise",
+    "crates/hsip-policy",
+    "crates/hsip-verify",
 ]
 
-
 exclude = [
-    "crates/hsip-session/fuzz"
+    "crates/hsip-session/fuzz",
 ]
 resolver = "2"
 
 [workspace.dependencies]
-tokio   = "1.39"    
+tokio   = "1.39"
 mio     = "0.8.11"
 socket2 = "0.5.7"
 windows = "0.58.0"
 windows-sys = "0.60.2"
 windows-targets = "0.53.5"
-toolchain = "1.87.0"

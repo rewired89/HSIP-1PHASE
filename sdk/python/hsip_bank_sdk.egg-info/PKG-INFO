@@ -1,0 +1,245 @@
+Metadata-Version: 2.1
+Name: hsip-bank-sdk
+Version: 1.0.0
+Summary: HSIP Backend SDK for banks to sign verified messages
+Home-page: https://github.com/nyxsystems/hsip-bank-sdk
+Author: Nyx Systems LLC
+Author-email: contact@nyxsystems.com
+Keywords: hsip security banking messaging authentication cryptography
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: Other/Proprietary License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Security :: Cryptography
+Classifier: Topic :: Software Development :: Libraries
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
+# HSIP Bank SDK (Python)
+
+**Backend SDK for banks to sign verified messages and eliminate phishing.**
+
+## What This Does
+
+This SDK allows banks to cryptographically sign messages sent to customers. When integrated with the HSIP mobile SDK, customers see:
+- ✅ **VERIFIED** - Message cryptographically proven to be from the bank
+- 🔴 **UNVERIFIED** - Fake/phishing message
+
+## Installation
+
+```bash
+pip install hsip-bank-sdk
+```
+
+## Quick Start
+
+### 1. Generate Bank Keypair
+
+```bash
+hsip-keygen --domain yourbank.com --output ./secure-keys
+```
+
+This creates:
+- `yourbank.com.private.pem` - Private key (KEEP SECURE!)
+- `yourbank.com.public.pem` - Public key
+- `yourbank.com.metadata.json` - Metadata with public key hex
+
+**⚠️ IMPORTANT:** Store the private key securely! Use an HSM in production.
+
+### 2. Sign Messages in Your Backend
+
+```python
+from hsip_bank import BankMessageSigner, MessageType
+
+# Initialize signer (do this once at app startup)
+signer = BankMessageSigner(
+    private_key_path="./secure-keys/yourbank.com.private.pem",
+    domain="yourbank.com"
+)
+
+# Sign a transaction alert
+signed_message = signer.sign_message(
+    message_text="Transaction: $50.00 at Starbucks",
+    message_type=MessageType.TRANSACTION_ALERT,
+    recipient="customer@email.com"
+)
+
+# Send via your existing push notification system
+import requests  # or Firebase SDK, APNS, etc.
+
+requests.post("https://push-service.com/send", json={
+    "device_token": customer_device_token,
+    "notification": signed_message.to_notification_payload()
+})
+```
+
+### 3. Distribute Public Key to Mobile Apps
+
+The public key needs to be embedded in your iOS/Android apps:
+
+```python
+# Get public key hex
+public_key = signer.get_public_key_hex()
+print(f"Public key: {public_key}")
+
+# Add this to your mobile app code (iOS/Android)
+# Example: let bankPublicKey = "a1b2c3d4e5f6..."
+```
+
+## Complete Example
+
+```python
+from hsip_bank import BankMessageSigner, MessageType
+
+# Initialize
+signer = BankMessageSigner(
+    "./keys/chase.com.private.pem",
+    "chase.com"
+)
+
+# Sign different types of messages
+messages = [
+    # Transaction alert
+    signer.sign_message(
+        "Charged $123.45 at Amazon.com",
+        MessageType.TRANSACTION_ALERT,
+        "user@example.com"
+    ),
+
+    # Security alert
+    signer.sign_message(
+        "New login from Chrome on Windows",
+        MessageType.SECURITY_ALERT,
+        "user@example.com"
+    ),
+
+    # Account update
+    signer.sign_message(
+        "Your statement is ready",
+        MessageType.ACCOUNT_UPDATE,
+        "user@example.com"
+    ),
+]
+
+# Each message has:
+for msg in messages:
+    print(f"Message ID: {msg.message_id}")
+    print(f"Text: {msg.message_text}")
+    print(f"Signature: {msg.signature[:32]}...")
+    print(f"Ready to send: {msg.to_dict()}")
+    print()
+```
+
+## API Reference
+
+### `BankMessageSigner`
+
+Main class for signing messages.
+
+**Constructor:**
+```python
+BankMessageSigner(private_key_path: str, domain: str)
+```
+- `private_key_path`: Path to Ed25519 private key PEM file
+- `domain`: Your bank's domain (e.g., "chase.com")
+
+**Methods:**
+
+#### `sign_message()`
+```python
+sign_message(
+    message_text: str,
+    message_type: MessageType,
+    recipient: str,
+    message_id: Optional[str] = None
+) -> SignedMessage
+```
+
+Sign a message to send to a customer.
+
+**Parameters:**
+- `message_text`: The message content
+- `message_type`: Type from `MessageType` enum
+- `recipient`: Customer identifier (email, phone, user_id)
+- `message_id`: Optional custom message ID (auto-generated if not provided)
+
+**Returns:** `SignedMessage` object
+
+#### `get_public_key_hex()`
+```python
+get_public_key_hex() -> str
+```
+
+Get the public key in hex format for distribution to mobile apps.
+
+### `MessageType`
+
+Enum of standard message types:
+- `TRANSACTION_ALERT` - Purchase notifications
+- `SECURITY_ALERT` - Login attempts, suspicious activity
+- `ACCOUNT_UPDATE` - Statements, account changes
+- `MARKETING` - Promotional messages
+- `GENERAL` - Other communications
+
+### `SignedMessage`
+
+Signed message ready to send.
+
+**Properties:**
+- `message_id`: Unique message identifier
+- `sender_domain`: Bank domain
+- `recipient`: Customer identifier
+- `message_type`: Type of message
+- `message_text`: The actual message
+- `sent_at`: ISO 8601 timestamp
+- `signature`: Ed25519 signature (hex)
+- `public_key`: Bank's public key (hex)
+
+**Methods:**
+- `to_dict()`: Convert to dictionary
+- `to_notification_payload()`: Format for push notifications
+
+## Security Best Practices
+
+### Key Management
+
+**Development:**
+- Store private keys in secure directory with restricted permissions (0600)
+- Never commit private keys to version control
+
+**Production:**
+- Use Hardware Security Module (HSM) or cloud KMS
+- Rotate keys annually or after compromise
+- Implement key ceremony with multiple custodians
+
+### Message Signing
+
+- Sign messages immediately before sending
+- Include timestamp to prevent replay attacks
+- Log all signed messages for audit trail
+- Monitor for unusual signing patterns
+
+## Integration with Mobile Apps
+
+This SDK handles the **backend signing**. You also need:
+
+1. **iOS SDK** - Verifies signatures in iOS banking app
+2. **Android SDK** - Verifies signatures in Android banking app
+
+Contact sales@nyxsystems.com for mobile SDKs and integration support.
+
+## Support
+
+- Documentation: https://docs.hsip.io
+- Issues: https://github.com/nyxsystems/hsip-bank-sdk/issues
+- Email: support@nyxsystems.com
+
+## License
+
+Proprietary - HSIP Enterprise License
+Contact sales@nyxsystems.com for licensing information.
