@@ -17,6 +17,10 @@ struct Status {
     bytes_in: u64,
     bytes_out: u64,
     path: Vec<String>,
+    // HSIP shield metrics
+    blocked_connections: u64,
+    blocked_ips: u64,
+    blocked_trackers: u64,
 }
 
 fn solid_icon(width: u32, height: u32, rgba: [u8; 4]) -> tray_icon::Icon {
