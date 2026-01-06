@@ -7,7 +7,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 use hsip_core::consent::{
-    build_request, build_response, cid_hex, verify_request, verify_response, ConsentRequest,
+    create_signed_request, create_signed_response, cid_hex, validate_request, validate_response, ConsentRequest,
     ConsentResponse,
 };
 use hsip_core::identity::{generate_keypair, peer_id_from_pubkey, sk_to_hex, vk_to_hex};

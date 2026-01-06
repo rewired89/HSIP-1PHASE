@@ -3,8 +3,11 @@
 
 pub mod identity;
 
+<<<<<<< HEAD
 
 
+=======
+>>>>>>> origin/claude/secure-banking-messaging-HQ6AR
 pub mod keystore;
 
 #[doc(inline)]
