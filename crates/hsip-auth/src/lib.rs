@@ -3,11 +3,6 @@
 
 pub mod identity;
 
-<<<<<<< HEAD
-
-
-=======
->>>>>>> origin/claude/secure-banking-messaging-HQ6AR
 pub mod keystore;
 
 #[doc(inline)]
@@ -20,4 +15,3 @@ mod auth_internal {
     #[allow(unused)]
     pub(crate) fn _reserved_for_auth_expansion() {}
 }
-

@@ -32,8 +32,4 @@ pub fn peer_id_b64() -> Result<String> {
 pub fn public_key_hex() -> Result<String> {
     let (_signing_key, verifying_key) = ensure_device_identity()?;
     Ok(hex::encode(verifying_key.to_bytes()))
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> origin/claude/secure-banking-messaging-HQ6AR
