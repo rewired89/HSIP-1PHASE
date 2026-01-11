@@ -14,6 +14,7 @@ pub enum ApiError {
     Unauthorized(String),
     NotFound(String),
     InternalError(String),
+    ValidationError(String),
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -25,6 +26,7 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            ApiError::ValidationError(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
         };
 
         let body = Json(json!({
