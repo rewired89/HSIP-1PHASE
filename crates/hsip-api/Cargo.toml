@@ -17,6 +17,8 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+hex = "0.4"
 
 # Internal dependencies
 hsip-core = { path = "../hsip-core" }
@@ -27,3 +29,4 @@ hsip-audit = { path = "../hsip-audit" }
 
 [dev-dependencies]
 hyper = "1.1"
+rand = "0.8"

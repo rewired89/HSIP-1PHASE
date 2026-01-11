@@ -11,6 +11,7 @@ pub mod server;
 pub mod handlers;
 pub mod models;
 pub mod error;
+pub mod verify_handler;
 
 pub use server::ApiServer;
 pub use error::{ApiError, ApiResult};
