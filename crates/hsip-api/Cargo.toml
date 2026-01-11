@@ -29,3 +29,4 @@ hsip-audit = { path = "../hsip-audit" }
 
 [dev-dependencies]
 hyper = "1.1"
+rand = "0.8"
