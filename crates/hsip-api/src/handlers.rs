@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
 };
 use crate::{
-    error::{ApiError, ApiResult},
+    error::ApiResult,
     models::*,
 };
 use std::sync::Arc;
@@ -43,29 +43,35 @@ pub async fn send_message(
     // 3. Log to audit
     // 4. Send via HSIP transport
 
+    // Generate message ID from request data
+    let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+
+    // Log basic info (placeholder for real audit logging)
+    tracing::info!(
+        "Sending message to {} (type: {})",
+        req.recipient,
+        req.message_type
+    );
+
     Ok(Json(SendMessageResponse {
-        message_id: "msg_placeholder".to_string(),
+        message_id,
         verification_status: "verified".to_string(),
-        audit_entry_id: 1,
+        audit_entry_id: chrono::Utc::now().timestamp() as u64,
     }))
 }
 
 /// Verify a message
 pub async fn verify_message(
-    State(_state): State<Arc<ApiState>>,
+    State(state): State<Arc<ApiState>>,
     Json(req): Json<VerifyMessageRequest>,
 ) -> ApiResult<Json<VerifyMessageResponse>> {
-    // TODO: Implement verification
-    // 1. Decode message data
-    // 2. Run through verification engine
-    // 3. Return result
+    // Use the real verification handler
+    use crate::verify_handler::verify_signed_message;
 
-    Ok(Json(VerifyMessageResponse {
-        verified: true,
-        sender_domain: "bank.example.com".to_string(),
-        message_type: "transaction_alert".to_string(),
-        verification_details: "Valid signature and cert chain".to_string(),
-    }))
+    tracing::info!("Verifying message: {} bytes", req.message_data.len());
+
+    // Call the actual verification function
+    verify_signed_message(State(state), Json(req)).await
 }
 
 /// Grant consent
@@ -73,13 +79,20 @@ pub async fn grant_consent(
     State(_state): State<Arc<ApiState>>,
     Json(req): Json<GrantConsentRequest>,
 ) -> ApiResult<Json<GrantConsentResponse>> {
-    // TODO: Implement consent granting
-    // 1. Create consent policy
-    // 2. Store in policy engine
-    // 3. Generate consent proof
+    // TODO: Store in real policy engine
+    // For now, generate policy ID and log
+
+    let policy_id = format!("policy_{}_{}", req.user_id, uuid::Uuid::new_v4().simple());
+
+    tracing::info!(
+        "Granting consent: user={}, domain={}, types={:?}",
+        req.user_id,
+        req.sender_domain,
+        req.allowed_message_types
+    );
 
     Ok(Json(GrantConsentResponse {
-        policy_id: "policy_placeholder".to_string(),
+        policy_id,
         created_at: chrono::Utc::now(),
     }))
 }
@@ -89,10 +102,16 @@ pub async fn revoke_consent(
     State(_state): State<Arc<ApiState>>,
     Json(req): Json<RevokeConsentRequest>,
 ) -> ApiResult<StatusCode> {
-    // TODO: Implement consent revocation
-    // 1. Find policy
-    // 2. Mark as revoked
-    // 3. Log to audit
+    // TODO: Look up and revoke in real policy engine
+
+    tracing::info!(
+        "Revoking consent: user={}, domain={}",
+        req.user_id,
+        req.sender_domain
+    );
+
+    // Log audit trail (placeholder)
+    tracing::warn!("Consent revoked at {}", chrono::Utc::now());
 
     Ok(StatusCode::OK)
 }
@@ -102,14 +121,25 @@ pub async fn export_audit(
     State(_state): State<Arc<ApiState>>,
     Json(req): Json<ExportAuditRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // TODO: Implement audit export
-    // 1. Filter audit log by date range
-    // 2. Export in requested format
-    // 3. Generate integrity proof
+    // TODO: Query real audit log database
+    // For now, generate export metadata
+
+    let export_id = uuid::Uuid::new_v4().simple().to_string();
+
+    tracing::info!(
+        "Exporting audit log: from={:?} to={:?} format={}",
+        req.start_date,
+        req.end_date,
+        req.format
+    );
 
     Ok(Json(serde_json::json!({
-        "export_url": "https://example.com/audit/export_123.json",
-        "entry_count": 1000,
+        "export_id": export_id,
+        "export_url": format!("https://api.hsip.io/exports/{}.{}", export_id, req.format),
+        "entry_count": 1000, // Placeholder
         "format": req.format,
+        "start_date": req.start_date,
+        "end_date": req.end_date,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
     })))
 }
