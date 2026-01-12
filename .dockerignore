@@ -1,0 +1,42 @@
+# Build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+docs/
+examples/
+tests/
+patents/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Local development
+.env
+.env.local
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SDKs (build separately)
+sdk/
+
+# Test files
+test-daemon.ps1

@@ -1,0 +1,55 @@
+# HSIP Phase 2 - Development Docker Compose
+# Simplified stack for local development
+
+version: '3.8'
+
+services:
+  # HSIP Daemon (development mode)
+  hsip-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: hsip-daemon-dev
+    ports:
+      - "8787:8787"
+    environment:
+      - RUST_LOG=debug
+      - RUST_BACKTRACE=1
+    volumes:
+      - ./target:/app/target
+      - ./crates:/app/crates
+      - hsip-dev-data:/home/hsip/.hsip
+    command: ["cargo", "run", "--bin", "hsip-cli", "--", "daemon", "--status_addr", "0.0.0.0:8787"]
+    networks:
+      - hsip-dev
+
+  # PostgreSQL (development)
+  postgres:
+    image: postgres:16-alpine
+    container_name: hsip-postgres-dev
+    environment:
+      - POSTGRES_USER=hsip
+      - POSTGRES_PASSWORD=dev_password
+      - POSTGRES_DB=hsip_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - hsip-dev
+
+  # Redis (development)
+  redis:
+    image: redis:7-alpine
+    container_name: hsip-redis-dev
+    ports:
+      - "6379:6379"
+    networks:
+      - hsip-dev
+
+volumes:
+  hsip-dev-data:
+
+networks:
+  hsip-dev:
+    driver: bridge

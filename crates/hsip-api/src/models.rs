@@ -70,8 +70,8 @@ pub struct GrantConsentRequest {
     pub user_id: String,
     pub sender_domain: String,
     pub allowed_message_types: Vec<String>,
-    pub duration_days: Option<u32>,
-    pub max_messages_per_day: Option<u32>,
+    pub duration_days: Option<i32>,
+    pub max_messages_per_day: Option<i32>,
 }
 
 /// Grant consent response

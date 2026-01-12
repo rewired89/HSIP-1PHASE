@@ -7,12 +7,15 @@ license-file = "../LICENSE"
 build = "build.rs"
 rust-version = "1.87"
 
+[features]
+default = []
+tray = ["tray-icon"]  # Optional system tray support (Windows/macOS only)
+
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 toml = "0.8"
-winres = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread","macros"] }
 axum = "0.7"
 chrono = { version = "0.4", features = ["clock", "serde", "std"] }
@@ -45,11 +48,18 @@ rpassword = "7"
 dirs = "5"
 x25519-dalek = "2"
 reqwest = { version = "0.12.24", features = ["json"] }
-tray-icon = "0.21"
 
-[build-dependencies]
+# Optional: System tray support (requires GTK on Linux)
+tray-icon = { version = "0.21", optional = true }
+
+[target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
 
 [[bin]]
 name = "hsip-cli"
 path = "src/main.rs"
+
+[[bin]]
+name = "hsip-tray"
+path = "src/bin/hsip-tray.rs"
+required-features = ["tray"]  # Only build with --features tray

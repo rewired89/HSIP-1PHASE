@@ -1,6 +1,6 @@
 //! API Server
 
-use crate::handlers::{self, ApiState};
+use crate::{handlers::{self, ApiState}, Database};
 use axum::{
     routing::{get, post},
     Router,
@@ -14,9 +14,23 @@ pub struct ApiServer {
 }
 
 impl ApiServer {
-    pub fn new() -> Self {
+    /// Create a new API server with database connection
+    pub async fn new() -> Result<Self, sqlx::Error> {
+        let db = Database::new().await?;
+
         let state = Arc::new(ApiState {
             version: "2.0.0".to_string(),
+            db,
+        });
+
+        Ok(Self { state })
+    }
+
+    /// Create API server from existing database
+    pub fn from_database(db: Database) -> Self {
+        let state = Arc::new(ApiState {
+            version: "2.0.0".to_string(),
+            db,
         });
 
         Self { state }
@@ -56,8 +70,5 @@ impl ApiServer {
     }
 }
 
-impl Default for ApiServer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Note: Default trait removed because new() is now async
+// Use ApiServer::new().await instead
