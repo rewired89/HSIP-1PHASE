@@ -55,3 +55,9 @@ impl From<hsip_policy::PolicyError> for ApiError {
         ApiError::InternalError(err.to_string())
     }
 }
+
+impl From<sqlx::Error> for ApiError {
+    fn from(err: sqlx::Error) -> Self {
+        ApiError::InternalError(format!("Database error: {}", err))
+    }
+}

@@ -12,10 +12,12 @@ pub mod handlers;
 pub mod models;
 pub mod error;
 pub mod verify_handler;
+pub mod database;
 
 pub use server::ApiServer;
 pub use error::{ApiError, ApiResult};
 pub use models::*;
+pub use database::Database;
 
 use thiserror::Error;
 
@@ -38,6 +40,9 @@ pub enum Error {
 
     #[error("Audit error: {0}")]
     AuditError(#[from] hsip_audit::Error),
+
+    #[error("Database error: {0}")]
+    DatabaseError(#[from] sqlx::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
