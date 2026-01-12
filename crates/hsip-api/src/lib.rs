@@ -13,11 +13,14 @@ pub mod models;
 pub mod error;
 pub mod verify_handler;
 pub mod database;
+pub mod auth;
+pub mod auth_handlers;
 
 pub use server::ApiServer;
 pub use error::{ApiError, ApiResult};
 pub use models::*;
 pub use database::Database;
+pub use auth::{JwtManager, AuthContext, Role, Scope};
 
 use thiserror::Error;
 
