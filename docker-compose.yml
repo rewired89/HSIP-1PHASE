@@ -1,0 +1,134 @@
+# HSIP Phase 2 - Docker Compose Stack
+# Production-ready deployment with PostgreSQL and Redis
+
+version: '3.8'
+
+services:
+  # HSIP Daemon API
+  hsip-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hsip-daemon
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      - RUST_LOG=info,hsip_api=debug
+      - HSIP_DB_URL=postgres://hsip:hsip_password@postgres:5432/hsip
+      - HSIP_REDIS_URL=redis://redis:6379
+    volumes:
+      - hsip-data:/home/hsip/.hsip
+      - ./config:/home/hsip/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/status"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - hsip-network
+    labels:
+      - "com.hsip.service=daemon"
+      - "com.hsip.version=2.0.0"
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: hsip-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=hsip
+      - POSTGRES_PASSWORD=hsip_password
+      - POSTGRES_DB=hsip
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hsip"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hsip-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: hsip-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - hsip-network
+
+  # Prometheus (Metrics)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: hsip-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - hsip-network
+
+  # Grafana (Dashboards)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: hsip-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - hsip-network
+
+volumes:
+  hsip-data:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  hsip-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
