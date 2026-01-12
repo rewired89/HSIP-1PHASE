@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HSIP Phase 2 - Secure Banking Demo</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --success-color: #10b981;
+            --danger-color: #ef4444;
+            --warning-color: #f59e0b;
+            --bg-color: #f9fafb;
+            --card-bg: #ffffff;
+            --text-primary: #111827;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: white;
+            padding: 40px 20px;
+            text-align: center;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .demo-sections {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            border: 1px solid var(--border-color);
+        }
+
+        .card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card h3 {
+            font-size: 1.2rem;
+            margin: 20px 0 10px;
+            color: var(--text-primary);
+        }
+
+        .icon {
+            font-size: 1.8rem;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        input[type="text"],
+        input[type="email"],
+        input[type="password"],
+        select,
+        textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s;
+            width: 100%;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin: 15px 0;
+            display: none;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .alert-success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+        }
+
+        .alert-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #ef4444;
+        }
+
+        .alert-info {
+            background: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #2563eb;
+        }
+
+        .message-box {
+            background: #f3f4f6;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            position: relative;
+        }
+
+        .message-verified {
+            border-color: var(--success-color);
+            background: #ecfdf5;
+        }
+
+        .message-unverified {
+            border-color: var(--danger-color);
+            background: #fef2f2;
+        }
+
+        .verification-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .badge-verified {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .badge-unverified {
+            background: var(--danger-color);
+            color: white;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        code {
+            background: #1f2937;
+            color: #10b981;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        pre {
+            background: #1f2937;
+            color: #e5e7eb;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+
+        pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .trust-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+
+        .trust-icon {
+            font-size: 2rem;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .api-endpoint {
+            background: #f3f4f6;
+            border-left: 4px solid var(--primary-color);
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+
+        .api-endpoint code {
+            background: transparent;
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 30px 20px;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border-color);
+            margin-top: 40px;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .demo-sections {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔒 HSIP Phase 2 Demo</h1>
+            <p>Secure Banking Communication Platform</p>
+            <p style="font-size: 1rem; margin-top: 10px;">End-to-End Encryption + Digital Signatures + Consent Management</p>
+        </div>
+
+        <!-- Authentication Section -->
+        <div class="card" style="margin-bottom: 20px;">
+            <h2><span class="icon">🔑</span> Authentication</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 15px;">
+                Login to access the HSIP API (Demo credentials: admin/admin)
+            </p>
+
+            <div id="loginSection">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" value="admin" placeholder="Enter username">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" value="admin" placeholder="Enter password">
+                </div>
+                <button onclick="login()">Login</button>
+            </div>
+
+            <div id="loggedInSection" style="display: none;">
+                <div class="alert alert-success show">
+                    ✅ Authenticated as <strong id="currentUser"></strong>
+                    <button onclick="logout()" style="margin-top: 10px; background: #dc2626;">Logout</button>
+                </div>
+                <div style="margin-top: 15px;">
+                    <small style="color: var(--text-secondary);">Token expires in: <strong id="tokenExpiry">24 hours</strong></small>
+                </div>
+            </div>
+
+            <div id="authAlert" class="alert"></div>
+        </div>
+
+        <div class="demo-sections">
+            <!-- Send Secure Message -->
+            <div class="card">
+                <h2><span class="icon">✉️</span> Send Secure Message</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 15px;">
+                    Send a cryptographically signed message to a customer
+                </p>
+
+                <div class="form-group">
+                    <label for="recipient">Recipient</label>
+                    <input type="email" id="recipient" value="customer@example.com" placeholder="customer@example.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="messageType">Message Type</label>
+                    <select id="messageType">
+                        <option value="transaction_alert">Transaction Alert</option>
+                        <option value="security_alert">Security Alert</option>
+                        <option value="fraud_alert">Fraud Alert</option>
+                        <option value="account_update">Account Update</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="messageContent">Message Content</label>
+                    <textarea id="messageContent" rows="4" placeholder='{"amount": "$500", "merchant": "Online Store"}'>{
+  "amount": "$500.00",
+  "merchant": "Amazon.com",
+  "timestamp": "2024-01-12 10:30 AM"
+}</textarea>
+                </div>
+
+                <button onclick="sendMessage()">
+                    <span id="sendBtn">Send Verified Message</span>
+                    <span id="sendLoading" class="loading" style="display: none;"></span>
+                </button>
+
+                <div id="sendAlert" class="alert"></div>
+
+                <div id="sentMessage" style="display: none; margin-top: 15px;">
+                    <h3>Message Sent Successfully</h3>
+                    <div class="message-box message-verified">
+                        <span class="verification-badge badge-verified">✓ VERIFIED</span>
+                        <p><strong>Message ID:</strong> <code id="messageId"></code></p>
+                        <p><strong>Status:</strong> <span id="verificationStatus"></span></p>
+                        <p><strong>Audit Entry:</strong> #<span id="auditEntryId"></span></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Verify Message -->
+            <div class="card">
+                <h2><span class="icon">🔍</span> Verify Message</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 15px;">
+                    Verify the authenticity of a received message
+                </p>
+
+                <div class="form-group">
+                    <label for="messageData">Message Data (Base64)</label>
+                    <textarea id="messageData" rows="4" placeholder="Paste base64-encoded signed message"></textarea>
+                </div>
+
+                <button onclick="verifyMessage()">
+                    <span id="verifyBtn">Verify Signature</span>
+                    <span id="verifyLoading" class="loading" style="display: none;"></span>
+                </button>
+
+                <div id="verifyAlert" class="alert"></div>
+
+                <div id="verificationResult" style="display: none; margin-top: 15px;">
+                    <h3>Verification Result</h3>
+                    <div class="message-box" id="resultBox">
+                        <span class="verification-badge" id="verificationBadge"></span>
+                        <p><strong>Sender:</strong> <span id="senderDomain"></span></p>
+                        <p><strong>Type:</strong> <span id="resultMessageType"></span></p>
+                        <p><strong>Details:</strong> <span id="verificationDetails"></span></p>
+                    </div>
+                </div>
+
+                <div class="trust-indicator">
+                    <span class="trust-icon">🛡️</span>
+                    <div>
+                        <strong>Trust Indicator</strong>
+                        <p style="font-size: 0.875rem; color: var(--text-secondary);">
+                            Cryptographic proof prevents phishing attacks
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Consent Management -->
+            <div class="card">
+                <h2><span class="icon">⚙️</span> Consent Management</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 15px;">
+                    Manage customer communication preferences
+                </p>
+
+                <h3>Grant Consent</h3>
+                <div class="form-group">
+                    <label for="userId">User ID</label>
+                    <input type="text" id="userId" value="user_12345" placeholder="user_12345">
+                </div>
+
+                <div class="form-group">
+                    <label for="senderDomain">Bank Domain</label>
+                    <input type="text" id="senderDomain" value="chase.com" placeholder="chase.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="allowedTypes">Allowed Message Types</label>
+                    <select id="allowedTypes" multiple style="height: 100px;">
+                        <option value="transaction_alert" selected>Transaction Alerts</option>
+                        <option value="security_alert" selected>Security Alerts</option>
+                        <option value="fraud_alert">Fraud Alerts</option>
+                        <option value="account_update">Account Updates</option>
+                    </select>
+                    <small style="color: var(--text-secondary);">Hold Ctrl/Cmd to select multiple</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="durationDays">Duration (days)</label>
+                    <input type="text" id="durationDays" value="30" placeholder="30">
+                </div>
+
+                <button onclick="grantConsent()">Grant Consent</button>
+
+                <div id="consentAlert" class="alert"></div>
+
+                <div style="margin-top: 20px;">
+                    <h3>Revoke Consent</h3>
+                    <button onclick="revokeConsent()" style="background: var(--danger-color);">Revoke All Consent</button>
+                    <div id="revokeAlert" class="alert"></div>
+                </div>
+            </div>
+
+            <!-- Audit Logs -->
+            <div class="card">
+                <h2><span class="icon">📊</span> Audit Logs</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 15px;">
+                    Export compliance audit trail
+                </p>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value">1,234</div>
+                        <div class="stat-label">Messages Sent</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">98.5%</div>
+                        <div class="stat-label">Verified</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="exportFormat">Export Format</label>
+                    <select id="exportFormat">
+                        <option value="json">JSON</option>
+                        <option value="csv">CSV</option>
+                        <option value="pdf">PDF</option>
+                    </select>
+                </div>
+
+                <button onclick="exportAudit()">Export Audit Logs</button>
+
+                <div id="exportAlert" class="alert"></div>
+
+                <div style="margin-top: 15px; padding: 12px; background: #fef3c7; border-radius: 6px; border: 1px solid #f59e0b;">
+                    <strong>⚖️ Compliance:</strong> All actions are logged for SOX, GDPR, and PCI-DSS compliance
+                </div>
+            </div>
+        </div>
+
+        <!-- API Documentation -->
+        <div class="card" style="margin-top: 20px;">
+            <h2><span class="icon">📚</span> API Endpoints</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 15px;">
+                Integration endpoints for your banking app
+            </p>
+
+            <div class="api-endpoint">
+                <strong>Authentication:</strong> <code>POST /api/v2/auth/login</code>
+            </div>
+            <div class="api-endpoint">
+                <strong>Send Message:</strong> <code>POST /api/v2/messages/send</code>
+            </div>
+            <div class="api-endpoint">
+                <strong>Verify Message:</strong> <code>POST /api/v2/messages/verify</code>
+            </div>
+            <div class="api-endpoint">
+                <strong>Grant Consent:</strong> <code>POST /api/v2/consent/grant</code>
+            </div>
+            <div class="api-endpoint">
+                <strong>Export Audit:</strong> <code>POST /api/v2/audit/export</code>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <h3>Example Integration</h3>
+                <pre><code>// JavaScript Example
+const response = await fetch('/api/v2/messages/send', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    recipient: 'customer@example.com',
+    message_type: 'transaction_alert',
+    content: {
+      amount: '$500',
+      merchant: 'Amazon.com'
+    }
+  })
+});
+
+const result = await response.json();
+console.log('Message ID:', result.message_id);</code></pre>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p><strong>HSIP Phase 2</strong> - Secure Banking Communication Platform</p>
+            <p style="margin-top: 10px;">© 2024 Nyx Systems LLC. Enterprise Anti-Phishing Solution.</p>
+            <p style="margin-top: 10px; font-size: 0.875rem;">
+                🔒 End-to-End Encryption • 🔐 Digital Signatures • ⚖️ Compliance Ready
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8787';
+        let authToken = localStorage.getItem('hsip_token');
+
+        // Check if already logged in
+        if (authToken) {
+            document.getElementById('loginSection').style.display = 'none';
+            document.getElementById('loggedInSection').style.display = 'block';
+            document.getElementById('currentUser').textContent = 'admin';
+        }
+
+        function showAlert(elementId, message, type) {
+            const alert = document.getElementById(elementId);
+            alert.className = `alert alert-${type} show`;
+            alert.textContent = message;
+            setTimeout(() => {
+                alert.classList.remove('show');
+            }, 5000);
+        }
+
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/v2/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    authToken = data.access_token;
+                    localStorage.setItem('hsip_token', authToken);
+                    document.getElementById('loginSection').style.display = 'none';
+                    document.getElementById('loggedInSection').style.display = 'block';
+                    document.getElementById('currentUser').textContent = username;
+                    showAlert('authAlert', 'Login successful!', 'success');
+                } else {
+                    showAlert('authAlert', data.error || 'Login failed', 'error');
+                }
+            } catch (error) {
+                showAlert('authAlert', 'Connection error. Is the API running?', 'error');
+            }
+        }
+
+        function logout() {
+            authToken = null;
+            localStorage.removeItem('hsip_token');
+            document.getElementById('loginSection').style.display = 'block';
+            document.getElementById('loggedInSection').style.display = 'none';
+        }
+
+        async function sendMessage() {
+            if (!authToken) {
+                showAlert('sendAlert', 'Please login first', 'error');
+                return;
+            }
+
+            const recipient = document.getElementById('recipient').value;
+            const messageType = document.getElementById('messageType').value;
+            const content = document.getElementById('messageContent').value;
+
+            let contentObj;
+            try {
+                contentObj = JSON.parse(content);
+            } catch (e) {
+                showAlert('sendAlert', 'Invalid JSON in message content', 'error');
+                return;
+            }
+
+            document.getElementById('sendBtn').style.display = 'none';
+            document.getElementById('sendLoading').style.display = 'inline-block';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/v2/messages/send`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        recipient,
+                        message_type: messageType,
+                        content: contentObj
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    document.getElementById('messageId').textContent = data.message_id;
+                    document.getElementById('verificationStatus').textContent = data.verification_status;
+                    document.getElementById('auditEntryId').textContent = data.audit_entry_id;
+                    document.getElementById('sentMessage').style.display = 'block';
+                    showAlert('sendAlert', 'Message sent and verified!', 'success');
+                } else {
+                    showAlert('sendAlert', data.error || 'Failed to send message', 'error');
+                }
+            } catch (error) {
+                showAlert('sendAlert', 'Connection error: ' + error.message, 'error');
+            } finally {
+                document.getElementById('sendBtn').style.display = 'inline';
+                document.getElementById('sendLoading').style.display = 'none';
+            }
+        }
+
+        async function verifyMessage() {
+            if (!authToken) {
+                showAlert('verifyAlert', 'Please login first', 'error');
+                return;
+            }
+
+            const messageData = document.getElementById('messageData').value;
+
+            if (!messageData) {
+                showAlert('verifyAlert', 'Please enter message data', 'error');
+                return;
+            }
+
+            document.getElementById('verifyBtn').style.display = 'none';
+            document.getElementById('verifyLoading').style.display = 'inline-block';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/v2/messages/verify`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message_data: messageData })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const verified = data.verified;
+                    document.getElementById('verificationBadge').textContent = verified ? '✓ VERIFIED' : '✗ UNVERIFIED';
+                    document.getElementById('verificationBadge').className = `verification-badge ${verified ? 'badge-verified' : 'badge-unverified'}`;
+                    document.getElementById('resultBox').className = `message-box ${verified ? 'message-verified' : 'message-unverified'}`;
+                    document.getElementById('senderDomain').textContent = data.sender_domain;
+                    document.getElementById('resultMessageType').textContent = data.message_type;
+                    document.getElementById('verificationDetails').textContent = data.verification_details;
+                    document.getElementById('verificationResult').style.display = 'block';
+                    showAlert('verifyAlert', verified ? 'Message verified!' : 'Verification failed!', verified ? 'success' : 'error');
+                } else {
+                    showAlert('verifyAlert', data.error || 'Verification failed', 'error');
+                }
+            } catch (error) {
+                showAlert('verifyAlert', 'Connection error: ' + error.message, 'error');
+            } finally {
+                document.getElementById('verifyBtn').style.display = 'inline';
+                document.getElementById('verifyLoading').style.display = 'none';
+            }
+        }
+
+        async function grantConsent() {
+            if (!authToken) {
+                showAlert('consentAlert', 'Please login first', 'error');
+                return;
+            }
+
+            const userId = document.getElementById('userId').value;
+            const senderDomain = document.getElementById('senderDomain').value;
+            const allowedTypesSelect = document.getElementById('allowedTypes');
+            const allowedTypes = Array.from(allowedTypesSelect.selectedOptions).map(opt => opt.value);
+            const durationDays = parseInt(document.getElementById('durationDays').value);
+
+            try {
+                const response = await fetch(`${API_BASE}/api/v2/consent/grant`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        sender_domain: senderDomain,
+                        allowed_message_types: allowedTypes,
+                        duration_days: durationDays,
+                        max_messages_per_day: 10
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showAlert('consentAlert', `Consent granted! Policy ID: ${data.policy_id}`, 'success');
+                } else {
+                    showAlert('consentAlert', data.error || 'Failed to grant consent', 'error');
+                }
+            } catch (error) {
+                showAlert('consentAlert', 'Connection error: ' + error.message, 'error');
+            }
+        }
+
+        async function revokeConsent() {
+            if (!authToken) {
+                showAlert('revokeAlert', 'Please login first', 'error');
+                return;
+            }
+
+            const userId = document.getElementById('userId').value;
+            const senderDomain = document.getElementById('senderDomain').value;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/v2/consent/revoke`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        sender_domain: senderDomain
+                    })
+                });
+
+                if (response.ok) {
+                    showAlert('revokeAlert', 'Consent revoked successfully', 'success');
+                } else {
+                    showAlert('revokeAlert', 'Failed to revoke consent', 'error');
+                }
+            } catch (error) {
+                showAlert('revokeAlert', 'Connection error: ' + error.message, 'error');
+            }
+        }
+
+        async function exportAudit() {
+            if (!authToken) {
+                showAlert('exportAlert', 'Please login first', 'error');
+                return;
+            }
+
+            const format = document.getElementById('exportFormat').value;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/v2/audit/export`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        format: format,
+                        start_date: null,
+                        end_date: null
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showAlert('exportAlert', `Export ready! Entry count: ${data.entry_count || 0}`, 'success');
+                    console.log('Export data:', data);
+                } else {
+                    showAlert('exportAlert', data.error || 'Export failed', 'error');
+                }
+            } catch (error) {
+                showAlert('exportAlert', 'Connection error: ' + error.message, 'error');
+            }
+        }
+    </script>
+</body>
+</html>
