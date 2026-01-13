@@ -1,0 +1,172 @@
+Annex B: Sample HSIP Evidence Artifact
+Illustrative Court Exhibit Example
+
+Document Status: Fictional example for demonstration only
+Scope: HSIP Phase 1 evidence format
+Purpose: Show what HSIP evidence looks like in court
+Date: January 2026
+
+Important: All data is fictional. No real user information.
+
+
+1. Purpose of This Sample
+
+This annex provides one clean example of an HSIP evidence artifact as it would appear when submitted to a court.
+
+This is what judges, lawyers, and experts will see when HSIP evidence is presented.
+
+For explanation of how this evidence works, see Annex A.
+
+
+2. Fictional Scenario
+
+Case: Privacy complaint regarding alleged lack of consent
+Issue: Did user consent to marketing communications?
+Date of alleged consent: March 14, 2026
+Jurisdiction: European Union (GDPR Article 7)
+
+Note: All identities and organizations are fictional.
+
+
+3. Evidence Exhibit: HSIP Audit Log Entry
+
+The following is how HSIP evidence appears when exported for court submission:
+
+
+HSIP AUDIT LOG - COURT EXHIBIT
+Case Reference: [Fictional Privacy Dispute]
+Export Date: April 15, 2026
+Evidence ID: HSIP-2026-001
+
+
+{
+  "audit_entry": {
+    "id": 445821,
+    "timestamp": "2026-03-14T10:42:18.347Z",
+    "event_type": "consent_granted",
+
+    "sender_domain": "example-company.com",
+    "recipient": "user@email.example",
+
+    "consent_details": {
+      "consent_id": "consent_f8e7d6c5b4a39281",
+      "purpose": "marketing_communications",
+      "legal_basis": "GDPR Article 6(1)(a)",
+      "duration_days": 730,
+      "granted_at": "2026-03-14T10:42:18.347Z",
+      "expires_at": "2028-03-14T10:42:18.347Z",
+      "revocable": true
+    },
+
+    "cryptographic_proof": {
+      "signature_algorithm": "Ed25519",
+      "signature_hex": "e4d8b7c2a6f39581d3e7b9a4c8f2e1d5b9a7c3f8e2d6b1a5c9f4e8d3b7a2c6f1e5d9b4a8c3f7e2d6b1a5c9f4e8d3b7a2c6f1e5d9b4a8c3f7e2d6b1a5c9f4e8d3b7a2c6f1e5d9b4a8c3f7e2d6b1a5c9f4",
+      "public_key_hex": "a8c7f3e2d6b9a5c1f4e8d3b7a2c6f9e5d1b8a4c7f3e2d6b9a5c1f4e8",
+      "public_key_url": "https://example-company.com/.well-known/hsip-public-key.txt",
+      "verification_status": "verified",
+      "verified_at": "2026-03-14T10:42:18.347Z"
+    },
+
+    "metadata": {
+      "ip_address": "198.51.100.42",
+      "ip_geolocation": "Berlin, Germany",
+      "device_type": "mobile",
+      "app_version": "3.2.1",
+      "platform": "Android 13",
+      "consent_screen_displayed_at": "2026-03-14T10:41:45Z",
+      "consent_button_pressed_at": "2026-03-14T10:42:17Z",
+      "time_to_decision_seconds": 32
+    },
+
+    "database_integrity": {
+      "row_created_at": "2026-03-14T10:42:18.350Z",
+      "row_modified_at": "2026-03-14T10:42:18.350Z",
+      "row_never_updated": true,
+      "write_once_constraint": "enabled"
+    }
+  },
+
+  "verification_summary": {
+    "signature_valid": true,
+    "timestamp_verified": true,
+    "database_integrity_confirmed": true,
+    "independent_verification_possible": true
+  }
+}
+
+
+4. What This Evidence Shows
+
+Courts can determine from this artifact:
+
+Consent Status:
+- Consent was granted on March 14, 2026 at 10:42:18 UTC
+- Purpose: marketing communications
+- Duration: 730 days (expires March 14, 2028)
+- Legal basis: GDPR Article 6(1)(a) explicit consent
+
+Cryptographic Verification:
+- Signature algorithm: Ed25519 (industry standard)
+- Signature is valid and verified
+- Public key available at example-company.com for independent verification
+
+Timeline Evidence:
+- Consent screen displayed: 10:41:45
+- Consent button pressed: 10:42:17
+- Time to decision: 32 seconds
+- Timestamp accuracy: synchronized with NIST atomic clock
+
+Technical Integrity:
+- Database record created at consent time
+- Never modified after creation (write-once constraint)
+- Independently verifiable by any qualified expert
+
+
+5. Independent Verification
+
+Any court-appointed expert can verify this evidence using:
+
+Required Information:
+- This audit log entry (JSON format)
+- Company's public key (published at their domain)
+- Standard cryptographic libraries (NaCl/libsodium, open-source)
+
+Verification Process:
+1. Retrieve public key from example-company.com
+2. Extract signature from audit log
+3. Verify signature using Ed25519 algorithm (RFC 8032)
+4. Confirm signature is valid = evidence is authentic
+
+No proprietary tools or vendor cooperation required.
+
+
+6. What Research Will Deliver
+
+This sample demonstrates one evidence format. The full research (€10K grant) will produce:
+
+Comprehensive Evidence Toolkit:
+- 10+ sample evidence artifacts for different case types
+- Model legal briefs showing how to present this evidence
+- Expert witness guides for verification
+- Court submission templates
+- Verification scripts (Python, JavaScript)
+
+Timeline: 6 months (March-August 2026)
+License: Creative Commons (free for all litigation use)
+
+
+7. Contact Information
+
+Technical Questions:
+Dayana Sanchez Leal
+Email: contact@nyxsystems.io
+
+HSIP Phase 1 Repository:
+https://github.com/nyxsystems/HSIP
+License: MIT (open-source)
+
+
+Document Version: 1.0
+Date: January 2026
+Prepared for: Digital Freedom Fund Grant Application
+Classification: Public (Fictional Example)
