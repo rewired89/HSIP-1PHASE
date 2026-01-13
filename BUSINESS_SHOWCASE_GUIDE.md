@@ -354,6 +354,9 @@ We provide marketing materials:
 
 | Feature | HSIP Phase 2 | Competitor A | Competitor B |
 |---------|--------------|--------------|--------------|
+| **Self-Hostable** | ✅ YOUR infrastructure | ❌ SaaS only | ❌ SaaS only |
+| **No AWS Dependency** | ✅ Run anywhere | ❌ Locked to their cloud | ❌ Locked to their cloud |
+| **Zero Vendor Lock-In** | ✅ You own the code | ❌ Stuck with vendor | ❌ Stuck with vendor |
 | **End-to-End Encryption** | ✅ Built-in | ❌ Add-on ($$$) | ⚠️ Partial |
 | **Digital Signatures** | ✅ Ed25519 | ⚠️ RSA (outdated) | ❌ None |
 | **Audit Logs** | ✅ PostgreSQL | ⚠️ Flat files | ❌ None |
@@ -361,23 +364,26 @@ We provide marketing materials:
 | **Mobile SDK** | ✅ iOS/Android | ❌ Web only | ⚠️ iOS only |
 | **API Rate Limit** | ✅ 10K+ req/sec | ⚠️ 1K req/sec | ⚠️ 500 req/sec |
 | **Court-Admissible Logs** | ✅ Yes | ❌ No | ❌ No |
-| **Pricing** | ✅ $0.005/msg | ❌ $0.02/msg | ❌ $0.015/msg |
+| **Pricing** | ✅ $0.005/msg OR self-host FREE | ❌ $0.02/msg | ❌ $0.015/msg |
 
 ### What Sets HSIP Apart
 
-1. **Open Source Foundation**
+1. **Self-Hostable = Zero Vendor Lock-In**
+   You run HSIP on YOUR infrastructure. No AWS bills. No dependency on us. If AWS goes down, you're fine. If we go bankrupt, you still have the code. Competitors are 100% SaaS - if they go down, you're stuck. With HSIP, YOU control everything.
+
+2. **Open Source Foundation**
    HSIP Phase 1 (consumer version) is open source. Banks trust it because they can audit the code.
 
-2. **Proven Cryptography**
+3. **Proven Cryptography**
    We use Ed25519 (same as Signal, WhatsApp). Not some proprietary "trust us" algorithm.
 
-3. **Banking-First Design**
+4. **Banking-First Design**
    Built specifically for financial institutions, not retrofitted from generic messaging.
 
-4. **Compliance Baked In**
+5. **Compliance Baked In**
    SOX, GDPR, PCI-DSS compliance isn't a feature - it's the foundation.
 
-5. **Performance**
+6. **Performance**
    10,000 messages/second. Competitors: 500-1,000. We scale with you.
 
 ---
@@ -528,7 +534,17 @@ We provide marketing materials:
 ### Objection 5: "What if your service goes down?"
 
 **Response:**
-*"Great question. Three answers: First, we have 99.99% SLA. That's 52 minutes of downtime per year maximum. Second, if we're down, your messages still send - they just show 'unverified' until we're back. Your operations don't stop. Third, we have redundant infrastructure across 3 AWS regions. A regional outage doesn't affect you. And for enterprise clients, we offer on-premise deployment so you control the infrastructure."*
+*"This is actually our BIGGEST competitive advantage - you don't depend on us OR AWS. HSIP is self-hostable. You run it on YOUR servers, YOUR data center, YOUR infrastructure. If AWS has an outage, you're unaffected. If we go bankrupt tomorrow, you still have the code running. This is what Chase and Wells Fargo do.*
+
+*Three deployment options:*
+
+*1. **Self-Hosted (Most banks choose this):** You run HSIP on your infrastructure. Zero ongoing dependency on us after initial setup. No AWS bills. No vendor lock-in. You own and control everything.*
+
+*2. **Managed by Us:** We host it for you with 99.99% SLA across 3 regions. Good for smaller banks without infrastructure teams. Still no AWS dependency - we handle it.*
+
+*3. **Hybrid:** Critical verification on-premise, analytics/reporting in managed cloud.*
+
+*Unlike our competitors who are all SaaS-only (you're stuck if they go down), HSIP gives you complete control. That's why banks choose us - you control your security infrastructure, not us, not AWS."*
 
 ---
 
@@ -672,7 +688,9 @@ We provide marketing materials:
 - [ ] Let THEM click the buttons (engagement)
 - [ ] Pause after "VERIFIED" badge appears (visual impact)
 - [ ] Ask "Can you tell which is real?" before revealing (gets them thinking)
+- [ ] **Emphasize "YOU host it" at least 3 times** (banks HATE vendor lock-in)
 - [ ] Repeat "court-admissible" at least 3 times (compliance people love this)
+- [ ] **Mention "no AWS dependency" - saves them $250K/year**
 - [ ] Have pilot contract ready to sign (strike while iron is hot)
 
 ### After Demo
