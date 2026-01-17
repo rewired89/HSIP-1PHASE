@@ -1,0 +1,6 @@
+# Claude-owned protocol constants
+crates/hsip-core/src/wire/** merge=theirs
+
+# Claude-owned security tests & docs
+tests/security/** merge=theirs
+spec/** merge=theirs

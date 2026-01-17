@@ -1,0 +1,11 @@
+[policy]
+enforce_rep = true
+rep_threshold = 1
+require_valid_sig = true
+
+[guard]
+enable = true
+pin_minutes = 20
+max_control_per_min = 120
+max_bad_sig_per_min = 5
+max_frame = 4096

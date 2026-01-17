@@ -1,0 +1,79 @@
+# Rust
+target/
+**/target/
+Cargo.lock
+
+# Local Windows build dirs you used
+hsip_target*/
+hsip_release/
+dist/
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
+
+# User secrets (do NOT commit)
+*.enc.json
+*.id.json
+*.pem
+*.key
+*.der
+
+!crates/hsip-session/
+!crates/hsip-session/**
+
+!crates/
+!crates/hsip-session/
+!crates/hsip-session/**
+
+# Rust
+/target
+**/target
+
+# Installers
+installer/*.exe
+installer/Output/
+
+# Windows debug
+*.pdb
+
+# VSCode
+.vscode/
+
+# Local logs
+*.log
+*.bak
+
+# Ignore example / test request/response files
+*.json
+*.txt
+reputation.log
+*.log
+demo*.ps1
+# Maybe others: sample files, burned tokens
+
+# Local demo/test junk in repo root
+req*.json
+resp.json
+consent_request.json
+consent_response.json
+rebind.json
+recovered.json
+revocation.json
+payload.txt
+sample.txt
+test.txt
+token.json
+token.txt
+reputation.log
+
+# Coverage artifacts
+build_rs_cov.profraw
+
+# Old tools
+tools/
+
+
+slowloris_test.py
+

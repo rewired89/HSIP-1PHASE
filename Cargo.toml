@@ -1,0 +1,37 @@
+[workspace]
+members = [
+    "crates/hsip-core",
+    "crates/hsip-session",
+    "crates/hsip-net",
+    "crates/hsip-reputation",
+    "crates/hsip-cli",
+    "crates/hsip-auth",
+    "crates/hsip-gateway",
+    # hsip-intercept excluded - Windows/Android only, will fail on Linux
+    # Build separately on Windows with: cargo build -p hsip-intercept
+    # "crates/hsip-intercept",
+    # hsip-verify excluded - requires z3-sys which needs Z3 built from source
+    # On Windows, this fails due to heap space issues
+    # Build separately with: cargo build -p hsip-verify
+    "crates/hsip-common",
+    "crates/hsip-regenerative",
+    "crates/hsip-telemetry-guard",
+    "crates/hsip-integration-sdk",
+]
+
+
+exclude = [
+    "crates/hsip-session/fuzz",
+    "crates/hsip-verify",
+    "crates/hsip-intercept"
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio   = "1.39"    
+mio     = "0.8.11"
+socket2 = "0.5.7"
+windows = "0.58.0"
+windows-sys = "0.60.2"
+windows-targets = "0.53.5"
+toolchain = "1.87.0"

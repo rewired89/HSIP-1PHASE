@@ -1,0 +1,69 @@
+[package]
+name = "hsip-cli"
+version = "0.1.2"
+edition = "2021"
+default-run = "hsip-cli"
+license-file = "../LICENSE"
+build = "build.rs"
+rust-version = "1.87"
+
+[features]
+default = []
+tray = ["tray-icon"]
+# DFF Compliance features
+postgres = ["hsip-telemetry-guard/postgres"]
+ntp-sync = ["hsip-telemetry-guard/ntp-sync"]
+geolocation = ["hsip-telemetry-guard/geolocation"]
+full = ["postgres", "ntp-sync", "geolocation"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+toml = "0.8"
+winres = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread","macros"] }
+axum = "0.7"
+chrono = { version = "0.4", features = ["clock", "serde", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+jwt = "0.16"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+once_cell = "1.19"
+tiny_http = "0.12"
+percent-encoding = "2"
+
+
+# internal crates
+hsip-core = { path = "../hsip-core" }
+hsip-net = { path = "../hsip-net" }
+hsip-reputation = { path = "../hsip-reputation" }
+hsip-session = { path = "../hsip-session" }
+hsip-auth = { path = "../hsip-auth" }
+hsip-telemetry-guard = { path = "../hsip-telemetry-guard" }
+
+
+# crypto/export deps used by main.rs
+argon2 = "0.5"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+rpassword = "7"
+dirs = "5"
+x25519-dalek = "2"
+reqwest = { version = "0.12.24", features = ["json"] }
+tray-icon = { version = "0.21", optional = true }
+
+[build-dependencies]
+winres = "0.1"
+
+[[bin]]
+name = "hsip-cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "hsip-tray"
+path = "src/bin/hsip-tray.rs"
+required-features = ["tray"]
