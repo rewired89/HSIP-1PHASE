@@ -2,7 +2,7 @@
 
 **A cryptographic protocol for privacy-preserving internet communication where consent is enforced by mathematics, not policy.**
 
-HSIP (Hyper-Secure Internet Protocol) enables peer-to-peer encrypted communication that requires **mutual cryptographic consent** before any data exchange. Communication only happens when both parties explicitly agree - enforced at the protocol level through capability tokens and signed handshakes.
+HSIP (Hyper Secure Internet Protocol) enables peer-to-peer encrypted communication that requires **mutual cryptographic consent** before any data exchange. Communication only happens when both parties explicitly agree - enforced at the protocol level through capability tokens and signed handshakes.
 
 **Status:** Alpha Release (Windows 10/11)
 **License:** Free for non-commercial use

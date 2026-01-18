@@ -1,6 +1,6 @@
 # Contributing to HSIP
 
-Thank you for your interest in contributing to HSIP (Hyper-Secure Internet Protocol)
+Thank you for your interest in contributing to HSIP (Hyper Secure Internet Protocol)
 
 HSIP is a community-driven privacy project that welcomes contributions from developers, security researchers, and privacy advocates.
 

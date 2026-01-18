@@ -1,3 +1,10 @@
+// Copyright (c) 2025-2026 Nyx Systems LLC.
+// SPDX-License-Identifier: SEE LICENSE IN ../../LICENSE
+//
+// This file is part of HSIP (Hyper Secure Internet Protocol).
+// Free for non-commercial use. Commercial use requires a license.
+// See LICENSE and COMMERCIAL_LICENSE.md for details.
+
 //! hsip-session: ephemeral session handshake + AEAD sealing helpers.
 //! X25519 (ephemeral) → HKDF-SHA256 → ChaCha20-Poly1305
 //!

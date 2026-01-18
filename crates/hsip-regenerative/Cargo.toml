@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 authors = ["HSIP Team"]
 description = "Planarian-inspired distributed identity recovery for HSIP"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/HSIP/hsip"
+license-file = "../LICENSE"
+repository = "https://github.com/nyxsystems/HSIP-1PHASE"
 
 [dependencies]
 # Cryptography
