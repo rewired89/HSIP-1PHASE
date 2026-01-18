@@ -3,6 +3,7 @@
 //! The policy engine evaluates flows against configurable rules to determine
 //! whether telemetry should be allowed, blocked, or quarantined.
 
+#[allow(unused_imports)] // DecisionType used in tests
 use crate::{
     Decision, DecisionReason, DecisionType, EndpointDatabase, EndpointEntry,
     FlowMeta, RiskLevel, TelemetryIntent,

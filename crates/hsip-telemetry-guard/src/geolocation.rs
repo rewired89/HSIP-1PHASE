@@ -63,42 +63,39 @@ impl GeoLocator {
 
     /// Look up geolocation for an IP address
     pub fn lookup(&self, ip: IpAddr) -> Result<GeoLocation, String> {
-        let city: geoip2::City = self
+        let result = self
             .reader
             .lookup(ip)
             .map_err(|e| format!("GeoIP lookup failed: {}", e))?;
 
+        let city: geoip2::City = result
+            .decode()
+            .map_err(|e| format!("GeoIP decode failed: {}", e))?
+            .ok_or_else(|| format!("No GeoIP data found for {}", ip))?;
+
+        let country = city.country.names.english
+            .map(|s: &str| s.to_string());
+
+        let country_code = city.country.iso_code
+            .map(|s: &str| s.to_string());
+
+        let city_name = city.city.names.english
+            .map(|s: &str| s.to_string());
+
+        let timezone = city.location.time_zone
+            .map(|s: &str| s.to_string());
+
+        let continent = city.continent.names.english
+            .map(|s: &str| s.to_string());
+
         Ok(GeoLocation {
-            country: city
-                .country
-                .as_ref()
-                .and_then(|c| c.names.as_ref())
-                .and_then(|n| n.get("en"))
-                .map(|s| s.to_string()),
-            country_code: city
-                .country
-                .as_ref()
-                .and_then(|c| c.iso_code)
-                .map(|s| s.to_string()),
-            city: city
-                .city
-                .as_ref()
-                .and_then(|c| c.names.as_ref())
-                .and_then(|n| n.get("en"))
-                .map(|s| s.to_string()),
-            latitude: city.location.as_ref().and_then(|l| l.latitude),
-            longitude: city.location.as_ref().and_then(|l| l.longitude),
-            timezone: city
-                .location
-                .as_ref()
-                .and_then(|l| l.time_zone)
-                .map(|s| s.to_string()),
-            continent: city
-                .continent
-                .as_ref()
-                .and_then(|c| c.names.as_ref())
-                .and_then(|n| n.get("en"))
-                .map(|s| s.to_string()),
+            country,
+            country_code,
+            city: city_name,
+            latitude: city.location.latitude,
+            longitude: city.location.longitude,
+            timezone,
+            continent,
         })
     }
 

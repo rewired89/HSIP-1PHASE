@@ -6,12 +6,6 @@
 #[cfg(feature = "postgres")]
 use tokio_postgres::{Client, Config, NoTls};
 
-#[cfg(feature = "postgres")]
-use native_tls::TlsConnector;
-
-#[cfg(feature = "postgres")]
-use postgres_native_tls::MakeTlsConnector;
-
 use crate::{Decision, DecisionType, TelemetryIntent};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
