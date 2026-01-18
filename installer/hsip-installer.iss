@@ -19,8 +19,10 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppContact={#MyAppContact}
-DefaultDirName={autopf}\{#MyAppName}
+; Per-user installation (no admin required)
+DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
+DisableProgramGroupPage=yes
 AllowNoIcons=yes
 LicenseFile=..\LICENSE
 InfoBeforeFile=..\README.md
@@ -29,10 +31,12 @@ OutputBaseFilename=HSIP-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 ; No icon files - using defaults
 UninstallDisplayIcon={app}\{#MyAppExeName}
+; Per-user registry location
+ChangesEnvironment=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -60,13 +64,14 @@ Source: "..\AUDIT_LOG_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion skipifso
 Source: "..\security_tests\README.md"; DestDir: "{app}\security_tests"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{group}\HSIP Command Line"; Filename: "cmd.exe"; Parameters: "/k cd /d ""{app}"" && {#MyAppExeName} --help"
-Name: "{group}\Documentation"; Filename: "{app}\README.md"
-Name: "{group}\License (Free Non-Commercial)"; Filename: "{app}\LICENSE"
-Name: "{group}\Commercial License Info"; Filename: "{app}\COMMERCIAL_LICENSE.md"
-Name: "{group}\Security Audit Report"; Filename: "{app}\SECURITY_AUDIT.md"
-Name: "{group}\Getting Started"; Filename: "{app}\GETTING_STARTED.md"
-Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
+; Per-user Start Menu shortcuts (no admin required)
+Name: "{userprograms}\{#MyAppName}\HSIP Command Line"; Filename: "cmd.exe"; Parameters: "/k cd /d ""{app}"" && {#MyAppExeName} --help"
+Name: "{userprograms}\{#MyAppName}\Documentation"; Filename: "{app}\README.md"
+Name: "{userprograms}\{#MyAppName}\License (Free Non-Commercial)"; Filename: "{app}\LICENSE"
+Name: "{userprograms}\{#MyAppName}\Commercial License Info"; Filename: "{app}\COMMERCIAL_LICENSE.md"
+Name: "{userprograms}\{#MyAppName}\Security Audit Report"; Filename: "{app}\SECURITY_AUDIT.md"
+Name: "{userprograms}\{#MyAppName}\Getting Started"; Filename: "{app}\GETTING_STARTED.md"
+Name: "{userprograms}\{#MyAppName}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 [Registry]
 ; Silent background startup using VBScript launcher (no console windows)
@@ -87,9 +92,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
 Filename: "{app}\README.md"; Description: "View Documentation"; Flags: postinstall shellexec skipifsilent unchecked
 
 [UninstallRun]
-; Stop processes before uninstall
-Filename: "taskkill"; Parameters: "/F /IM hsip-cli.exe /T"; Flags: runhidden; StatusMsg: "Stopping HSIP daemon..."
-Filename: "taskkill"; Parameters: "/F /IM hsip-gateway.exe /T"; Flags: runhidden; StatusMsg: "Stopping HSIP gateway..."
+; Stop processes before uninstall (RunOnceId prevents double execution)
+Filename: "taskkill"; Parameters: "/F /IM hsip-cli.exe /T"; Flags: runhidden; RunOnceId: "stop_hsip_cli"; StatusMsg: "Stopping HSIP daemon..."
+Filename: "taskkill"; Parameters: "/F /IM hsip-gateway.exe /T"; Flags: runhidden; RunOnceId: "stop_hsip_gateway"; StatusMsg: "Stopping HSIP gateway..."
 
 [Code]
 procedure InitializeWizard();
