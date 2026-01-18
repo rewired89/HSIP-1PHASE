@@ -827,8 +827,20 @@ fn main() {
             wait_reply,
             wait_timeout_ms,
         } => {
-            let bytes = std::fs::read(&file).expect("read request json");
-            let req: ConsentRequest = serde_json::from_slice(&bytes).expect("parse request json");
+            let bytes = match std::fs::read(&file) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("error: failed to read request file '{}': {}", file, e);
+                    std::process::exit(1);
+                }
+            };
+            let req: ConsentRequest = match serde_json::from_slice(&bytes) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error: failed to parse request JSON in '{}': {}", file, e);
+                    std::process::exit(1);
+                }
+            };
 
             if !wait_reply {
                 if let Err(e) = send_consent_request(&to, &req) {

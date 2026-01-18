@@ -52,8 +52,8 @@ native-tls = { version = "0.2", optional = true }
 # NTP time synchronization
 rsntp = { version = "3", optional = true }
 
-# Geolocation (using 0.24 to avoid API breaking changes)
-maxminddb = { version = "0.24", optional = true }
+# Geolocation (updated to 0.27 to fix RUSTSEC-2025-0132)
+maxminddb = { version = "0.27", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

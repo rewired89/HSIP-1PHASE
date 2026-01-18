@@ -63,7 +63,6 @@ impl GeoLocator {
 
     /// Look up geolocation for an IP address
     pub fn lookup(&self, ip: IpAddr) -> Result<GeoLocation, String> {
-        // maxminddb 0.24 API
         let city: geoip2::City = self
             .reader
             .lookup(ip)
