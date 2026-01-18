@@ -39,12 +39,14 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo   Building hsip-tray...
-cargo build --release -p hsip-cli --bin hsip-tray --features full,tray
-if %errorlevel% neq 0 (
-    echo ERROR: hsip-tray build failed
-    exit /b 1
-)
+REM Tray icon build commented out (GTK3 dependencies have security warnings)
+REM Uncomment if you need tray icon functionality
+REM echo   Building hsip-tray...
+REM cargo build --release -p hsip-cli --bin hsip-tray --features full,tray
+REM if %errorlevel% neq 0 (
+REM     echo ERROR: hsip-tray build failed
+REM     exit /b 1
+REM )
 
 echo   Building hsip-gateway...
 cargo build --release -p hsip-gateway
@@ -63,11 +65,12 @@ if not exist "target\release\hsip-cli.exe" (
 )
 echo ✓ hsip-cli.exe found
 
-if not exist "target\release\hsip-tray.exe" (
-    echo ERROR: hsip-tray.exe not found
-    exit /b 1
-)
-echo ✓ hsip-tray.exe found
+REM Tray verification commented out (not building tray due to GTK3 warnings)
+REM if not exist "target\release\hsip-tray.exe" (
+REM     echo ERROR: hsip-tray.exe not found
+REM     exit /b 1
+REM )
+REM echo ✓ hsip-tray.exe found
 
 if not exist "target\release\hsip-gateway.exe" (
     echo ERROR: hsip-gateway.exe not found
