@@ -104,7 +104,10 @@ echo   ✓ Geolocation metadata (MaxMind GeoLite2)
 echo   ✓ Enhanced device fingerprinting
 echo   ✓ Ed25519 signatures
 echo   ✓ ChaCha20-Poly1305 encryption
-echo   ✓ .well-known endpoint
+echo   ✓ Replay attack protection (nonce-based)
+echo   ✓ DoS/Injection attack defenses
+echo   ✓ Security fixes (RUSTSEC-2025-0132 patched)
+echo   ✓ Enhanced error handling (no panic on invalid input)
 echo.
 echo Documentation included:
 echo   ✓ AUDIT_LOG_GUIDE.md (court-ready evidence guide)

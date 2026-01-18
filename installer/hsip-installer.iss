@@ -57,17 +57,17 @@ Source: "run-tray.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Documentation
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
-Source: "..\TESTING_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\AUDIT_LOG_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\INSTALL_WITH_AUDIT_LOGS.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\WHY_HSIP.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\GETTING_STARTED.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\SECURITY.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\TESTING_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\AUDIT_LOG_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\INSTALL_WITH_AUDIT_LOGS.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\WHY_HSIP.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\GETTING_STARTED.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\SECURITY.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\COMMERCIAL_LICENSE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\SECURITY_AUDIT.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
-; Security Test Scripts (for advanced users)
-Source: "..\security_tests\*.py"; DestDir: "{app}\security_tests"; Flags: ignoreversion
-Source: "..\security_tests\*.ps1"; DestDir: "{app}\security_tests"; Flags: ignoreversion
+; Security Test Documentation (test report only, scripts removed for clean distribution)
 Source: "..\security_tests\README.md"; DestDir: "{app}\security_tests"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
@@ -77,6 +77,9 @@ Name: "{group}\HSIP Command Line"; Filename: "cmd.exe"; Parameters: "/k cd /d ""
 Name: "{group}\Export Audit Logs"; Filename: "cmd.exe"; Parameters: "/k cd /d ""{app}"" && {#MyAppExeName} audit-export --out evidence.json"
 Name: "{group}\Verify Audit Integrity"; Filename: "cmd.exe"; Parameters: "/k cd /d ""{app}"" && {#MyAppExeName} audit-verify"
 Name: "{group}\Documentation"; Filename: "{app}\README.md"
+Name: "{group}\License (Free for Non-Commercial Use)"; Filename: "{app}\LICENSE"
+Name: "{group}\Commercial License Information"; Filename: "{app}\COMMERCIAL_LICENSE.md"
+Name: "{group}\Security Audit Report"; Filename: "{app}\SECURITY_AUDIT.md"
 Name: "{group}\Audit Log Guide (Court Evidence)"; Filename: "{app}\AUDIT_LOG_GUIDE.md"
 Name: "{group}\Testing Guide"; Filename: "{app}\TESTING_GUIDE.md"
 Name: "{group}\Getting Started"; Filename: "{app}\GETTING_STARTED.md"
@@ -109,25 +112,26 @@ begin
   WelcomeLabel := TLabel.Create(WizardForm);
   WelcomeLabel.Parent := WizardForm.WelcomePage;
   WelcomeLabel.Caption :=
-    'This wizard will install HSIP - Consent-Based Encrypted Communication.' + #13#10 + #13#10 +
-    'HSIP v1.0.0 provides:' + #13#10 +
+    'This wizard will install HSIP (Hyper Secure Internet Protocol)' + #13#10 +
+    'Consent-Based Encrypted Communication Protocol' + #13#10 + #13#10 +
+    'HSIP v1.0.0 Security Features:' + #13#10 +
     '  • Ed25519 digital signatures (non-repudiation)' + #13#10 +
     '  • ChaCha20-Poly1305 encryption (Signal-grade)' + #13#10 +
     '  • PostgreSQL audit logs (court-ready evidence)' + #13#10 +
     '  • NTP time synchronization (±2 seconds)' + #13#10 +
-    '  • Geolocation metadata tracking' + #13#10 +
-    '  • Device fingerprinting' + #13#10 +
-    '  • HMAC-SHA256 response integrity protection' + #13#10 +
-    '  • OWASP Top 10 security hardening' + #13#10 +
-    '  • Visual status with colored tray icons' + #13#10 +
-    '  • Automatic threat blocking' + #13#10 +
-    '  • Independent verification (IETF RFC 8439)' + #13#10 + #13#10 +
-    'Enterprise-grade security - all features independently verified.' + #13#10 + #13#10 +
-    'Look for the tray icon after installation:' + #13#10 +
-    '  GREEN  = Protected' + #13#10 +
-    '  YELLOW = Blocking threats' + #13#10 +
-    '  RED    = Offline or error' + #13#10 + #13#10 +
-    'NOTE: PostgreSQL required for audit logs. Install from:' + #13#10 +
+    '  • Replay attack protection (nonce-based)' + #13#10 +
+    '  • DoS/Injection attack defenses' + #13#10 +
+    '  • OWASP Top 10 hardening' + #13#10 +
+    '  • Security audited and patched' + #13#10 + #13#10 +
+    'Recent Security Updates:' + #13#10 +
+    '  • Fixed panic vulnerability (RUSTSEC DoS prevention)' + #13#10 +
+    '  • Updated maxminddb (RUSTSEC-2025-0132)' + #13#10 +
+    '  • Enhanced error handling for malformed inputs' + #13#10 + #13#10 +
+    'LICENSE:' + #13#10 +
+    '  FREE for personal, educational, and non-commercial use' + #13#10 +
+    '  Commercial use requires a license from Nyx Systems LLC' + #13#10 +
+    '  See LICENSE and COMMERCIAL_LICENSE.md for details' + #13#10 + #13#10 +
+    'NOTE: PostgreSQL required for audit logs:' + #13#10 +
     'https://www.postgresql.org/download/windows/';
   WelcomeLabel.Left := WizardForm.WelcomeLabel2.Left;
   WelcomeLabel.Top := WizardForm.WelcomeLabel2.Top + WizardForm.WelcomeLabel2.Height + 20;
