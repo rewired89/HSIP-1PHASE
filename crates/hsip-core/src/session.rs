@@ -194,6 +194,18 @@ impl ManagedSession {
         self
     }
 
+    /// Attach a consent check callback to an existing session.
+    /// This enables instant session termination when consent is revoked.
+    ///
+    /// The callback will be invoked on every encrypt/decrypt operation.
+    /// If it returns false, the operation fails with SessionError::ConsentRevoked.
+    pub fn attach_consent_check<F>(&mut self, check: F)
+    where
+        F: Fn() -> bool + Send + Sync + 'static,
+    {
+        self.consent_check = Some(Box::new(check));
+    }
+
     /// Internal: enforce age/packet limits and consent status for this key.
     fn check_limits(&self) -> Result<(), SessionError> {
         // Check consent first (cheapest check)

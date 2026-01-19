@@ -308,6 +308,10 @@ pub fn listen_control(addr: &str) -> Result<()> {
     let pcfg = PolicyCfg::from_env();
     pcfg.print_banner();
 
+    // Create shared consent cache for instant revocation
+    let consent_cache = crate::consent_cache::SharedConsentCache::new(300_000); // 5 minutes TTL
+    println!("[consent] Instant revocation enabled - sessions check consent on every packet");
+
     let sock = UdpSocket::bind(addr).map_err(|e| anyhow!("bind {addr}: {e}"))?;
     sock.set_nonblocking(true).ok();
     println!("[control-listen] bound on {addr}");
@@ -337,6 +341,7 @@ pub fn listen_control(addr: &str) -> Result<()> {
         &pcfg,
         &sk,
         &vk,
+        &consent_cache,
     )
 }
 
@@ -382,6 +387,7 @@ fn process_control_messages(
     policy: &PolicyCfg,
     signing_key: &SigningKey,
     verifying_key: &VerifyingKey,
+    consent_cache: &crate::consent_cache::SharedConsentCache,
 ) -> Result<()> {
     let mut reputation_store: Option<Store> = None;
     let mut receive_buffer = [0u8; 65535];
@@ -407,6 +413,7 @@ fn process_control_messages(
                         plaintext,
                         peer_addr,
                         sock,
+                        rx_session,
                         tx_session,
                         guard,
                         policy,
@@ -414,6 +421,7 @@ fn process_control_messages(
                         signing_key,
                         verifying_key,
                         &aad,
+                        consent_cache,
                     )?;
                 }
             }
@@ -464,6 +472,7 @@ fn handle_control_message(
     plaintext: Vec<u8>,
     peer_addr: std::net::SocketAddr,
     sock: &UdpSocket,
+    rx_session: &mut ManagedSession,
     tx_session: &mut ManagedSession,
     guard: &mut Guard,
     policy: &PolicyCfg,
@@ -471,6 +480,7 @@ fn handle_control_message(
     signing_key: &SigningKey,
     verifying_key: &VerifyingKey,
     aad: &[u8],
+    consent_cache: &crate::consent_cache::SharedConsentCache,
 ) -> Result<()> {
     // Try parsing as ConsentRequest
     if let Ok(request) = serde_json::from_slice::<ConsentRequest>(&plaintext) {
@@ -479,8 +489,25 @@ fn handle_control_message(
             request.purpose, request.expires_ms
         );
 
+        let peer_id = request.requester_peer_id.clone();
+
         let decision =
             evaluate_consent_request(&request, peer_addr, guard, policy, reputation_store)?;
+
+        // If consent is granted, attach consent checking to active sessions
+        // This enables instant termination when consent is later revoked
+        if decision == "allow" && !peer_id.is_empty() {
+            let consent_check = consent_cache.create_check_callback(peer_id.clone());
+            rx_session.attach_consent_check(consent_check);
+
+            let consent_check_tx = consent_cache.create_check_callback(peer_id.clone());
+            tx_session.attach_consent_check(consent_check_tx);
+
+            // Add to consent cache
+            consent_cache.insert_allow(&peer_id);
+
+            println!("[consent] Attached instant revocation to session for peer: {}", peer_id);
+        }
 
         let response =
             build_response_with_decision(signing_key, verifying_key, &request, decision, 60_000)?;

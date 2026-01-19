@@ -1,4 +1,6 @@
+use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct ConsentCache {
@@ -40,10 +42,46 @@ impl ConsentCache {
     }
 
     /// Remove an entry (e.g., after tamper).
+    /// This triggers instant session termination for active sessions with this peer.
     pub fn revoke(&mut self, requester: &str) {
         if requester.is_empty() {
             return;
         }
         self.allow_until.remove(requester);
+        // Sessions check consent on every encrypt/decrypt via with_consent_check()
+        // Next operation will fail with SessionError::ConsentRevoked
+    }
+}
+
+/// Thread-safe consent cache for sharing across sessions
+#[derive(Clone)]
+pub struct SharedConsentCache {
+    inner: Arc<RwLock<ConsentCache>>,
+}
+
+impl SharedConsentCache {
+    pub fn new(ttl_ms: u64) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(ConsentCache::new(ttl_ms))),
+        }
+    }
+
+    pub fn is_allowed(&self, peer_id: &str) -> bool {
+        self.inner.write().is_allowed(peer_id)
+    }
+
+    pub fn insert_allow(&self, peer_id: &str) {
+        self.inner.write().insert_allow(peer_id);
+    }
+
+    pub fn revoke(&self, peer_id: &str) {
+        self.inner.write().revoke(peer_id);
+    }
+
+    /// Create a consent check callback for use with sessions
+    /// Sessions will check consent on every encrypt/decrypt operation
+    pub fn create_check_callback(&self, peer_id: String) -> impl Fn() -> bool + Send + Sync + 'static {
+        let cache = self.clone();
+        move || cache.is_allowed(&peer_id)
     }
 }
