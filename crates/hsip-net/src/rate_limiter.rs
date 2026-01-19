@@ -1,6 +1,15 @@
 //! Rate limiting to prevent DoS attacks
 //!
 //! Implements token bucket algorithm for connection and message rate limiting
+//!
+//! **STATUS: NOT CURRENTLY INTEGRATED**
+//!
+//! This module is **not actively used** in the CLI. The `guard::Guard` module
+//! (in `guard.rs`) provides equivalent protection with sliding window rate limiting
+//! and is actively integrated into `udp.rs` and used by all control-plane listeners.
+//!
+//! This module remains for potential future use or alternative rate limiting strategies.
+//! See `guard.rs` for the **active** rate limiting implementation.
 
 use std::collections::HashMap;
 use std::net::IpAddr;

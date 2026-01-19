@@ -1,6 +1,17 @@
 //! Connection guards with timeouts and resource limits
 //!
 //! Prevents resource exhaustion and slowloris attacks
+//!
+//! **STATUS: NOT CURRENTLY INTEGRATED**
+//!
+//! This module is **not actively used** in the CLI. The `guard::Guard` module
+//! (in `guard.rs`) provides active protection through per-IP rate limiting,
+//! bad signature tracking, and frame size limits. While this module offers
+//! complementary features (connection slot limits, bandwidth tracking, idle detection),
+//! it is not currently integrated into the protocol handlers.
+//!
+//! This module remains for potential future use in Phase 2 when more sophisticated
+//! connection management is needed. See `guard.rs` for the **active** protection layer.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
