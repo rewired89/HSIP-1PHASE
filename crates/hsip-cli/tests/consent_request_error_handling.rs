@@ -5,13 +5,19 @@ use std::process::Command;
 
 #[test]
 fn test_missing_request_file_no_panic() {
+    use std::env;
+
+    // Use cross-platform temp directory
+    let temp_dir = env::temp_dir();
+    let nonexistent_path = temp_dir.join("nonexistent_request_file_hsip_test.json");
+
     let output = Command::new(env!("CARGO_BIN_EXE_hsip-cli"))
         .args([
             "consent-send-request",
             "--to",
             "127.0.0.1:40404",
             "--file",
-            "/tmp/nonexistent_request_file_hsip_test.json",
+            nonexistent_path.to_str().unwrap(),
         ])
         .output()
         .expect("failed to execute CLI");
@@ -37,12 +43,14 @@ fn test_missing_request_file_no_panic() {
 
 #[test]
 fn test_invalid_json_request_file_no_panic() {
+    use std::env;
     use std::fs;
     use std::io::Write;
 
-    // Create a temp file with invalid JSON
-    let temp_path = "/tmp/hsip_test_invalid.json";
-    let mut f = fs::File::create(temp_path).expect("create temp file");
+    // Create a temp file with invalid JSON (cross-platform)
+    let temp_dir = env::temp_dir();
+    let temp_path = temp_dir.join("hsip_test_invalid.json");
+    let mut f = fs::File::create(&temp_path).expect("create temp file");
     f.write_all(b"{ invalid json ").expect("write invalid json");
     drop(f);
 
@@ -52,13 +60,13 @@ fn test_invalid_json_request_file_no_panic() {
             "--to",
             "127.0.0.1:40404",
             "--file",
-            temp_path,
+            temp_path.to_str().unwrap(),
         ])
         .output()
         .expect("failed to execute CLI");
 
     // Clean up
-    let _ = fs::remove_file(temp_path);
+    let _ = fs::remove_file(&temp_path);
 
     // Should exit with error code
     assert!(!output.status.success(), "should fail with non-zero exit code");
@@ -81,11 +89,13 @@ fn test_invalid_json_request_file_no_panic() {
 
 #[test]
 fn test_empty_request_file_no_panic() {
+    use std::env;
     use std::fs;
 
-    // Create empty file
-    let temp_path = "/tmp/hsip_test_empty.json";
-    fs::File::create(temp_path).expect("create empty file");
+    // Create empty file (cross-platform)
+    let temp_dir = env::temp_dir();
+    let temp_path = temp_dir.join("hsip_test_empty.json");
+    fs::File::create(&temp_path).expect("create empty file");
 
     let output = Command::new(env!("CARGO_BIN_EXE_hsip-cli"))
         .args([
@@ -93,13 +103,13 @@ fn test_empty_request_file_no_panic() {
             "--to",
             "127.0.0.1:40404",
             "--file",
-            temp_path,
+            temp_path.to_str().unwrap(),
         ])
         .output()
         .expect("failed to execute CLI");
 
     // Clean up
-    let _ = fs::remove_file(temp_path);
+    let _ = fs::remove_file(&temp_path);
 
     // Should exit with error code
     assert!(!output.status.success(), "should fail with non-zero exit code");
