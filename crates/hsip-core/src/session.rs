@@ -249,6 +249,25 @@ impl ManagedSession {
         Ok((counter, ct))
     }
 
+    /// Encrypt with automatic traffic shaping (padding + timing jitter)
+    ///
+    /// This is the recommended method for privacy-sensitive applications.
+    /// Adds constant-size padding and timing jitter to prevent metadata analysis.
+    pub fn encrypt_with_shaping(
+        &mut self,
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<(u64, Vec<u8>), SessionError> {
+        // Add padding to normalize packet sizes
+        let padded = crate::traffic_shaping::add_padding(plaintext);
+
+        // Apply timing jitter before sending
+        crate::traffic_shaping::apply_timing_jitter();
+
+        // Encrypt the padded plaintext
+        self.encrypt(&padded, aad)
+    }
+
     /// Decrypt a payload given the packet `counter` and AAD.
     ///
     /// The caller must pass the same `counter` that was used by the sender.
@@ -274,6 +293,23 @@ impl ManagedSession {
             .map_err(|_| SessionError::Crypto("decrypt"))?;
 
         Ok(pt)
+    }
+
+    /// Decrypt with automatic padding removal
+    ///
+    /// Use this when receiving packets encrypted with `encrypt_with_shaping`.
+    pub fn decrypt_with_shaping(
+        &self,
+        counter: u64,
+        ciphertext: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, SessionError> {
+        // Decrypt first
+        let padded = self.decrypt(counter, ciphertext, aad)?;
+
+        // Remove padding
+        crate::traffic_shaping::remove_padding(&padded)
+            .map_err(|e| SessionError::Crypto(e))
     }
 
     /// Expose basic stats for monitoring / logging.

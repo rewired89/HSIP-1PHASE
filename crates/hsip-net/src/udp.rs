@@ -49,9 +49,22 @@ pub mod hello {
     }
 
     pub fn send_hello(sk: &SigningKey, vk: &VerifyingKey, to: &str, now_ms: u64) -> Result<()> {
+        send_hello_with_retry(sk, vk, to, now_ms, 3)
+    }
+
+    /// Send HELLO with exponential backoff retry for unreliable UDP
+    ///
+    /// Retries: 0ms (immediate), 1s, 2s, 4s (max 3 retries)
+    /// Total timeout: ~7 seconds
+    pub fn send_hello_with_retry(
+        sk: &SigningKey,
+        vk: &VerifyingKey,
+        to: &str,
+        now_ms: u64,
+        max_retries: u32,
+    ) -> Result<()> {
         let hello = build_hello(sk, vk, now_ms);
         let json = serde_json::to_vec(&hello)?;
-        let sock = UdpSocket::bind("0.0.0.0:0")?;
 
         let mut pkt = Vec::with_capacity(PREFIX_LEN + json.len());
         hsip_core::wire::prefix::write_prefix(&mut pkt);
@@ -65,8 +78,30 @@ pub mod hello {
             ));
         }
 
-        sock.send_to(&pkt, to)?;
-        Ok(())
+        let sock = UdpSocket::bind("0.0.0.0:0")?;
+        sock.set_write_timeout(Some(std::time::Duration::from_secs(2)))?;
+
+        let mut last_error = None;
+        for attempt in 0..=max_retries {
+            match sock.send_to(&pkt, to) {
+                Ok(_) => {
+                    if attempt > 0 {
+                        println!("[hello] sent after {} retries", attempt);
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < max_retries {
+                        let delay_ms = 1000 * (1 << attempt); // Exponential: 1s, 2s, 4s
+                        eprintln!("[hello] send failed (attempt {}), retrying in {}ms...", attempt + 1, delay_ms);
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!("HELLO send failed after {} retries: {}", max_retries, last_error.unwrap()))
     }
 }
 

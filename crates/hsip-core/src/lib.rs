@@ -17,6 +17,7 @@ pub mod liveness;
 pub mod nonce;
 pub mod session;
 pub mod session_resumption;
+pub mod traffic_shaping;
 
 pub mod crypto {
     pub mod aead;
