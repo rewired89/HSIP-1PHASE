@@ -1,0 +1,47 @@
+[package]
+name = "hsip-airports"
+version = "0.1.0"
+edition = "2021"
+authors = ["Nyx Systems <contact@nyxsystems.io>"]
+description = "HSIP Airport Cybersecurity Gap Analysis & Features"
+license = "Proprietary"
+
+[dependencies]
+# Core HSIP dependencies
+hsip-core = { path = "../hsip-core" }
+hsip-policy = { path = "../hsip-policy" }
+hsip-audit = { path = "../hsip-audit" }
+hsip-auth = { path = "../hsip-auth" }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Crypto (for evidence hashing)
+sha2 = "0.10"
+hex = "0.4"
+
+# HTTP client for fetching documents
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# CLI support
+clap = { version = "4.4", features = ["derive"], optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []
+cli = ["clap"]
