@@ -462,10 +462,21 @@ hsip-cli audit-query --destination "malicious-site.com"
 
 ## Technical Support
 
+<<<<<<< HEAD
 For technical questions:
 - **Email**: nyxsystemsllc@gmail.com
 - **Documentation**: https://hsip.io/docs/audit-logs
 
+=======
+For legal/technical questions:
+- **Email**: legal@hsip.io
+- **Documentation**: https://hsip.io/docs/audit-logs
+- **Expert Witness**: Contact for legal testimony
+
+For database issues:
+- **Email**: support@hsip.io
+- **GitHub**: https://github.com/HSIP/hsip/issues
+>>>>>>> origin/claude/fix-security-vulnerabilities-Kbv48
 
 ---
 

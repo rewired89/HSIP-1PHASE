@@ -25,8 +25,14 @@ Visit the [Releases page](https://github.com/nyxsystems/HSIP-1PHASE-1/releases) 
 **Step 2: Run the installer**
 
 1. Double-click `HSIP-Setup.exe`
+<<<<<<< HEAD
 2. Follow the installation wizard
 3. HSIP will start automatically
+=======
+2. Click "Yes" when prompted for Administrator privileges
+3. Follow the installation wizard
+4. HSIP will start automatically
+>>>>>>> origin/claude/fix-security-vulnerabilities-Kbv48
 
 **Step 3: Verify installation**
 
@@ -40,8 +46,13 @@ If you see a green icon, HSIP is working!
 
 ### Other Platforms
 
+<<<<<<< HEAD
 - **Linux**: Coming soon (funding pending)
 - **macOS**: Coming soon (funding pending)
+=======
+- **Linux**: Coming soon (NGI funding pending)
+- **macOS**: Coming soon (NGI funding pending)
+>>>>>>> origin/claude/fix-security-vulnerabilities-Kbv48
 - **Android**: Coming soon
 - **iOS**: Planned (Share Extension model for App Store compliance)
 
