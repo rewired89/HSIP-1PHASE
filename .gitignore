@@ -53,6 +53,10 @@ reputation.log
 demo*.ps1
 # Maybe others: sample files, burned tokens
 
+# Allow dashboard config files
+!dashboard/package.json
+!dashboard/package-lock.json
+
 # Local demo/test junk in repo root
 req*.json
 resp.json
