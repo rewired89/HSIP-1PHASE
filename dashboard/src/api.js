@@ -1,4 +1,4 @@
-const BASE = process.env.REACT_APP_API_URL || '';
+const BASE = import.meta.env.VITE_API_URL || '';
 
 export async function request(method, path, body, apiKey) {
   const res = await fetch(`${BASE}${path}`, {
