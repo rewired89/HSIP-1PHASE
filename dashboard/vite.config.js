@@ -1,13 +1,19 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-<<<<<<< HEAD
-// https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
-=======
-export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react({
+      include: '**/*.{jsx,js}',
+    })
+  ],
+  optimizeDeps: {
+    esbuildOptions: {
+      loader: {
+        '.js': 'jsx',
+      },
+    },
+  },
   server: {
     port: 3001,
     proxy: {
@@ -17,5 +23,4 @@ export default defineConfig({
       }
     }
   }
->>>>>>> origin/claude/fix-security-vulnerabilities-Kbv48
 })
