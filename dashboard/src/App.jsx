@@ -16,7 +16,7 @@ export default function App() {
   async function handleLogin(e) {
     e.preventDefault();
     try {
-      await request('GET', '/v1/identity', null, apiKey);
+      await request('POST', '/v1/identity', null, apiKey);
       localStorage.setItem('hsip_api_key', apiKey);
       setAuthed(true);
       setError('');

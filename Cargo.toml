@@ -17,10 +17,7 @@ members = [
     "crates/hsip-regenerative",
     "crates/hsip-telemetry-guard",
     "crates/hsip-integration-sdk",
-<<<<<<< HEAD
-=======
     "crates/hsip-api",
->>>>>>> origin/claude/fix-security-vulnerabilities-Kbv48
 ]
 
 
