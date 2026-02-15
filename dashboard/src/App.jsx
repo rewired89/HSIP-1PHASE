@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { request } from './api';
-import Identity from './pages/Identity';
-import Consent  from './pages/Consent';
-import Messages from './pages/Messages';
-import Audit    from './pages/Audit';
-import Keys     from './pages/Keys';
+import Identity    from './pages/Identity';
+import Consent     from './pages/Consent';
+import Messages    from './pages/Messages';
+import Audit       from './pages/Audit';
+import Keys        from './pages/Keys';
+import Credentials from './pages/Credentials';
 import './App.css';
 
 export default function App() {
@@ -46,7 +47,7 @@ export default function App() {
     );
   }
 
-  const tabs = ['identity', 'consent', 'messages', 'audit', 'keys'];
+  const tabs = ['identity', 'consent', 'messages', 'credentials', 'audit', 'keys'];
 
   return (
     <div className="app">
@@ -68,11 +69,12 @@ export default function App() {
         </nav>
       </header>
       <main>
-        {tab === 'identity' && <Identity apiKey={apiKey} />}
-        {tab === 'consent'  && <Consent  apiKey={apiKey} />}
-        {tab === 'messages' && <Messages apiKey={apiKey} />}
-        {tab === 'audit'    && <Audit    apiKey={apiKey} />}
-        {tab === 'keys'     && <Keys     apiKey={apiKey} />}
+        {tab === 'identity'    && <Identity    apiKey={apiKey} />}
+        {tab === 'consent'     && <Consent     apiKey={apiKey} />}
+        {tab === 'messages'    && <Messages    apiKey={apiKey} />}
+        {tab === 'credentials' && <Credentials apiKey={apiKey} />}
+        {tab === 'audit'       && <Audit       apiKey={apiKey} />}
+        {tab === 'keys'        && <Keys        apiKey={apiKey} />}
       </main>
     </div>
   );

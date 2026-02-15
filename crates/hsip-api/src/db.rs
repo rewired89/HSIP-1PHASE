@@ -66,6 +66,18 @@ fn run_migrations(conn: &Connection) -> anyhow::Result<()> {
             details          TEXT,
             timestamp        INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS credentials (
+            id               TEXT PRIMARY KEY,
+            tenant_id        TEXT NOT NULL,
+            claim            TEXT NOT NULL,
+            user_token       TEXT NOT NULL,
+            issuer_verify_key TEXT NOT NULL,
+            issued_at        INTEGER NOT NULL,
+            expires_at       INTEGER NOT NULL,
+            signature        TEXT NOT NULL,
+            revoked          INTEGER NOT NULL DEFAULT 0
+        );
     ")?;
     Ok(())
 }
