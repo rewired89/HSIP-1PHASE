@@ -85,8 +85,13 @@ fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
     println!("║  {:<48}  ║", raw_key);
     println!("║                                                  ║");
     println!("║  Authorization: Bearer <key>                     ║");
+    println!("║  Key also saved to: hsip_admin_key.txt           ║");
     println!("╚══════════════════════════════════════════════════╝");
     println!();
+
+    // Write key to file so it is never lost
+    std::fs::write("hsip_admin_key.txt", &raw_key)
+        .unwrap_or_else(|e| eprintln!("Warning: could not write key file: {e}"));
 
     Ok(())
 }
