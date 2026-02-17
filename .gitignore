@@ -84,3 +84,17 @@ tools/
 
 slowloris_test.py
 
+# Database files (never commit runtime data)
+*.db
+*.db-shm
+*.db-wal
+
+# Admin key generated at startup
+hsip_admin_key.txt
+
+# SBOM artifacts
+*.cdx.xml
+
+# Formal verification traces
+.z3-trace
+
