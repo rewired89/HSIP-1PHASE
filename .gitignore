@@ -84,6 +84,9 @@ tools/
 
 slowloris_test.py
 
+# Release binaries — built locally, distributed via ZIP not git
+bin/
+
 # Database files (never commit runtime data)
 *.db
 *.db-shm
