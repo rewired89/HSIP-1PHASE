@@ -5,6 +5,42 @@
 version = 2
 yanked = "deny"
 
+# Known advisories acknowledged with justification:
+ignore = [
+    # RUSTSEC-2024-0437: protobuf crash via deeply-nested message parsing.
+    # prometheus 0.13 pulls in protobuf 2.x. HSIP only uses TextEncoder to
+    # output metrics in text format — it never parses protobuf from any
+    # user-controlled input. The crash path (Message::merge_from) is
+    # unreachable in our code. No fix available without a major dependency
+    # change; risk accepted as non-exploitable in this deployment context.
+    { id = "RUSTSEC-2024-0437", reason = "protobuf parsing not used; TextEncoder output only, no untrusted protobuf input" },
+
+    # RUSTSEC-2024-0413/0412/0415/0416/0418/0419/0420: unmaintained GTK3
+    # bindings (atk, gdk, gtk, etc.) pulled in by hsip-cli's tray-icon for
+    # desktop UI on Linux. Not part of the server binary or any customer-
+    # facing code path. Accepted for desktop CLI tooling only.
+    { id = "RUSTSEC-2024-0413", reason = "GTK3 UI lib in hsip-cli desktop only, not in server binary" },
+    { id = "RUSTSEC-2024-0412", reason = "GTK3 UI lib in hsip-cli desktop only, not in server binary" },
+    { id = "RUSTSEC-2024-0415", reason = "GTK3 UI lib in hsip-cli desktop only, not in server binary" },
+    { id = "RUSTSEC-2024-0416", reason = "GTK3 UI lib in hsip-cli desktop only, not in server binary" },
+    { id = "RUSTSEC-2024-0418", reason = "GTK3 UI lib in hsip-cli desktop only, not in server binary" },
+    { id = "RUSTSEC-2024-0419", reason = "GTK3 UI lib in hsip-cli desktop only, not in server binary" },
+    { id = "RUSTSEC-2024-0420", reason = "GTK3 UI lib in hsip-cli desktop only, not in server binary" },
+
+    # RUSTSEC-2024-0429: unsound glib VariantStrIter, from hsip-cli tray-icon.
+    # Same justification as above — desktop GUI only, not in server binary.
+    { id = "RUSTSEC-2024-0429", reason = "GTK3 glib in hsip-cli desktop only, not in server binary" },
+
+    # RUSTSEC-2024-0436: paste macro crate unmaintained.
+    # Used transitively by sqlx-core internals and pqcrypto. No user-facing
+    # impact; purely a proc-macro compile-time crate.
+    { id = "RUSTSEC-2024-0436", reason = "compile-time proc-macro only, no runtime exposure" },
+
+    # RUSTSEC-2024-0370: proc-macro-error unmaintained.
+    # Used by gtk3-macros → hsip-cli only. Same desktop-only justification.
+    { id = "RUSTSEC-2024-0370", reason = "compile-time proc-macro in hsip-cli desktop only" },
+]
+
 [licenses]
 version = 2
 # Allow permissive licenses commonly used in Rust ecosystem

@@ -42,7 +42,7 @@ parking_lot = "0.12"
 url = "2"
 
 # Storage (for quarantine and consent persistence)
-rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
 # PostgreSQL for audit logs
 tokio-postgres = { version = "0.7", optional = true, features = ["with-chrono-0_4"] }
