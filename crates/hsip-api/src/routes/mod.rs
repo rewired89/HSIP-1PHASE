@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod audit;
 pub mod consent;
 pub mod credentials;
@@ -36,4 +37,6 @@ pub fn router() -> Router<AppState> {
         .route("/v1/keys",                   get(keys::list))
         .route("/v1/keys",                   post(keys::create))
         .route("/v1/keys/:id",               delete(keys::revoke))
+        // AI Agents
+        .route("/v1/agents",                 get(agents::list))
 }

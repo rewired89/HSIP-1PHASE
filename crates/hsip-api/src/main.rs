@@ -1,11 +1,14 @@
-use axum::Router;
+use axum::{Router, routing::get, response::IntoResponse};
+
 use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 mod auth;
 mod db;
 mod errors;
+mod metrics;
 mod routes;
 mod state;
 
@@ -20,26 +23,39 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    metrics::init();
+
     let db_path = std::env::var("HSIP_DB_PATH")
         .unwrap_or_else(|_| "hsip_api.db".to_string());
 
-    let db = db::init(&db_path)?;
+    let db    = db::init(&db_path)?;
     bootstrap_admin(&db)?;
 
-    let state = AppState { db };
+    let state = AppState::new(db);
     let app   = Router::new()
         .merge(routes::router())
+        // Prometheus metrics — no auth, standard scrape endpoint
+        .route("/metrics", get(metrics_handler))
         .layer(CorsLayer::permissive())
+        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .with_state(state);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let addr = format!("0.0.0.0:{port}");
 
     tracing::info!("HSIP API listening on http://{addr}");
+    tracing::info!("Metrics available at http://{addr}/metrics");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn metrics_handler() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        metrics::render(),
+    )
 }
 
 fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
@@ -71,10 +87,12 @@ fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
     let key_id    = Uuid::new_v4().to_string();
 
     conn.execute(
-        "INSERT INTO api_keys (id, tenant_id, key_hash, name, created_at, active)
-         VALUES (?1, ?2, ?3, 'admin', ?4, 1)",
+        "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+         VALUES (?1, ?2, ?3, 'admin', 'human', ?4, 1)",
         rusqlite::params![key_id, tenant_id, key_hash, now],
     )?;
+
+    metrics::ACTIVE_TENANTS.inc();
 
     println!();
     println!("╔══════════════════════════════════════════════════╗");
@@ -89,7 +107,6 @@ fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
     println!("╚══════════════════════════════════════════════════╝");
     println!();
 
-    // Write key to file so it is never lost
     std::fs::write("hsip_admin_key.txt", &raw_key)
         .unwrap_or_else(|e| eprintln!("Warning: could not write key file: {e}"));
 
