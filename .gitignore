@@ -57,6 +57,9 @@ demo*.ps1
 !dashboard/package.json
 !dashboard/package-lock.json
 
+# Allow OpenAPI spec embedded in the API crate
+!crates/hsip-api/src/openapi.json
+
 # Local demo/test junk in repo root
 req*.json
 resp.json
