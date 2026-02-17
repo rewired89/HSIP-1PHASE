@@ -1,7 +1,7 @@
 # HSIP — CAIQ v4.1 Self-Assessment (Condensed)
 
 **Document:** Cloud Security Alliance Consensus Assessments Initiative Questionnaire (CAIQv4.1)  
-**Product:** Hardened Secure Identity Protocol (HSIP) API v0.2.0  
+**Product:** High Security Internet Protocol (HSIP) API v0.2.0  
 **Date:** February 2026  
 **Prepared by:** HSIP Engineering Team  
 

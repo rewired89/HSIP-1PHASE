@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "HSIP API",
-    "description": "Hardened Secure Identity Protocol — multi-tenant identity, consent, message signing, and privacy-preserving credential verification.",
+    "description": "High Security Internet Protocol — multi-tenant identity, consent, message signing, and privacy-preserving credential verification.",
     "version": "0.2.0",
     "contact": { "name": "HSIP Support" }
   },

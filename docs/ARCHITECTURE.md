@@ -1,6 +1,6 @@
 # HSIP Architecture Documentation
 
-**Product:** Hardened Secure Identity Protocol (HSIP) API  
+**Product:** High Security Internet Protocol (HSIP) API  
 **Version:** 0.2.0  
 **Date:** February 2026  
 

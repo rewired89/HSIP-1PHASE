@@ -1,6 +1,6 @@
 # HSIP Formal Verification
 
-Formal verification of HSIP (Hyper Secure Identity Protocol) security properties using Z3 SMT solver.
+Formal verification of HSIP (High Security Internet Protocol) security properties using Z3 SMT solver.
 
 ## Overview
 

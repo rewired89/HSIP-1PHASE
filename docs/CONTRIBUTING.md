@@ -1,6 +1,6 @@
 # Contributing to HSIP
 
-Thank you for your interest in contributing to HSIP (Hyper Secure Internet Protocol)
+Thank you for your interest in contributing to HSIP (High Security Internet Protocol)
 
 HSIP is a community-driven privacy project that welcomes contributions from developers, security researchers, and privacy advocates.
 
@@ -141,8 +141,7 @@ License Agreement
 
 By contributing to HSIP, you agree that:
 
-    Your contributions will be licensed under the same dual-license model:
-        Community License (non-commercial)
+    Your contributions will be licensed under the same         Community License (non-commercial)
         Enterprise License (commercial)
 
     You have the right to submit the contribution (no copyright violations)
@@ -153,8 +152,7 @@ By contributing to HSIP, you agree that:
 
 Open Source & Community Projects
 
-If you're building an open source project using HSIP:
-✅ You're covered under the Community License!
+If you're building an ✅ You're covered under the Community License!
 
 Examples of accepted use:
 
@@ -168,8 +166,7 @@ Examples of accepted use:
 
 Just make sure:
 
-    Your project is open source (public GitHub repo, OSI-approved license)
-    You're not generating revenue from it
+    Your project is open source (public GitHub repo,     You're not generating revenue from it
     You're not providing it as a paid service
 
 Want to feature your project? Email us at contact@hsip.io - we love showcasing community work!

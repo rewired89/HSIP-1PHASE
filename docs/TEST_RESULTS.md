@@ -1,6 +1,6 @@
 # HSIP Automated Test Suite Results
 
-**Product:** Hardened Secure Identity Protocol (HSIP) API  
+**Product:** High Security Internet Protocol (HSIP) API  
 **Version:** 0.2.0  
 **Test Run Date:** February 2026  
 **Test Framework:** Rust built-in test harness (`cargo test`)  

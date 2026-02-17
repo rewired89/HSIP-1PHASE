@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Nyx Systems LLC.
 // SPDX-License-Identifier: SEE LICENSE IN ../../LICENSE
 //
-// This file is part of HSIP (Hyper Secure Internet Protocol).
+// This file is part of HSIP (High Security Internet Protocol).
 // Free for non-commercial use. Commercial use requires a license.
 // See LICENSE and COMMERCIAL_LICENSE.md for details.
 
