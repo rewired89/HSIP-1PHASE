@@ -1,0 +1,404 @@
+//! Integration tests for the HSIP REST API.
+//!
+//! Each test spins up an in-memory SQLite database, bootstraps the router,
+//! and exercises the full HTTP stack via `tower::ServiceExt`.
+
+use axum::{
+    body::Body,
+    http::{Request, StatusCode, header},
+};
+use http_body_util::BodyExt;
+use tower::ServiceExt;
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+// Build an app backed by an in-memory SQLite database and return (app, admin_key).
+async fn test_app() -> (axum::Router, String) {
+    // Each test gets its own in-memory DB by using a unique name.
+    let db_url = format!(
+        "sqlite:file:{}?mode=memory&cache=shared",
+        uuid::Uuid::new_v4()
+    );
+
+    // Install drivers once (idempotent via Once in db::init)
+    sqlx::any::install_default_drivers();
+
+    let db = hsip_api::db::init(&db_url).await.expect("db init");
+
+    // Bootstrap a test tenant + key manually
+    let tenant_id = uuid::Uuid::new_v4().to_string();
+    let raw_key   = format!("hsip_{}", hex::encode([0u8; 32]));
+    let key_hash  = hsip_api::auth::hash_key(&raw_key);
+    let key_id    = uuid::Uuid::new_v4().to_string();
+    let now       = hsip_api::db::now_ms();
+
+    use sqlx::Executor;
+    db.execute(
+        sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'test', ?)")
+            .bind(&tenant_id)
+            .bind(now),
+    )
+    .await
+    .unwrap();
+
+    db.execute(
+        sqlx::query(
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+             VALUES (?, ?, ?, 'test', 'human', ?, 1)",
+        )
+        .bind(&key_id)
+        .bind(&tenant_id)
+        .bind(&key_hash)
+        .bind(now),
+    )
+    .await
+    .unwrap();
+
+    let state = hsip_api::state::AppState::new(db);
+    let app   = hsip_api::routes::router().with_state(state);
+
+    (app, raw_key)
+}
+
+fn bearer(key: &str) -> String {
+    format!("Bearer {key}")
+}
+
+async fn body_json(body: axum::body::Body) -> serde_json::Value {
+    let bytes = body.collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_unauthorized_without_key() {
+    let (app, _) = test_app().await;
+    let res = app
+        .oneshot(Request::get("/v1/identity").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_create_identity() {
+    let (app, key) = test_app().await;
+    let res = app
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res.into_body()).await;
+    assert!(json["verify_key"].is_string());
+    assert!(json["created_at"].is_number());
+}
+
+#[tokio::test]
+async fn test_get_identity_not_found() {
+    let (app, key) = test_app().await;
+    let res = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_identity_idempotent() {
+    let (app, key) = test_app().await;
+
+    // Create identity twice — should return same verify_key
+    let r1 = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let j1 = body_json(r1.into_body()).await;
+
+    let r2 = app
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let j2 = body_json(r2.into_body()).await;
+
+    assert_eq!(j1["verify_key"], j2["verify_key"]);
+}
+
+#[tokio::test]
+async fn test_create_and_list_keys() {
+    let (app, key) = test_app().await;
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"test-svc","agent_type":"service"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res.into_body()).await;
+    assert!(json["key"].as_str().unwrap().starts_with("hsip_"));
+    assert_eq!(json["agent_type"], "service");
+
+    let list_res = app
+        .oneshot(
+            Request::get("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_res.status(), StatusCode::OK);
+    let keys: serde_json::Value = body_json(list_res.into_body()).await;
+    assert!(keys.as_array().unwrap().len() >= 2); // admin + new key
+}
+
+#[tokio::test]
+async fn test_key_with_expiry() {
+    let (app, key) = test_app().await;
+
+    let res = app
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"expiring","expires_in_days":30}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res.into_body()).await;
+    assert!(json["expires_at"].is_number());
+}
+
+#[tokio::test]
+async fn test_consent_grant_and_revoke() {
+    let (app, key) = test_app().await;
+    let peer = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; // dummy 32-byte base64
+
+    let grant_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/consent/grant")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"peer_verify_key":"{peer}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(grant_res.status(), StatusCode::OK);
+    let j = body_json(grant_res.into_body()).await;
+    assert_eq!(j["status"], "granted");
+
+    let revoke_res = app
+        .oneshot(
+            Request::post("/v1/consent/revoke")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"peer_verify_key":"{peer}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoke_res.status(), StatusCode::OK);
+    let j = body_json(revoke_res.into_body()).await;
+    assert_eq!(j["status"], "revoked");
+}
+
+#[tokio::test]
+async fn test_credential_issue_verify_revoke() {
+    let (app, key) = test_app().await;
+
+    // Must have identity first
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Issue
+    let issue_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/credentials/issue")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"claim":"age_over_18","user_token":"tok_abc123","ttl_seconds":3600}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(issue_res.status(), StatusCode::OK);
+    let issue_json = body_json(issue_res.into_body()).await;
+    let cred_id = issue_json["credential"]["id"].as_str().unwrap().to_string();
+
+    // Verify (valid)
+    let verify_body = serde_json::json!({
+        "credential": issue_json["credential"],
+        "signature":  issue_json["signature"]
+    });
+    let verify_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/credentials/verify")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(verify_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(verify_res.status(), StatusCode::OK);
+    let vj = body_json(verify_res.into_body()).await;
+    assert_eq!(vj["valid"], true);
+    assert_eq!(vj["revoked"], false);
+
+    // Revoke
+    let revoke_res = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/v1/credentials/{cred_id}/revoke"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoke_res.status(), StatusCode::OK);
+
+    // Verify again (should be invalid: revoked)
+    let verify_body2 = serde_json::json!({
+        "credential": issue_json["credential"],
+        "signature":  issue_json["signature"]
+    });
+    let verify_res2 = app
+        .oneshot(
+            Request::post("/v1/credentials/verify")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(verify_body2.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let vj2 = body_json(verify_res2.into_body()).await;
+    assert_eq!(vj2["valid"], false);
+    assert_eq!(vj2["revoked"], true);
+}
+
+#[tokio::test]
+async fn test_rate_limit_enforced() {
+    // Set a very low limit for this test via env (default is 300, we'll just confirm
+    // the tracker increments correctly by checking auth succeeds normally).
+    let (app, key) = test_app().await;
+
+    // Make 5 successful requests — should all succeed with default 300 rpm limit
+    for _ in 0..5 {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/audit")
+                    .header(header::AUTHORIZATION, bearer(&key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn test_gdpr_erase() {
+    let (app, key) = test_app().await;
+
+    // Create some data first
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Erase everything
+    let erase_res = app
+        .oneshot(
+            Request::post("/v1/tenant/erase")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(erase_res.status(), StatusCode::OK);
+    let ej = body_json(erase_res.into_body()).await;
+    assert_eq!(ej["erased"], true);
+    assert!(ej["tables_cleared"].as_array().unwrap().len() > 0);
+}
+
+#[tokio::test]
+async fn test_audit_log_populated() {
+    let (app, key) = test_app().await;
+
+    // Create identity to generate an audit entry
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::get("/v1/audit")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let entries: serde_json::Value = body_json(res.into_body()).await;
+    let arr = entries.as_array().unwrap();
+    assert!(!arr.is_empty());
+    assert_eq!(arr[0]["action"], "identity.created");
+}

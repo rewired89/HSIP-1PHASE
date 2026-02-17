@@ -2,13 +2,21 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use sha2::{Sha256, Digest};
 use std::sync::atomic::Ordering;
-use crate::{db::now_ms, errors::ApiError, metrics, state::{AppState, VelocityRecord}};
+use sqlx::Row;
+use crate::{db::now_ms, errors::ApiError, metrics, state::{AppState, RateWindow, VelocityRecord}};
 
-// Requests per 60-second window before anomaly is logged
-const ANOMALY_THRESHOLD: u64  = 100;
-// Requests per 60-second window before key is auto-revoked
-const REVOKE_THRESHOLD:  u64  = 1000;
-const WINDOW_MS:         i64  = 60_000;
+// AI agent anomaly/revoke thresholds (requests per 60s window)
+const ANOMALY_THRESHOLD: u64 = 100;
+const REVOKE_THRESHOLD:  u64 = 1000;
+const WINDOW_MS:         i64 = 60_000;
+
+// General per-key rate limit (requests per 60s window); override with RATE_LIMIT_RPM env var
+fn rate_limit_rpm() -> u64 {
+    std::env::var("RATE_LIMIT_RPM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300)
+}
 
 #[derive(Clone, Debug)]
 pub struct TenantId(pub String);
@@ -33,30 +41,32 @@ impl FromRequestParts<AppState> for TenantId {
             .to_string();
 
         let key_hash = hash_key(&token);
-        let db       = state.db.clone();
+        let now      = now_ms();
 
-        let (tenant_id, key_id, agent_type) = tokio::task::spawn_blocking(move || {
-            let conn = db.lock().map_err(|_| ApiError::Internal("db lock poisoned".into()))?;
-            match conn.query_row(
-                "SELECT tenant_id, id, agent_type FROM api_keys WHERE key_hash = ? AND active = 1",
-                rusqlite::params![key_hash],
-                |row| Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                )),
-            ) {
-                Ok(row) => Ok(row),
-                Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    Err(ApiError::Unauthorized("Invalid API key".into()))
-                }
-                Err(e) => Err(ApiError::Internal(e.to_string())),
-            }
-        })
+        let row = sqlx::query(
+            "SELECT tenant_id, id, agent_type FROM api_keys
+             WHERE key_hash = ? AND active = 1
+               AND (expires_at IS NULL OR expires_at > ?)",
+        )
+        .bind(&key_hash)
+        .bind(now)
+        .fetch_optional(&state.db)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))??;
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-        // Velocity tracking for ai_agent keys
+        let row = row.ok_or_else(|| {
+            metrics::AUTH_FAILURES.with_label_values(&["invalid_key"]).inc();
+            ApiError::Unauthorized("Invalid or expired API key".into())
+        })?;
+
+        let tenant_id:  String = row.try_get(0).map_err(|e| ApiError::Internal(e.to_string()))?;
+        let key_id:     String = row.try_get(1).map_err(|e| ApiError::Internal(e.to_string()))?;
+        let agent_type: String = row.try_get(2).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Per-key rate limiting for all key types
+        check_rate_limit(&key_id, state)?;
+
+        // Velocity anomaly tracking for ai_agent keys
         if agent_type == "ai_agent" {
             check_agent_velocity(&key_id, &tenant_id, state).await;
         }
@@ -66,14 +76,41 @@ impl FromRequestParts<AppState> for TenantId {
     }
 }
 
+/// Returns Err(TooManyRequests) if the key has exceeded RATE_LIMIT_RPM in the current window.
+fn check_rate_limit(key_id: &str, state: &AppState) -> Result<(), ApiError> {
+    let now   = now_ms();
+    let limit = rate_limit_rpm();
+    let rl    = &state.rate_limiter;
+
+    let count = if let Some(win) = rl.get(key_id) {
+        let ws = win.window_start_ms.load(Ordering::Relaxed);
+        if now - ws > WINDOW_MS {
+            win.window_start_ms.store(now, Ordering::Relaxed);
+            win.count.store(1, Ordering::Relaxed);
+            1u64
+        } else {
+            win.count.fetch_add(1, Ordering::Relaxed) + 1
+        }
+    } else {
+        rl.insert(key_id.to_string(), RateWindow::new(now));
+        1u64
+    };
+
+    if count > limit {
+        return Err(ApiError::TooManyRequests(format!(
+            "Rate limit exceeded ({limit} req/min). Retry after the current window resets."
+        )));
+    }
+    Ok(())
+}
+
 async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
-    let now = now_ms();
+    let now     = now_ms();
     let tracker = &state.agent_tracker;
 
     let (count, anomalies) = if let Some(rec) = tracker.get(key_id) {
-        let window_start = rec.window_start_ms.load(Ordering::Relaxed);
-        if now - window_start > WINDOW_MS {
-            // Reset window
+        let ws = rec.window_start_ms.load(Ordering::Relaxed);
+        if now - ws > WINDOW_MS {
             rec.window_start_ms.store(now, Ordering::Relaxed);
             rec.request_count.store(1, Ordering::Relaxed);
             (1u64, rec.anomaly_count.load(Ordering::Relaxed))
@@ -88,23 +125,23 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
 
     if count == ANOMALY_THRESHOLD {
         metrics::AGENT_ANOMALIES.with_label_values(&["threshold_exceeded"]).inc();
+        if let Some(rec) = tracker.get(key_id) {
+            rec.anomaly_count.fetch_add(1, Ordering::Relaxed);
+        }
         let db  = state.db.clone();
         let kid = key_id.to_string();
         let tid = tenant_id.to_string();
-        if let Some(rec) = tracker.get(&kid) {
-            rec.anomaly_count.fetch_add(1, Ordering::Relaxed);
-        }
         tokio::task::spawn(async move {
-            if let Ok(db) = db.lock() {
-                let id = uuid::Uuid::new_v4().to_string();
-                let _ = db.execute(
-                    "INSERT INTO audit_entries (id,tenant_id,action,details,timestamp)
-                     VALUES (?1,?2,'agent.anomaly_detected',?3,?4)",
-                    rusqlite::params![id, tid, kid, now],
-                );
-            }
+            let id = uuid::Uuid::new_v4().to_string();
+            let _ = sqlx::query(
+                "INSERT INTO audit_entries (id,tenant_id,action,details,timestamp)
+                 VALUES (?,?,'agent.anomaly_detected',?,?)",
+            )
+            .bind(&id).bind(&tid).bind(&kid).bind(now)
+            .execute(&db)
+            .await;
         });
-        tracing::warn!(key_id=%key_id, count=%count, "AI agent anomaly: request threshold exceeded");
+        tracing::warn!(key_id=%key_id, count=%count, "AI agent anomaly: threshold exceeded");
     }
 
     if count >= REVOKE_THRESHOLD {
@@ -113,24 +150,24 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
         let kid = key_id.to_string();
         let tid = tenant_id.to_string();
         tokio::task::spawn(async move {
-            if let Ok(db) = db.lock() {
-                let _ = db.execute(
-                    "UPDATE api_keys SET active=0 WHERE id=?",
-                    rusqlite::params![kid],
-                );
-                let id = uuid::Uuid::new_v4().to_string();
-                let _ = db.execute(
-                    "INSERT INTO audit_entries (id,tenant_id,action,details,timestamp)
-                     VALUES (?1,?2,'agent.auto_revoked',?3,?4)",
-                    rusqlite::params![id, tid, kid, now],
-                );
-            }
+            let _ = sqlx::query("UPDATE api_keys SET active=0 WHERE id=?")
+                .bind(&kid)
+                .execute(&db)
+                .await;
+            let id = uuid::Uuid::new_v4().to_string();
+            let _ = sqlx::query(
+                "INSERT INTO audit_entries (id,tenant_id,action,details,timestamp)
+                 VALUES (?,?,'agent.auto_revoked',?,?)",
+            )
+            .bind(&id).bind(&tid).bind(&kid).bind(now)
+            .execute(&db)
+            .await;
         });
-        tracing::error!(key_id=%key_id, count=%count, "AI agent auto-revoked: exceeded hard limit");
-        let _ = tracker.remove(key_id);
+        tracing::error!(key_id=%key_id, count=%count, "AI agent auto-revoked: hard limit exceeded");
+        tracker.remove(key_id);
     }
 
-    let _ = anomalies; // used in future for escalation logic
+    let _ = anomalies;
 }
 
 pub fn hash_key(key: &str) -> String {

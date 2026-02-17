@@ -1,7 +1,8 @@
 use axum::{extract::{Query, State}, Json};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 
-use crate::{auth::TenantId, errors::{ApiError, ApiResult}, state::AppState};
+use crate::{auth::TenantId, errors::ApiResult, state::AppState};
 
 #[derive(Deserialize)]
 pub struct AuditQuery {
@@ -25,47 +26,40 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<AuditEntry>>> {
     let limit  = params.limit.unwrap_or(50).min(500);
     let action = params.action.clone();
-    let db     = state.db.clone();
-    let tid    = tenant.0.clone();
 
-    let entries = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().map_err(|_| ApiError::Internal("lock".into()))?;
-        let mut stmt = if let Some(act) = action {
-            let pattern = format!("%{act}%");
-            let mut s = conn.prepare(
-                "SELECT id,action,peer_verify_key,details,timestamp
-                 FROM audit_entries WHERE tenant_id=?1 AND action LIKE ?2
-                 ORDER BY timestamp DESC LIMIT ?3"
-            ).map_err(|e| ApiError::Internal(e.to_string()))?;
-            let rows = s.query_map(rusqlite::params![tid, pattern, limit], |r| Ok(AuditEntry {
-                id:              r.get(0)?,
-                action:          r.get(1)?,
-                peer_verify_key: r.get(2)?,
-                details:         r.get(3)?,
-                timestamp:       r.get(4)?,
-            })).map_err(|e| ApiError::Internal(e.to_string()))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| ApiError::Internal(e.to_string()))
-        } else {
-            let mut s = conn.prepare(
-                "SELECT id,action,peer_verify_key,details,timestamp
-                 FROM audit_entries WHERE tenant_id=?1
-                 ORDER BY timestamp DESC LIMIT ?2"
-            ).map_err(|e| ApiError::Internal(e.to_string()))?;
-            let rows = s.query_map(rusqlite::params![tid, limit], |r| Ok(AuditEntry {
-                id:              r.get(0)?,
-                action:          r.get(1)?,
-                peer_verify_key: r.get(2)?,
-                details:         r.get(3)?,
-                timestamp:       r.get(4)?,
-            })).map_err(|e| ApiError::Internal(e.to_string()))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| ApiError::Internal(e.to_string()))
-        }?;
-        Ok::<_, ApiError>(stmt)
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))??;
+    let rows = if let Some(act) = action {
+        let pattern = format!("%{act}%");
+        sqlx::query(
+            "SELECT id, action, peer_verify_key, details, timestamp
+             FROM audit_entries WHERE tenant_id=? AND action LIKE ?
+             ORDER BY timestamp DESC LIMIT ?",
+        )
+        .bind(&tenant.0)
+        .bind(&pattern)
+        .bind(limit)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, action, peer_verify_key, details, timestamp
+             FROM audit_entries WHERE tenant_id=?
+             ORDER BY timestamp DESC LIMIT ?",
+        )
+        .bind(&tenant.0)
+        .bind(limit)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let entries = rows.iter().map(|r| -> Result<AuditEntry, sqlx::Error> {
+        Ok(AuditEntry {
+            id:              r.try_get(0)?,
+            action:          r.try_get(1)?,
+            peer_verify_key: r.try_get(2)?,
+            details:         r.try_get(3)?,
+            timestamp:       r.try_get(4)?,
+        })
+    }).collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(entries))
 }

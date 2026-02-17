@@ -2,16 +2,15 @@ use axum::{extract::{Path, State}, Json};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{SigningKey, VerifyingKey, Signer, Verifier, Signature};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{auth::TenantId, db::now_ms, errors::{ApiError, ApiResult}, state::AppState};
-
-// ── request / response types ────────────────────────────────────────────────
+use crate::{auth::TenantId, db::now_ms, errors::{ApiError, ApiResult}, metrics, state::AppState};
 
 #[derive(Deserialize)]
 pub struct IssueRequest {
-    pub claim:       String,   // e.g. "age_over_18", "kyc_verified", "iso_27001"
-    pub user_token:  String,   // opaque hash — caller's blind identifier for the subject
+    pub claim:       String,
+    pub user_token:  String,
     pub ttl_seconds: Option<i64>,
 }
 
@@ -57,46 +56,26 @@ pub struct CredentialRecord {
     pub revoked:           bool,
 }
 
-// ── POST /v1/credentials/issue ───────────────────────────────────────────────
-
 pub async fn issue(
     State(state): State<AppState>,
     tenant: TenantId,
     Json(req): Json<IssueRequest>,
 ) -> ApiResult<Json<IssueResponse>> {
-    let db  = state.db.clone();
-    let tid = tenant.0.clone();
+    // Validate claim length
+    if req.claim.len() > 64 {
+        return Err(ApiError::BadRequest("claim must be 64 characters or fewer".into()));
+    }
 
-    // load tenant signing key
-    let signing_b64: String = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().map_err(|_| ApiError::Internal("lock".into()))?;
-        match conn.query_row(
-            "SELECT signing_key_b64 FROM identities WHERE tenant_id = ?",
-            rusqlite::params![tid],
-            |r| r.get::<_, String>(0),
-        ) {
-            Ok(k)  => Ok(k),
-            Err(rusqlite::Error::QueryReturnedNoRows) =>
-                Err(ApiError::BadRequest("No identity. POST /v1/identity first.".into())),
-            Err(e) => Err(ApiError::Internal(e.to_string())),
-        }
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))??;
+    let signing_row = sqlx::query(
+        "SELECT signing_key_b64, verify_key_b64 FROM identities WHERE tenant_id = ?",
+    )
+    .bind(&tenant.0)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::BadRequest("No identity. POST /v1/identity first.".into()))?;
 
-    // load issuer verify key
-    let db  = state.db.clone();
-    let tid = tenant.0.clone();
-    let verify_b64: String = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().map_err(|_| ApiError::Internal("lock".into()))?;
-        conn.query_row(
-            "SELECT verify_key_b64 FROM identities WHERE tenant_id = ?",
-            rusqlite::params![tid],
-            |r| r.get::<_, String>(0),
-        ).map_err(|e| ApiError::Internal(e.to_string()))
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))??;
+    let signing_b64: String = signing_row.try_get(0)?;
+    let verify_b64:  String = signing_row.try_get(1)?;
 
     let key_bytes: [u8; 32] = BASE64.decode(&signing_b64)
         .map_err(|e| ApiError::Internal(format!("key decode: {e}")))?
@@ -105,7 +84,7 @@ pub async fn issue(
 
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let now         = now_ms();
-    let ttl_ms      = req.ttl_seconds.unwrap_or(86400) * 1000; // default 24h
+    let ttl_ms      = req.ttl_seconds.unwrap_or(86400) * 1000;
     let expires_at  = now + ttl_ms;
     let cred_id     = Uuid::new_v4().to_string();
 
@@ -118,43 +97,43 @@ pub async fn issue(
         expires_at,
     };
 
-    // sign canonical JSON of the payload
     let canonical = serde_json::to_string(&payload)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let signature  = signing_key.sign(canonical.as_bytes());
     let sig_b64    = BASE64.encode(signature.to_bytes());
 
-    let db   = state.db.clone();
-    let tid  = tenant.0.clone();
-    let cid  = cred_id.clone();
-    let clm  = req.claim.clone();
-    let utok = req.user_token.clone();
-    let vkey = verify_b64.clone();
-    let sig  = sig_b64.clone();
+    sqlx::query(
+        "INSERT INTO credentials
+         (id, tenant_id, claim, user_token, issuer_verify_key, issued_at, expires_at, signature, revoked)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+    )
+    .bind(&cred_id)
+    .bind(&tenant.0)
+    .bind(&req.claim)
+    .bind(&req.user_token)
+    .bind(&verify_b64)
+    .bind(now)
+    .bind(expires_at)
+    .bind(&sig_b64)
+    .execute(&state.db)
+    .await?;
 
-    tokio::task::spawn_blocking(move || {
-        let conn = db.lock().map_err(|_| ApiError::Internal("lock".into()))?;
-        conn.execute(
-            "INSERT INTO credentials
-             (id, tenant_id, claim, user_token, issuer_verify_key, issued_at, expires_at, signature, revoked)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0)",
-            rusqlite::params![cid, tid, clm, utok, vkey, now, expires_at, sig],
-        ).map_err(|e| ApiError::Internal(e.to_string()))?;
-        let aid = Uuid::new_v4().to_string();
-        conn.execute(
-            "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-             VALUES (?1,?2,'credential.issued',?3,?4)",
-            rusqlite::params![aid, tid, clm, now],
-        ).map_err(|e| ApiError::Internal(e.to_string()))?;
-        Ok::<_, ApiError>(())
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))??;
+    let aid = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
+         VALUES (?, ?, 'credential.issued', ?, ?)",
+    )
+    .bind(&aid)
+    .bind(&tenant.0)
+    .bind(&req.claim)
+    .bind(now)
+    .execute(&state.db)
+    .await?;
+
+    metrics::CREDENTIALS_ISSUED.with_label_values(&[&req.claim]).inc();
 
     Ok(Json(IssueResponse { credential: payload, signature: sig_b64 }))
 }
-
-// ── POST /v1/credentials/verify ──────────────────────────────────────────────
 
 pub async fn verify(
     State(state): State<AppState>,
@@ -164,25 +143,18 @@ pub async fn verify(
     let now     = now_ms();
     let expired = now > req.credential.expires_at;
 
-    // check if revoked in our DB (optional — verifier may not be the issuer)
-    let db    = state.db.clone();
-    let cid   = req.credential.id.clone();
-    let tid   = tenant.0.clone();
-    let revoked: bool = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().map_err(|_| ApiError::Internal("lock".into()))?;
-        match conn.query_row(
-            "SELECT revoked FROM credentials WHERE id = ? AND tenant_id = ?",
-            rusqlite::params![cid, tid],
-            |r| r.get::<_, i64>(0),
-        ) {
-            Ok(v)  => Ok::<bool, ApiError>(v != 0),
-            Err(_) => Ok::<bool, ApiError>(false), // not in our DB — treat as not revoked
-        }
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))??;
+    let revoked_row = sqlx::query(
+        "SELECT revoked FROM credentials WHERE id = ? AND tenant_id = ?",
+    )
+    .bind(&req.credential.id)
+    .bind(&tenant.0)
+    .fetch_optional(&state.db)
+    .await?;
 
-    // verify Ed25519 signature
+    let revoked = revoked_row
+        .map(|r| r.try_get::<i64, _>(0).unwrap_or(0) != 0)
+        .unwrap_or(false);
+
     let key_bytes: [u8; 32] = BASE64.decode(&req.credential.issuer_verify_key)
         .map_err(|_| ApiError::BadRequest("Invalid issuer_verify_key".into()))?
         .try_into()
@@ -201,25 +173,23 @@ pub async fn verify(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let sig_valid = verifying_key.verify(canonical.as_bytes(), &signature).is_ok();
 
-    let valid = sig_valid && !expired && !revoked;
+    let valid  = sig_valid && !expired && !revoked;
+    let result = if valid { "valid" } else { "invalid" };
+    metrics::CREDENTIALS_VERIFIED.with_label_values(&[result]).inc();
 
-    // audit
-    let db    = state.db.clone();
-    let tid   = tenant.0.clone();
-    let claim = req.credential.claim.clone();
     let action = if valid { "credential.verified" } else { "credential.verification_failed" };
-    tokio::task::spawn_blocking(move || {
-        let conn = db.lock().map_err(|_| ApiError::Internal("lock".into()))?;
-        let aid  = Uuid::new_v4().to_string();
-        conn.execute(
-            "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-             VALUES (?1,?2,?3,?4,?5)",
-            rusqlite::params![aid, tid, action, claim, now],
-        ).map_err(|e| ApiError::Internal(e.to_string()))?;
-        Ok::<_, ApiError>(())
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))??;
+    let aid    = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&aid)
+    .bind(&tenant.0)
+    .bind(action)
+    .bind(&req.credential.claim)
+    .bind(now)
+    .execute(&state.db)
+    .await?;
 
     Ok(Json(VerifyResponse {
         valid,
@@ -230,73 +200,63 @@ pub async fn verify(
     }))
 }
 
-// ── DELETE /v1/credentials/:id (revoke) ──────────────────────────────────────
-
 pub async fn revoke(
     State(state): State<AppState>,
     tenant: TenantId,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let db  = state.db.clone();
-    let tid = tenant.0.clone();
-    let cid = id.clone();
-    let now = now_ms();
+    let now    = now_ms();
+    let result = sqlx::query(
+        "UPDATE credentials SET revoked = 1 WHERE id = ? AND tenant_id = ?",
+    )
+    .bind(&id)
+    .bind(&tenant.0)
+    .execute(&state.db)
+    .await?;
 
-    tokio::task::spawn_blocking(move || {
-        let conn = db.lock().map_err(|_| ApiError::Internal("lock".into()))?;
-        let rows = conn.execute(
-            "UPDATE credentials SET revoked = 1 WHERE id = ? AND tenant_id = ?",
-            rusqlite::params![cid, tid],
-        ).map_err(|e| ApiError::Internal(e.to_string()))?;
-        if rows == 0 {
-            return Err(ApiError::NotFound("Credential not found".into()));
-        }
-        let aid = Uuid::new_v4().to_string();
-        conn.execute(
-            "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-             VALUES (?1,?2,'credential.revoked',?3,?4)",
-            rusqlite::params![aid, tid, cid, now],
-        ).map_err(|e| ApiError::Internal(e.to_string()))?;
-        Ok::<_, ApiError>(())
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))??;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound("Credential not found".into()));
+    }
+
+    let aid = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
+         VALUES (?, ?, 'credential.revoked', ?, ?)",
+    )
+    .bind(&aid)
+    .bind(&tenant.0)
+    .bind(&id)
+    .bind(now)
+    .execute(&state.db)
+    .await?;
 
     Ok(Json(serde_json::json!({ "revoked": true, "id": id })))
 }
-
-// ── GET /v1/credentials ───────────────────────────────────────────────────────
 
 pub async fn list(
     State(state): State<AppState>,
     tenant: TenantId,
 ) -> ApiResult<Json<Vec<CredentialRecord>>> {
-    let db  = state.db.clone();
-    let tid = tenant.0.clone();
+    let rows = sqlx::query(
+        "SELECT id, claim, user_token, issuer_verify_key, issued_at, expires_at, revoked
+         FROM credentials WHERE tenant_id = ?
+         ORDER BY issued_at DESC LIMIT 100",
+    )
+    .bind(&tenant.0)
+    .fetch_all(&state.db)
+    .await?;
 
-    let records = tokio::task::spawn_blocking(move || {
-        let conn = db.lock().map_err(|_| ApiError::Internal("lock".into()))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, claim, user_token, issuer_verify_key, issued_at, expires_at, revoked
-             FROM credentials WHERE tenant_id = ?1
-             ORDER BY issued_at DESC LIMIT 100"
-        ).map_err(|e| ApiError::Internal(e.to_string()))?;
-
-        let rows = stmt.query_map(rusqlite::params![tid], |r| Ok(CredentialRecord {
-            id:                r.get(0)?,
-            claim:             r.get(1)?,
-            user_token:        r.get(2)?,
-            issuer_verify_key: r.get(3)?,
-            issued_at:         r.get(4)?,
-            expires_at:        r.get(5)?,
-            revoked:           r.get::<_, i64>(6)? != 0,
-        })).map_err(|e| ApiError::Internal(e.to_string()))?;
-
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ApiError::Internal(e.to_string()))
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))??;
+    let records = rows.iter().map(|r| -> Result<CredentialRecord, sqlx::Error> {
+        Ok(CredentialRecord {
+            id:                r.try_get(0)?,
+            claim:             r.try_get(1)?,
+            user_token:        r.try_get(2)?,
+            issuer_verify_key: r.try_get(3)?,
+            issued_at:         r.try_get(4)?,
+            expires_at:        r.try_get(5)?,
+            revoked:           r.try_get::<i64, _>(6)? != 0,
+        })
+    }).collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(records))
 }

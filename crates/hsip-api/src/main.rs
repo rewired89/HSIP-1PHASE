@@ -1,5 +1,4 @@
-use axum::{Router, routing::get, response::IntoResponse};
-
+use axum::{Router, routing::get, response::IntoResponse, Json};
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -25,17 +24,22 @@ async fn main() -> anyhow::Result<()> {
 
     metrics::init();
 
-    let db_path = std::env::var("HSIP_DB_PATH")
-        .unwrap_or_else(|_| "hsip_api.db".to_string());
+    // DATABASE_URL takes priority; fall back to HSIP_DB_PATH; default to sqlite file
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        let path = std::env::var("HSIP_DB_PATH").unwrap_or_else(|_| "hsip_api.db".to_string());
+        format!("sqlite:{path}")
+    });
 
-    let db    = db::init(&db_path)?;
-    bootstrap_admin(&db)?;
+    let db = db::init(&database_url).await?;
+    bootstrap_admin(&db).await?;
 
     let state = AppState::new(db);
-    let app   = Router::new()
+    let app = Router::new()
         .merge(routes::router())
-        // Prometheus metrics — no auth, standard scrape endpoint
-        .route("/metrics", get(metrics_handler))
+        .route("/metrics",    get(metrics_handler))
+        .route("/health",     get(health_handler))
+        .route("/openapi.json", get(openapi_handler))
+        .route("/docs",       get(docs_handler))
         .layer(CorsLayer::permissive())
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .with_state(state);
@@ -44,7 +48,9 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{port}");
 
     tracing::info!("HSIP API listening on http://{addr}");
-    tracing::info!("Metrics available at http://{addr}/metrics");
+    tracing::info!("Docs:    http://{addr}/docs");
+    tracing::info!("Metrics: http://{addr}/metrics");
+    tracing::info!("Health:  http://{addr}/health");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -58,16 +64,59 @@ async fn metrics_handler() -> impl IntoResponse {
     )
 }
 
-fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
+async fn health_handler() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION")
+    }))
+}
+
+async fn openapi_handler() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        include_str!("openapi.json"),
+    )
+}
+
+async fn docs_handler() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/html")],
+        r#"<!DOCTYPE html>
+<html>
+<head>
+  <title>HSIP API Docs</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" >
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"> </script>
+  <script>
+    window.onload = function() {
+      SwaggerUIBundle({
+        url: "/openapi.json",
+        dom_id: '#swagger-ui',
+        presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+        layout: "BaseLayout"
+      })
+    }
+  </script>
+</body>
+</html>"#,
+    )
+}
+
+async fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
     use auth::hash_key;
     use db::now_ms;
     use rand::Rng;
+    use sqlx::Row;
 
-    let conn = db.lock().expect("db lock");
-
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tenants", [], |r| r.get(0)
-    )?;
+    let row = sqlx::query("SELECT COUNT(*) FROM tenants")
+        .fetch_one(db)
+        .await?;
+    let count: i64 = row.try_get(0)?;
 
     if count > 0 {
         return Ok(());
@@ -76,21 +125,27 @@ fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
     let tenant_id = Uuid::new_v4().to_string();
     let now       = now_ms();
 
-    conn.execute(
-        "INSERT INTO tenants (id, name, created_at) VALUES (?1, 'default', ?2)",
-        rusqlite::params![tenant_id, now],
-    )?;
+    sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'default', ?)")
+        .bind(&tenant_id)
+        .bind(now)
+        .execute(db)
+        .await?;
 
     let raw_bytes: Vec<u8> = (0..32).map(|_| rand::thread_rng().gen::<u8>()).collect();
-    let raw_key   = format!("hsip_{}", hex::encode(&raw_bytes));
-    let key_hash  = hash_key(&raw_key);
-    let key_id    = Uuid::new_v4().to_string();
+    let raw_key  = format!("hsip_{}", hex::encode(&raw_bytes));
+    let key_hash = hash_key(&raw_key);
+    let key_id   = Uuid::new_v4().to_string();
 
-    conn.execute(
+    sqlx::query(
         "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
-         VALUES (?1, ?2, ?3, 'admin', 'human', ?4, 1)",
-        rusqlite::params![key_id, tenant_id, key_hash, now],
-    )?;
+         VALUES (?, ?, ?, 'admin', 'human', ?, 1)",
+    )
+    .bind(&key_id)
+    .bind(&tenant_id)
+    .bind(&key_hash)
+    .bind(now)
+    .execute(db)
+    .await?;
 
     metrics::ACTIVE_TENANTS.inc();
 

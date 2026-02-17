@@ -1,42 +1,73 @@
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Once;
+use sqlx::AnyPool;
 
-pub type Db = Arc<Mutex<Connection>>;
+pub type Db = AnyPool;
 
-pub fn init(path: &str) -> anyhow::Result<Db> {
-    let conn = Connection::open(path)?;
-    run_migrations(&conn)?;
-    Ok(Arc::new(Mutex::new(conn)))
+static DRIVERS: Once = Once::new();
+
+pub async fn init(database_url: &str) -> anyhow::Result<Db> {
+    DRIVERS.call_once(|| {
+        sqlx::any::install_default_drivers();
+    });
+
+    let pool = sqlx::pool::PoolOptions::<sqlx::Any>::new()
+        .max_connections(10)
+        .connect(database_url)
+        .await?;
+
+    if database_url.starts_with("sqlite") {
+        sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
+        sqlx::query("PRAGMA foreign_keys=ON").execute(&pool).await?;
+    }
+
+    run_migrations(&pool).await?;
+    Ok(pool)
 }
 
-fn run_migrations(conn: &Connection) -> anyhow::Result<()> {
-    conn.execute_batch("
-        PRAGMA journal_mode=WAL;
-
-        CREATE TABLE IF NOT EXISTS tenants (
+async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS tenants (
             id         TEXT PRIMARY KEY,
             name       TEXT NOT NULL,
             created_at INTEGER NOT NULL
-        );
+        )",
+    )
+    .execute(pool)
+    .await?;
 
-        CREATE TABLE IF NOT EXISTS api_keys (
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS api_keys (
             id         TEXT PRIMARY KEY,
             tenant_id  TEXT NOT NULL,
             key_hash   TEXT NOT NULL UNIQUE,
             name       TEXT NOT NULL DEFAULT 'default',
             agent_type TEXT NOT NULL DEFAULT 'human',
             created_at INTEGER NOT NULL,
+            expires_at INTEGER,
             active     INTEGER NOT NULL DEFAULT 1
-        );
+        )",
+    )
+    .execute(pool)
+    .await?;
 
-        CREATE TABLE IF NOT EXISTS identities (
+    // Non-fatal: column may already exist on upgraded databases
+    let _ = sqlx::query("ALTER TABLE api_keys ADD COLUMN expires_at INTEGER")
+        .execute(pool)
+        .await;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS identities (
             tenant_id       TEXT PRIMARY KEY,
             signing_key_b64 TEXT NOT NULL,
             verify_key_b64  TEXT NOT NULL,
             created_at      INTEGER NOT NULL
-        );
+        )",
+    )
+    .execute(pool)
+    .await?;
 
-        CREATE TABLE IF NOT EXISTS consents (
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS consents (
             id               TEXT PRIMARY KEY,
             tenant_id        TEXT NOT NULL,
             peer_verify_key  TEXT NOT NULL,
@@ -46,9 +77,13 @@ fn run_migrations(conn: &Connection) -> anyhow::Result<()> {
             revoked_at       INTEGER,
             created_at       INTEGER NOT NULL,
             UNIQUE(tenant_id, peer_verify_key)
-        );
+        )",
+    )
+    .execute(pool)
+    .await?;
 
-        CREATE TABLE IF NOT EXISTS messages (
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS messages (
             id               TEXT PRIMARY KEY,
             tenant_id        TEXT NOT NULL,
             peer_verify_key  TEXT NOT NULL,
@@ -57,29 +92,40 @@ fn run_migrations(conn: &Connection) -> anyhow::Result<()> {
             signature        TEXT NOT NULL,
             timestamp        INTEGER NOT NULL,
             verified         INTEGER NOT NULL DEFAULT 0
-        );
+        )",
+    )
+    .execute(pool)
+    .await?;
 
-        CREATE TABLE IF NOT EXISTS audit_entries (
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_entries (
             id               TEXT PRIMARY KEY,
             tenant_id        TEXT NOT NULL,
             action           TEXT NOT NULL,
             peer_verify_key  TEXT,
             details          TEXT,
             timestamp        INTEGER NOT NULL
-        );
+        )",
+    )
+    .execute(pool)
+    .await?;
 
-        CREATE TABLE IF NOT EXISTS credentials (
-            id               TEXT PRIMARY KEY,
-            tenant_id        TEXT NOT NULL,
-            claim            TEXT NOT NULL,
-            user_token       TEXT NOT NULL,
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS credentials (
+            id                TEXT PRIMARY KEY,
+            tenant_id         TEXT NOT NULL,
+            claim             TEXT NOT NULL,
+            user_token        TEXT NOT NULL,
             issuer_verify_key TEXT NOT NULL,
-            issued_at        INTEGER NOT NULL,
-            expires_at       INTEGER NOT NULL,
-            signature        TEXT NOT NULL,
-            revoked          INTEGER NOT NULL DEFAULT 0
-        );
-    ")?;
+            issued_at         INTEGER NOT NULL,
+            expires_at        INTEGER NOT NULL,
+            signature         TEXT NOT NULL,
+            revoked           INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
