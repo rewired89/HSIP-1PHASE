@@ -24,6 +24,7 @@ fn run_migrations(conn: &Connection) -> anyhow::Result<()> {
             tenant_id  TEXT NOT NULL,
             key_hash   TEXT NOT NULL UNIQUE,
             name       TEXT NOT NULL DEFAULT 'default',
+            agent_type TEXT NOT NULL DEFAULT 'human',
             created_at INTEGER NOT NULL,
             active     INTEGER NOT NULL DEFAULT 1
         );
