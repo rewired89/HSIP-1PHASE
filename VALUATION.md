@@ -33,7 +33,9 @@ This document provides a realistic valuation framework for an HSIP commercial li
 - Technically rigorous: 100% Rust, audited RustCrypto libraries, no unsafe blocks in crypto core
 - Unique feature set: formal verification (Z3 SMT), hash-chained audit logs, cryptographic consent enforcement
 - Comprehensive documentation: protocol spec, threat model, security policy, API reference
-- Working test suite: 11/11 automated tests passing with real cryptographic operations
+- Working test suite: 231+ automated tests passing across 14 crates (0 failures), including
+  5 PQC tests (hybrid KEM roundtrip, hybrid signature roundtrip, serialization, capability
+  negotiation, key serialization) running real ML-KEM-768 + ML-DSA-65 cryptographic operations
 - Multi-tenant REST API with Python, Node.js, and React SDKs
 - Clear regulatory value: GDPR Article 17, audit export, evidence generation
 - Strong IP clarity: custom protocol, dual-license model, original implementation
