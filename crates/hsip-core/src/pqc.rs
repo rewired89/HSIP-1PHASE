@@ -23,11 +23,11 @@ use sha2::Sha256;
 use zeroize::Zeroize;
 
 // ML-KEM (formerly Kyber) imports - NIST FIPS 203
-use pqcrypto_mlkem::mlkem768;
+use pqcrypto_kyber::kyber768;
 use pqcrypto_traits::kem::{Ciphertext as KemCiphertext, PublicKey as KemPublicKey, SharedSecret as KemSharedSecret};
 
 // ML-DSA (formerly Dilithium) imports - NIST FIPS 204
-use pqcrypto_mldsa::mldsa65;
+use pqcrypto_dilithium::dilithium3;
 use pqcrypto_traits::sign::{DetachedSignature, PublicKey as SignPublicKey};
 
 // Classical crypto
@@ -110,9 +110,9 @@ pub struct HybridKemKeypair {
     /// X25519 public key
     x25519_public: X25519PublicKey,
     /// Kyber-768 public key
-    kyber_pk: mlkem768::PublicKey,
+    kyber_pk: kyber768::PublicKey,
     /// Kyber-768 secret key
-    kyber_sk: mlkem768::SecretKey,
+    kyber_sk: kyber768::SecretKey,
 }
 
 impl HybridKemKeypair {
@@ -124,7 +124,7 @@ impl HybridKemKeypair {
         let x25519_public = X25519PublicKey::from(&x25519_secret);
 
         // Generate Kyber-768 keypair
-        let (kyber_pk, kyber_sk) = mlkem768::keypair();
+        let (kyber_pk, kyber_sk) = kyber768::keypair();
 
         Self {
             x25519_secret: Some(x25519_secret),
@@ -226,9 +226,10 @@ pub fn hybrid_encapsulate(
     let x_shared = x_eph.diffie_hellman(&peer_x_pub);
 
     // Kyber encapsulation
-    let kyber_pk = mlkem768::PublicKey::from_bytes(peer_kyber_pk)
+    let kyber_pk = kyber768::PublicKey::from_bytes(peer_kyber_pk)
         .map_err(|_| PqcError::InvalidKey)?;
-    let (kyber_ss, kyber_ct) = mlkem768::encapsulate(&kyber_pk);
+    let (kyber_ss, kyber_ct): (kyber768::SharedSecret, kyber768::Ciphertext) =
+        kyber768::encapsulate(&kyber_pk);
 
     // Combine shared secrets via HKDF
     let combined_secret = combine_shared_secrets(
@@ -259,9 +260,10 @@ pub fn hybrid_decapsulate(
     let x_shared = x_secret.diffie_hellman(&peer_x_pub);
 
     // Kyber decapsulation
-    let kyber_ct = mlkem768::Ciphertext::from_bytes(&ciphertext.kyber_ct)
+    let kyber_ct = kyber768::Ciphertext::from_bytes(&ciphertext.kyber_ct)
         .map_err(|_| PqcError::InvalidCiphertext)?;
-    let kyber_ss = mlkem768::decapsulate(&kyber_ct, &our_keypair.kyber_sk);
+    let kyber_ss: kyber768::SharedSecret =
+        kyber768::decapsulate(&kyber_ct, &our_keypair.kyber_sk);
 
     // Combine shared secrets
     combine_shared_secrets(x_shared.as_bytes(), kyber_ss.as_bytes())
@@ -333,9 +335,9 @@ pub struct HybridSigningKeypair {
     /// Ed25519 verifying key
     pub ed25519_vk: VerifyingKey,
     /// Dilithium3 public key
-    pub dilithium_pk: mldsa65::PublicKey,
+    pub dilithium_pk: dilithium3::PublicKey,
     /// Dilithium3 secret key
-    pub dilithium_sk: mldsa65::SecretKey,
+    pub dilithium_sk: dilithium3::SecretKey,
 }
 
 impl HybridSigningKeypair {
@@ -347,7 +349,7 @@ impl HybridSigningKeypair {
         let ed25519_vk = ed25519_sk.verifying_key();
 
         // Generate Dilithium3 keypair
-        let (dilithium_pk, dilithium_sk) = mldsa65::keypair();
+        let (dilithium_pk, dilithium_sk) = dilithium3::keypair();
 
         Self {
             ed25519_sk,
@@ -385,7 +387,8 @@ impl HybridSigningKeypair {
         let ed_sig = self.ed25519_sk.sign(message);
 
         // Dilithium3 signature
-        let dilithium_sig = mldsa65::detached_sign(message, &self.dilithium_sk);
+        let dilithium_sig: dilithium3::DetachedSignature =
+            dilithium3::detached_sign(message, &self.dilithium_sk);
 
         HybridSignature {
             ed25519_sig: ed_sig.to_bytes(),
@@ -400,7 +403,7 @@ pub struct HybridVerifyingKey {
     /// Ed25519 verifying key
     pub ed25519_vk: VerifyingKey,
     /// Dilithium3 public key
-    pub dilithium_pk: mldsa65::PublicKey,
+    pub dilithium_pk: dilithium3::PublicKey,
 }
 
 impl HybridVerifyingKey {
@@ -417,7 +420,7 @@ impl HybridVerifyingKey {
             bytes[..32].try_into().map_err(|_| PqcError::InvalidKey)?
         ).map_err(|_| PqcError::InvalidKey)?;
 
-        let dilithium_pk = mldsa65::PublicKey::from_bytes(&bytes[32..32 + MLDSA65_PK_SIZE])
+        let dilithium_pk = dilithium3::PublicKey::from_bytes(&bytes[32..32 + MLDSA65_PK_SIZE])
             .map_err(|_| PqcError::InvalidKey)?;
 
         Ok(Self { ed25519_vk, dilithium_pk })
@@ -445,9 +448,9 @@ impl HybridVerifyingKey {
             .map_err(|_| PqcError::VerifyFailed)?;
 
         // Verify Dilithium3 signature
-        let dilithium_sig = mldsa65::DetachedSignature::from_bytes(&signature.dilithium_sig)
+        let dilithium_sig = dilithium3::DetachedSignature::from_bytes(&signature.dilithium_sig)
             .map_err(|_| PqcError::InvalidSignature)?;
-        mldsa65::verify_detached_signature(&dilithium_sig, message, &self.dilithium_pk)
+        dilithium3::verify_detached_signature(&dilithium_sig, message, &self.dilithium_pk)
             .map_err(|_| PqcError::VerifyFailed)?;
 
         Ok(())
