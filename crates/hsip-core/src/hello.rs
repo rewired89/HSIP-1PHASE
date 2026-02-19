@@ -24,8 +24,16 @@ pub const CAP_CONSENT_LAYER: u32 = 1 << 1;
 pub const CAP_REPLAY_GUARD: u32 = 1 << 2;
 pub const CAP_NONCE_WINDOW: u32 = 1 << 3;
 pub const CAP_SESSION_RESUMPTION: u32 = 1 << 4;
-// Reserve high bits for future stuff (PQC, migration, etc.)
-pub const CAP_RESERVED_PQC: u32 = 1 << 16;
+/// Hybrid post-quantum key exchange: X25519 + ML-KEM-768 (NIST FIPS 203)
+/// and Ed25519 + ML-DSA-65 (NIST FIPS 204). Advertised when built with
+/// the `pqc` feature (now enabled by default).
+pub const CAP_HYBRID_PQC: u32 = 1 << 16;
+
+/// Compile-time PQC capability bit: non-zero only when built with `pqc` feature.
+#[cfg(feature = "pqc")]
+const PQC_CAP_BIT: u32 = CAP_HYBRID_PQC;
+#[cfg(not(feature = "pqc"))]
+const PQC_CAP_BIT: u32 = 0;
 
 /// Capabilities wrapper for type safety + helpers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,13 +46,18 @@ impl HelloCapabilities {
     }
 
     /// Default capabilities supported by this HSIP build.
+    ///
+    /// When compiled with the `pqc` feature (enabled by default), this
+    /// includes `CAP_HYBRID_PQC`, advertising X25519+ML-KEM-768 and
+    /// Ed25519+ML-DSA-65 hybrid support to peers during the HELLO handshake.
     pub const fn default_local() -> Self {
         HelloCapabilities(
             CAP_ENCRYPTED_SESSIONS
                 | CAP_CONSENT_LAYER
                 | CAP_REPLAY_GUARD
                 | CAP_NONCE_WINDOW
-                | CAP_SESSION_RESUMPTION,
+                | CAP_SESSION_RESUMPTION
+                | PQC_CAP_BIT,
         )
     }
 
