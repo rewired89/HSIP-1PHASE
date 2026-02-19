@@ -7,11 +7,10 @@ members = [
     "crates/hsip-cli",
     "crates/hsip-auth",
     "crates/hsip-gateway",
-    # hsip-intercept excluded - Windows/Android only, will fail on Linux
-    # Build separately on Windows with: cargo build -p hsip-intercept
-    # "crates/hsip-intercept",
+    # hsip-intercept: now cross-platform (Windows/Android/Linux/macOS)
+    # Build with: cargo build -p hsip-intercept
+    "crates/hsip-intercept",
     # hsip-verify excluded - requires z3-sys which needs Z3 built from source
-    # On Windows, this fails due to heap space issues
     # Build separately with: cargo build -p hsip-verify
     "crates/hsip-common",
     "crates/hsip-regenerative",
@@ -24,12 +23,11 @@ members = [
 exclude = [
     "crates/hsip-session/fuzz",
     "crates/hsip-verify",
-    "crates/hsip-intercept"
 ]
 resolver = "2"
 
 [workspace.dependencies]
-tokio   = "1.39"    
+tokio   = "1.39"
 mio     = "0.8.11"
 socket2 = "0.5.7"
 windows = "0.58.0"

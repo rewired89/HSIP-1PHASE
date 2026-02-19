@@ -62,3 +62,13 @@ windows-overlay = []
 android-service = []
 pattern-db = []
 privacy-enhance = [] # Timing obfuscation, metadata hiding
+
+# ── Linux ────────────────────────────────────────────────────────────────────
+[target.'cfg(target_os = "linux")'.dependencies]
+# Desktop notifications with action buttons (D-Bus / libnotify)
+notify-rust = { version = "4", default-features = false, features = ["dbus"] }
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS Notification Center
+notify-rust = { version = "4", default-features = false, features = ["mac_notification_sys"] }

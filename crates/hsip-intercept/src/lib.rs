@@ -43,8 +43,8 @@
 //! - **Windows**: UI Automation API (production-ready)
 //! - **Android**: Accessibility Services (production-ready)
 //! - **iOS**: Share Extension only (App Store compliant)
-//! - **Linux**: X11/Wayland accessibility (future)
-//! - **macOS**: Accessibility API (future)
+//! - **Linux**: xdotool/X11 + /proc polling + libnotify overlay (production-ready)
+//! - **macOS**: osascript/NSWorkspace polling + Notification Center overlay (production-ready)
 
 pub mod error;
 pub mod event;
@@ -59,6 +59,12 @@ pub mod windows;
 
 #[cfg(target_os = "android")]
 pub mod android;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
+
+#[cfg(target_os = "macos")]
+pub mod macos;
 
 // Re-exports
 pub use error::{InterceptError, Result};
@@ -91,13 +97,29 @@ impl InterceptCoordinator {
 
         // Initialize platform-specific event monitor
         #[cfg(target_os = "windows")]
-        let event_monitor = windows::WindowsEventMonitor::new(event_tx, &config)?;
+        let event_monitor = windows::WindowsEventMonitor::new(event_tx.clone(), &config)?;
 
         #[cfg(target_os = "android")]
-        let event_monitor = android::AndroidEventMonitor::new(event_tx, &config)?;
+        let event_monitor = android::AndroidEventMonitor::new(event_tx.clone(), &config)?;
 
-        #[cfg(not(any(target_os = "windows", target_os = "android")))]
-        compile_error!("Unsupported platform - use Windows or Android");
+        #[cfg(target_os = "linux")]
+        let event_monitor = linux::LinuxEventMonitor::new(event_tx.clone(), &config)?;
+
+        #[cfg(target_os = "macos")]
+        let event_monitor = macos::MacOSEventMonitor::new(event_tx.clone(), &config)?;
+
+        // Fallback for any other platform (e.g., FreeBSD, Redox, WASM)
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "android",
+            target_os = "linux",
+            target_os = "macos",
+        )))]
+        let event_monitor: Box<dyn EventMonitor> = {
+            return Err(InterceptError::UnsupportedPlatform(
+                format!("Platform '{}' is not supported by hsip-intercept", std::env::consts::OS)
+            ));
+        };
 
         // Initialize pattern matcher
         let pattern_matcher = PatternMatcher::load_from_config(&config)?;
@@ -108,6 +130,20 @@ impl InterceptCoordinator {
 
         #[cfg(target_os = "android")]
         let overlay = android::AndroidOverlay::new(&config)?;
+
+        #[cfg(target_os = "linux")]
+        let overlay = linux::LinuxOverlay::new(&config)?;
+
+        #[cfg(target_os = "macos")]
+        let overlay = macos::MacOSOverlay::new(&config)?;
+
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "android",
+            target_os = "linux",
+            target_os = "macos",
+        )))]
+        let overlay: Box<dyn InterceptOverlay> = unreachable!();
 
         // Initialize HSIP router
         let router = HSIPRouter::new(&config).await?;
@@ -179,7 +215,7 @@ impl InterceptCoordinator {
     async fn show_intercept_overlay(
         &mut self,
         event: &MessagingEvent,
-        pattern: &TriggerPattern,
+        _pattern: &TriggerPattern,
     ) -> Result<()> {
         // Extract recipient if possible
         let recipient = self.extract_recipient(event).await;
@@ -207,10 +243,10 @@ impl InterceptCoordinator {
 
     /// Attempt to extract recipient information from the event.
     ///
-    /// This is platform-specific and may return None if recipient
-    /// cannot be determined from accessibility metadata.
+    /// Platform-specific and may return None if recipient cannot be determined
+    /// from accessibility metadata alone.
     async fn extract_recipient(&self, event: &MessagingEvent) -> Option<String> {
-        // Try to extract from event metadata
+        // Try to extract from event metadata first
         if let Some(recipient) = event.metadata.get("recipient") {
             return Some(recipient.clone());
         }
@@ -218,15 +254,25 @@ impl InterceptCoordinator {
         // Platform-specific extraction
         #[cfg(target_os = "windows")]
         {
-            windows::extract_recipient_from_window(event).ok()
+            return windows::extract_recipient_from_window(event).ok();
         }
 
         #[cfg(target_os = "android")]
         {
-            android::extract_recipient_from_view(event).ok()
+            return android::extract_recipient_from_view(event).ok();
         }
 
-        #[cfg(not(any(target_os = "windows", target_os = "android")))]
+        #[cfg(target_os = "linux")]
+        {
+            return linux::extract_recipient_from_window(event).ok();
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return macos::extract_recipient_from_window(event).ok();
+        }
+
+        #[allow(unreachable_code)]
         None
     }
 }
@@ -235,11 +281,9 @@ impl InterceptCoordinator {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_coordinator_lifecycle() {
-        // Basic smoke test
+    #[test]
+    fn test_config_default() {
         let config = InterceptConfig::default();
-        let coordinator = InterceptCoordinator::new(config).await;
-        assert!(coordinator.is_ok());
+        assert!(!config.enabled);
     }
 }

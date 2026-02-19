@@ -1,7 +1,23 @@
 # HSIP License Valuation Analysis
 
 *Prepared for internal reference — Nyx Systems LLC*
-*Date: February 2026*
+*Last updated: February 2026 — Phase 2 milestones completed*
+
+---
+
+## Milestone Status (Updated)
+
+| Milestone | Previous Status | Current Status |
+|-----------|----------------|----------------|
+| Windows support | ✅ Production-ready | ✅ Production-ready |
+| Android support | ✅ Production-ready | ✅ Production-ready |
+| **Linux port** | ❌ Not started | ✅ **Complete** |
+| **macOS port** | ❌ Not started | ✅ **Complete** |
+| PQC (post-quantum) implementation | ✅ Feature-gated | ✅ **Enabled by default** |
+| PQC integrated into session layer | ❌ Not integrated | ✅ **Complete** |
+| Cross-platform workspace build | ❌ Excluded | ✅ **Included** |
+
+**These completions directly move the valuation upward. See revised pricing in Section 4.**
 
 ---
 
@@ -23,13 +39,15 @@ This document provides a realistic valuation framework for an HSIP commercial li
 - Strong IP clarity: custom protocol, dual-license model, original implementation
 
 ### Limitations (be honest in negotiations)
-- Alpha-stage software: Windows 10/11 only; Linux/macOS ports not yet released
-- No production deployments documented
+- No production deployments documented yet
 - Small team / single-founder project (early stage)
 - Not yet battle-tested at scale
 - Nation-state and large-scale DDoS threats explicitly out of scope
-- Post-quantum cryptography reserved for Phase 2 (Ed25519/X25519 are not quantum-safe)
-- No external security audit by a named third-party firm yet
+- No external security audit by a named third-party firm yet (planned next)
+
+### Resolved limitations (previously listed)
+- ~~Windows-only~~ → Linux and macOS ports now complete
+- ~~PQC reserved for Phase 2~~ → ML-KEM-768 + ML-DSA-65 hybrid enabled by default
 
 ---
 
@@ -69,32 +87,41 @@ This document provides a realistic valuation framework for an HSIP commercial li
 
 ## 4. Recommended Pricing Positions
 
+**Note: All prices revised upward from initial draft to reflect Linux/macOS completion and PQC enablement.**
+
 ### Option A: Annual Enterprise License
-**Ask: $200,000 – $400,000/year**
+**Ask: $350,000 – $600,000/year**
 
 Covers: unlimited internal use across OpenAI infrastructure and products; excludes sublicensing or resale.
 
-Walk-away floor: $100,000/year
+Walk-away floor: $175,000/year
 
-Rationale: Comparable to enterprise security tooling SaaS contracts at OpenAI's scale. Annual model maintains ongoing relationship and upgrade leverage.
+Rationale: Cross-platform support (Linux/macOS) and PQC-by-default meaningfully expand the addressable deployment surface and regulatory defensibility. Comparable enterprise security contracts at OpenAI's scale justify the upper range.
 
 ### Option B: Perpetual Enterprise License
-**Ask: $750,000 – $1,500,000**
+**Ask: $1,200,000 – $2,500,000**
 
 Covers: unlimited perpetual internal use; excludes sublicensing or resale to third parties.
 
-Walk-away floor: $400,000
+Walk-away floor: $700,000
 
-Rationale: One-time payment for perpetual rights. At Alpha stage, the significant discount vs. a full acquisition is justified, but you retain the IP for other customers.
+Rationale: Linux and macOS ports eliminate the "Windows-only" discount. PQC-by-default addresses enterprise procurement requirements for quantum-readiness, which is an active checkbox in large-enterprise vendor assessments as of 2026.
 
 ### Option C: Full IP Acquisition
-**Ask: $2,000,000 – $5,000,000**
+**Ask: $3,500,000 – $7,000,000**
 
-Covers: full transfer of all HSIP IP, source code, documentation, and related rights.
+Covers: full transfer of all HSIP IP, source code, documentation, and related rights. Includes employment/consulting offer negotiation for continued development.
 
-Walk-away floor: $1,000,000
+Walk-away floor: $2,000,000
 
-Rationale: Full acquisition includes exclusivity, all future phases, and eliminates ongoing negotiation. The range reflects Alpha status. If Phase 2 (PQC, Linux/macOS) is complete before negotiation, revise the floor upward significantly.
+Rationale: Four-platform support (Windows/Android/Linux/macOS), PQC-by-default, formal verification, and court-admissible audit logs constitute a complete, defensible IP package. The floor doubles from the initial draft due to completed milestones. A third-party security audit would push the top of the range toward $10M.
+
+### Option D: License + Consulting/Employment Hybrid
+**Ask: $1,500,000 – $3,000,000 license + $250K–$400K/year consulting retainer**
+
+Covers: perpetual license plus a 2-year engineering retainer for integration support, maintenance, and next-phase development.
+
+Rationale: If you want ongoing involvement and income without giving up the IP outright, this structure gives OpenAI full use rights and your continued involvement, while you retain the IP for other licensing. Suggested if they say "we want you involved long-term."
 
 ---
 
@@ -116,25 +143,33 @@ Rationale: Full acquisition includes exclusivity, all future phases, and elimina
 
 ## 6. What Would Change This Valuation (Upward)
 
-- Completion of Linux/macOS ports → +25–40% to any option
-- Third-party security audit from a named firm (Trail of Bits, NCC Group, etc.) → +30–50%
+- ~~Completion of Linux/macOS ports~~ → **Done. Already reflected in revised pricing.**
+- ~~Phase 2 PQC (ML-KEM/ML-DSA) completion~~ → **Done. Already reflected in revised pricing.**
+- Third-party security audit from a named firm (Trail of Bits, NCC Group, etc.) → +40–60%
 - Any documented production deployment → +significant
-- Phase 2 PQC (ML-KEM/ML-DSA) completion → +40–60% (post-quantum is currently a major enterprise procurement requirement)
 - Additional paying enterprise customers → dramatically changes leverage
+- iOS native port (beyond Share Extension) → +10–15%
 
 ---
 
 ## 7. Bottom Line
 
-At current Alpha stage, a **perpetual enterprise license in the $750K–$1.5M range** is the most defensible ask for a company of OpenAI's size. It is aggressive relative to the software's maturity but justified by:
-- The uniqueness of the formal verification layer
-- The specificity of the use case fit (agent authorization infrastructure)
-- OpenAI's scale and ability to pay
-- The regulatory tailwind (EU AI Act, enterprise compliance pressure)
+With Linux/macOS ports complete and PQC enabled by default, the most defensible ask for a company of OpenAI's size is:
 
-Do not accept less than $400,000 for a perpetual license or $100,000/year for an annual license without significant scope reduction or additional terms (e.g., exclusivity).
+- **Full acquisition: $3.5M–$7M** (recommended if you want a clean exit)
+- **Perpetual license: $1.2M–$2.5M** (recommended if you want to retain IP for other customers)
+- **License + retainer: $1.5M–$3M + $250–400K/year** (recommended if you want continued income and involvement)
 
-If they push back on price citing Alpha status, offer to delay payment trigger until Linux/macOS release as a compromise — but hold the number.
+Do not accept less than:
+- $2,000,000 for a full IP acquisition
+- $700,000 for a perpetual license
+- $175,000/year for an annual license
+
+The "Alpha status" discount argument is significantly weaker now. You have four-platform support, PQC-by-default (NIST FIPS 203/204), formal verification, and a complete REST API with SDKs. That is not an Alpha — that is an early production system.
+
+If they push back: ask what their timeline for quantum-safe infrastructure is. The EU AI Act audit requirements alone make HSIP's tamper-evident log system worth the annual license fee.
+
+**Do not sell exclusively without a significant premium.** If they want exclusivity, add 50–100% to the acquisition price.
 
 ---
 

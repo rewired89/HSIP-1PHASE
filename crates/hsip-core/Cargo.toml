@@ -6,7 +6,7 @@ license-file = "../LICENSE"
 rust-version = "1.87"
 
 [features]
-default = []
+default = ["pqc"]
 pqc = ["pqcrypto-mlkem", "pqcrypto-mldsa", "pqcrypto-traits"]
 
 [dependencies]

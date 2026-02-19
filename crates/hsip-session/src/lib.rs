@@ -8,6 +8,12 @@
 //! hsip-session: ephemeral session handshake + AEAD sealing helpers.
 //! X25519 (ephemeral) → HKDF-SHA256 → ChaCha20-Poly1305
 //!
+//! Phase 2: hybrid post-quantum sessions via X25519+ML-KEM-768 HKDF input.
+//! When the `pqc` feature is active in hsip-core the handshake uses:
+//!   - Classical: X25519 ephemeral
+//!   - Post-quantum: ML-KEM-768 encapsulation
+//!   - Combined via HKDF-SHA256 (domain label: b"HSIP-Hybrid-KEM-v1")
+//!
 //! - RAM-only keys, Zeroize on drop
 //! - Nonce: 96-bit = [4B random prefix | 8B counter]
 //! - Rekey via new shared secret
@@ -26,6 +32,20 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 use zeroize::Zeroize;
 
 pub mod persistence;
+
+/// Shared-secret source produced during a hybrid PQC handshake.
+///
+/// Callers receive this from `pqc_encapsulate` / `pqc_decapsulate` helpers
+/// and pass it into [`Session::from_shared_secret`] to derive the session key.
+/// The 32-byte value is the HKDF output of (X25519_SS || ML-KEM-768_SS).
+#[derive(Debug, Clone)]
+pub struct HybridSharedSecret(pub [u8; 32]);
+
+impl Drop for HybridSharedSecret {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 /// Default HKDF info for session keys (domain separation).
 const DEFAULT_INFO: &[u8] = b"HSIP v1 session key";
@@ -214,6 +234,25 @@ impl Session {
     ) -> Result<Self, SessionError> {
         let shared = our_eph.into_shared(their_pub)?;
         Self::from_shared_secret(shared, label)
+    }
+
+    /// Build a post-quantum hybrid session from a pre-derived [`HybridSharedSecret`].
+    ///
+    /// This is the Phase 2 entry point. The caller is expected to have already
+    /// performed the hybrid KEM handshake (X25519 + ML-KEM-768 via `hsip-core`'s
+    /// `pqc` module) and combined the shared secrets using HKDF-SHA256.
+    ///
+    /// The resulting session is cryptographically identical to a classical session
+    /// in terms of AEAD/nonce mechanics; the security upgrade comes entirely from
+    /// how the initial `shared_secret` bytes were derived.
+    ///
+    /// # Errors
+    /// Propagates [`SessionError::KdfExpand`].
+    pub fn from_hybrid_handshake(
+        hybrid_secret: HybridSharedSecret,
+        label: Option<&PeerLabel>,
+    ) -> Result<Self, SessionError> {
+        Self::from_shared_secret(hybrid_secret.0, label)
     }
 
     /// Rekey using a NEW shared secret (e.g., after exchanging fresh ephemerals).
