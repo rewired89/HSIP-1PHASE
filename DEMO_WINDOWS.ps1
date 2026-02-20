@@ -46,23 +46,27 @@ if ($existing) {
     Start-Sleep -Seconds 1
 }
 
-# 2. Delete the database and key file so first-time setup always runs
+# 2. Delete old state and set absolute DB path so SQLite never depends on CWD
 $projectDir = (Get-Location).Path
 Remove-Item "$projectDir\hsip_api.db"       -ErrorAction SilentlyContinue
 Remove-Item "$projectDir\hsip_admin_key.txt" -ErrorAction SilentlyContinue
 Remove-Item "$projectDir\api.log"            -ErrorAction SilentlyContinue
-Write-Host "Database cleared — fresh first-time setup will run." -ForegroundColor DarkGray
+Remove-Item "$projectDir\api_err.log"        -ErrorAction SilentlyContinue
 
-# 3. Start API with explicit WorkingDirectory and stdout captured to api.log
-#    -NoNewWindow keeps it in-process; -RedirectStandardOutput captures the key box
+# Tell the API to use an absolute DB path — bypasses any working-directory issue
+$env:HSIP_DB_PATH = "$projectDir\hsip_api.db"
+Write-Host "Database cleared (DB path: $($env:HSIP_DB_PATH))" -ForegroundColor DarkGray
+
+# 3. Start API hidden, stdout/stderr redirected to log files we can read
 Write-Host "Starting hsip-api..." -ForegroundColor Cyan
 $apiFull    = (Resolve-Path $API).Path
 $apiProcess = Start-Process `
-    -FilePath        $apiFull `
+    -FilePath         $apiFull `
     -WorkingDirectory $projectDir `
     -RedirectStandardOutput "$projectDir\api.log" `
     -RedirectStandardError  "$projectDir\api_err.log" `
-    -NoNewWindow -PassThru
+    -WindowStyle Hidden -PassThru
+Remove-Item env:HSIP_DB_PATH -ErrorAction SilentlyContinue   # no longer needed in this session
 
 # 4. Wait up to 30s for the key — check BOTH the key file and the log output
 Write-Host "Waiting for first-time setup..." -ForegroundColor DarkGray
