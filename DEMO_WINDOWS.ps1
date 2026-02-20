@@ -52,9 +52,18 @@ Remove-Item ".\hsip_api.db"       -ErrorAction SilentlyContinue
 Remove-Item ".\hsip_admin_key.txt" -ErrorAction SilentlyContinue
 Write-Host "Database cleared — fresh first-time setup will run." -ForegroundColor DarkGray
 
-# 3. Start API in a visible window
+# 3. Start API — run inline as a background job so CWD is guaranteed correct
+#    (Start-Process opens a new window with unpredictable CWD; background job
+#     inherits the current session's directory, so the key file lands here)
 Write-Host "Starting hsip-api..." -ForegroundColor Cyan
-$apiProcess = Start-Process -FilePath $API -PassThru -WindowStyle Normal
+$projectDir = (Get-Location).Path
+$apiFull    = (Resolve-Path $API).Path
+$apiJob     = Start-Job -ScriptBlock {
+    param($dir, $exe)
+    Set-Location $dir
+    & $exe
+} -ArgumentList $projectDir, $apiFull
+Write-Host "(API running as background job — output hidden, key file written here)" -ForegroundColor DarkGray
 
 # 4. Poll for the key file (written by first-time setup, usually within 2 s)
 Write-Host "Waiting for first-time setup to write hsip_admin_key.txt..." -ForegroundColor DarkGray
