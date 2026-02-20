@@ -47,50 +47,74 @@ if ($existing) {
 }
 
 # 2. Delete the database and key file so first-time setup always runs
-#    (first-time setup is the only moment the admin key is printed + written)
-Remove-Item ".\hsip_api.db"       -ErrorAction SilentlyContinue
-Remove-Item ".\hsip_admin_key.txt" -ErrorAction SilentlyContinue
+$projectDir = (Get-Location).Path
+Remove-Item "$projectDir\hsip_api.db"       -ErrorAction SilentlyContinue
+Remove-Item "$projectDir\hsip_admin_key.txt" -ErrorAction SilentlyContinue
+Remove-Item "$projectDir\api.log"            -ErrorAction SilentlyContinue
 Write-Host "Database cleared — fresh first-time setup will run." -ForegroundColor DarkGray
 
-# 3. Start API — run inline as a background job so CWD is guaranteed correct
-#    (Start-Process opens a new window with unpredictable CWD; background job
-#     inherits the current session's directory, so the key file lands here)
+# 3. Start API with explicit WorkingDirectory and stdout captured to api.log
+#    -NoNewWindow keeps it in-process; -RedirectStandardOutput captures the key box
 Write-Host "Starting hsip-api..." -ForegroundColor Cyan
-$projectDir = (Get-Location).Path
 $apiFull    = (Resolve-Path $API).Path
-$apiJob     = Start-Job -ScriptBlock {
-    param($dir, $exe)
-    Set-Location $dir
-    & $exe
-} -ArgumentList $projectDir, $apiFull
-Write-Host "(API running as background job — output hidden, key file written here)" -ForegroundColor DarkGray
+$apiProcess = Start-Process `
+    -FilePath        $apiFull `
+    -WorkingDirectory $projectDir `
+    -RedirectStandardOutput "$projectDir\api.log" `
+    -RedirectStandardError  "$projectDir\api_err.log" `
+    -NoNewWindow -PassThru
 
-# 4. Poll for the key file (written by first-time setup, usually within 2 s)
-Write-Host "Waiting for first-time setup to write hsip_admin_key.txt..." -ForegroundColor DarkGray
-$timeout = 20
-$elapsed = 0
-while (-not (Test-Path ".\hsip_admin_key.txt") -and $elapsed -lt $timeout) {
+# 4. Wait up to 30s for the key — check BOTH the key file and the log output
+Write-Host "Waiting for first-time setup..." -ForegroundColor DarkGray
+$KEY = $null
+for ($i = 0; $i -lt 60; $i++) {
+    # Primary: key file written by the API
+    if (Test-Path "$projectDir\hsip_admin_key.txt") {
+        $KEY = (Get-Content "$projectDir\hsip_admin_key.txt").Trim()
+        break
+    }
+    # Fallback: parse the key directly from the log output
+    if (Test-Path "$projectDir\api.log") {
+        $log = Get-Content "$projectDir\api.log" -Raw -ErrorAction SilentlyContinue
+        if ($log -match "(hsip_[0-9a-f]{64})") {
+            $KEY = $Matches[1]
+            $KEY | Out-File "$projectDir\hsip_admin_key.txt" -NoNewline -Encoding ascii
+            break
+        }
+    }
     Start-Sleep -Milliseconds 500
-    $elapsed++
 }
 
-if (-not (Test-Path ".\hsip_admin_key.txt")) {
-    Write-Host "ERROR: Key file not written after $($timeout/2)s." -ForegroundColor Red
-    Write-Host "Check the API window for errors." -ForegroundColor Red
+if (-not $KEY) {
+    Write-Host "ERROR: Admin key not found after 30s." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "--- API stdout (api.log) ---" -ForegroundColor Yellow
+    if (Test-Path "$projectDir\api.log") { Get-Content "$projectDir\api.log" }
+    Write-Host "--- API stderr (api_err.log) ---" -ForegroundColor Yellow
+    if (Test-Path "$projectDir\api_err.log") { Get-Content "$projectDir\api_err.log" }
     exit 1
 }
 
-$KEY = Get-Content ".\hsip_admin_key.txt"
-Write-Host "Admin key loaded: $KEY" -ForegroundColor Green
+Write-Host "Admin key: $KEY" -ForegroundColor Green
 
 $headers = @{
     "Authorization" = "Bearer $KEY"
     "Content-Type"  = "application/json"
 }
 
-# 5. Quick health check
-Start-Sleep -Seconds 1
-$health = Invoke-RestMethod -Uri "http://localhost:3000/health"
+# 5. Health check — retry up to 10s in case the API is still binding the port
+$health = $null
+for ($i = 0; $i -lt 20; $i++) {
+    try {
+        $health = Invoke-RestMethod -Uri "http://localhost:3000/health" -ErrorAction Stop
+        break
+    } catch { Start-Sleep -Milliseconds 500 }
+}
+if (-not $health) {
+    Write-Host "ERROR: API not responding on :3000. Check api_err.log." -ForegroundColor Red
+    if (Test-Path "$projectDir\api_err.log") { Get-Content "$projectDir\api_err.log" }
+    exit 1
+}
 Write-Host "API health: $($health.status) (version $($health.version))" -ForegroundColor Green
 
 Pause-Demo "API is running — admin key loaded"
