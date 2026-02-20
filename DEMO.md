@@ -15,19 +15,22 @@ The script handles everything: builds if needed, starts the API, walks through a
 
 ### 0 — Start the API
 
+The admin key is only printed and written on **first-time setup** (when no database exists).
+Always delete the database before starting to guarantee a fresh key.
+
 ```powershell
 # Kill any leftover instance
 Stop-Process -Name "hsip-api" -ErrorAction SilentlyContinue
 
-# If hsip_api.db already exists the key was already written
-# If not, delete the db to force first-time setup
-# Remove-Item .\hsip_api.db -ErrorAction SilentlyContinue
+# Delete DB and old key file to force first-time setup
+Remove-Item .\hsip_api.db        -ErrorAction SilentlyContinue
+Remove-Item .\hsip_admin_key.txt -ErrorAction SilentlyContinue
 
-# Start (prints admin key in the box, writes to hsip_admin_key.txt)
+# Start — wait for the key box to appear, then Ctrl+C or leave it running
 .\target\release\hsip-api.exe
 ```
 
-In a second window:
+In a second window (after the key box has appeared):
 
 ```powershell
 $KEY     = Get-Content .\hsip_admin_key.txt

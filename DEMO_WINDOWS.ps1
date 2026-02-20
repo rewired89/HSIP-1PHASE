@@ -36,9 +36,9 @@ Write-Host "Binaries ready." -ForegroundColor Green
 
 # ── API SETUP ────────────────────────────────────────────────────────────────
 
-Section "STEP 0: Start the REST API"
+Section "STEP 0: Start the REST API (fresh state)"
 
-# Kill any existing hsip-api process
+# 1. Kill any existing hsip-api process
 $existing = Get-Process -Name "hsip-api" -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "Stopping existing hsip-api process..." -ForegroundColor Yellow
@@ -46,30 +46,45 @@ if ($existing) {
     Start-Sleep -Seconds 1
 }
 
-Write-Host "Starting hsip-api in background..."
-$apiProcess = Start-Process -FilePath $API -PassThru -WindowStyle Normal
-Start-Sleep -Seconds 2
+# 2. Delete the database and key file so first-time setup always runs
+#    (first-time setup is the only moment the admin key is printed + written)
+Remove-Item ".\hsip_api.db"       -ErrorAction SilentlyContinue
+Remove-Item ".\hsip_admin_key.txt" -ErrorAction SilentlyContinue
+Write-Host "Database cleared — fresh first-time setup will run." -ForegroundColor DarkGray
 
-# Read admin key
-if (Test-Path ".\hsip_admin_key.txt") {
-    $KEY = Get-Content ".\hsip_admin_key.txt"
-    Write-Host "Admin key loaded: $KEY" -ForegroundColor Green
-} else {
-    Write-Host "ERROR: hsip_admin_key.txt not found." -ForegroundColor Red
-    Write-Host "Stop the API, delete hsip_api.db, and restart." -ForegroundColor Red
+# 3. Start API in a visible window
+Write-Host "Starting hsip-api..." -ForegroundColor Cyan
+$apiProcess = Start-Process -FilePath $API -PassThru -WindowStyle Normal
+
+# 4. Poll for the key file (written by first-time setup, usually within 2 s)
+Write-Host "Waiting for first-time setup to write hsip_admin_key.txt..." -ForegroundColor DarkGray
+$timeout = 20
+$elapsed = 0
+while (-not (Test-Path ".\hsip_admin_key.txt") -and $elapsed -lt $timeout) {
+    Start-Sleep -Milliseconds 500
+    $elapsed++
+}
+
+if (-not (Test-Path ".\hsip_admin_key.txt")) {
+    Write-Host "ERROR: Key file not written after $($timeout/2)s." -ForegroundColor Red
+    Write-Host "Check the API window for errors." -ForegroundColor Red
     exit 1
 }
+
+$KEY = Get-Content ".\hsip_admin_key.txt"
+Write-Host "Admin key loaded: $KEY" -ForegroundColor Green
 
 $headers = @{
     "Authorization" = "Bearer $KEY"
     "Content-Type"  = "application/json"
 }
 
-# Quick health check
+# 5. Quick health check
+Start-Sleep -Seconds 1
 $health = Invoke-RestMethod -Uri "http://localhost:3000/health"
 Write-Host "API health: $($health.status) (version $($health.version))" -ForegroundColor Green
 
-Pause-Demo "API is running"
+Pause-Demo "API is running — admin key loaded"
 
 # ── DEMO 1: IDENTITY ─────────────────────────────────────────────────────────
 
