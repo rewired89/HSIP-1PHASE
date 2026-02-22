@@ -10,8 +10,12 @@ pub async fn init(database_url: &str) -> anyhow::Result<Db> {
         sqlx::any::install_default_drivers();
     });
 
+    // In-memory databases must use exactly 1 connection, otherwise each connection
+    // gets a separate database instance and tables/data won't be shared.
+    let max_conns = if database_url.contains(":memory:") { 1 } else { 10 };
+
     let pool = sqlx::pool::PoolOptions::<sqlx::Any>::new()
-        .max_connections(10)
+        .max_connections(max_conns)
         .connect(database_url)
         .await?;
 
