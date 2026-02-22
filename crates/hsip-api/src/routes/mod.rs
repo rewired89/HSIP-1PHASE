@@ -18,6 +18,7 @@ pub fn router() -> Router<AppState> {
         // Identity
         .route("/v1/identity",                post(identity::create_or_get))
         .route("/v1/identity",                get(identity::get))
+        .route("/v1/identity/rotate",         post(identity::rotate))
         // Consent
         .route("/v1/consent",                 get(consent::list))
         .route("/v1/consent/:peer_key",       get(consent::get))

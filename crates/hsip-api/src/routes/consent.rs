@@ -1,4 +1,5 @@
-use axum::{extract::{Path, State}, Json};
+use axum::{extract::{Path, Query, State}, Json};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -16,10 +17,22 @@ pub struct RevokeRequest {
     pub peer_verify_key: String,
 }
 
+/// L3: Pagination query params
+#[derive(Deserialize)]
+pub struct PaginationParams {
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+fn default_limit() -> i64 { 50 }
+
 #[derive(Serialize, Clone)]
 pub struct ConsentRecord {
     pub id:              String,
     pub peer_verify_key: String,
+    /// Effective status: "granted", "expired", or "revoked"
     pub status:          String,
     pub granted_at:      Option<i64>,
     pub expires_at:      Option<i64>,
@@ -27,11 +40,42 @@ pub struct ConsentRecord {
     pub created_at:      i64,
 }
 
+/// M2: Validate that peer_verify_key is a valid Base64-encoded 32-byte Ed25519 public key.
+fn validate_peer_key(peer_verify_key: &str) -> ApiResult<()> {
+    if peer_verify_key.len() > 128 {
+        return Err(ApiError::BadRequest("peer_verify_key too long".into()));
+    }
+    let decoded = BASE64.decode(peer_verify_key)
+        .map_err(|_| ApiError::BadRequest("peer_verify_key must be Base64-encoded".into()))?;
+    if decoded.len() != 32 {
+        return Err(ApiError::BadRequest(
+            "peer_verify_key must decode to exactly 32 bytes (Ed25519 public key)".into()
+        ));
+    }
+    Ok(())
+}
+
+/// H5: Compute effective status from DB values and current time.
+fn effective_status(db_status: &str, expires_ms: Option<i64>, now: i64) -> String {
+    if db_status == "revoked" {
+        return "revoked".into();
+    }
+    if let Some(exp) = expires_ms {
+        if now > exp {
+            return "expired".into();
+        }
+    }
+    db_status.into()
+}
+
 pub async fn grant(
     State(state): State<AppState>,
     tenant: TenantId,
     Json(req): Json<GrantRequest>,
 ) -> ApiResult<Json<ConsentRecord>> {
+    // M2: validate peer key format
+    validate_peer_key(&req.peer_verify_key)?;
+
     let now  = now_ms();
     let ttl  = req.ttl_ms.unwrap_or(3_600_000);
     let exp  = now + ttl;
@@ -82,6 +126,9 @@ pub async fn revoke(
     tenant: TenantId,
     Json(req): Json<RevokeRequest>,
 ) -> ApiResult<Json<ConsentRecord>> {
+    // M2: validate peer key format
+    validate_peer_key(&req.peer_verify_key)?;
+
     let now = now_ms();
 
     let result = sqlx::query(
@@ -130,25 +177,36 @@ pub async fn revoke(
     }))
 }
 
+/// L3: paginated consent list with H5 expiry enforcement
 pub async fn list(
     State(state): State<AppState>,
     tenant: TenantId,
+    Query(params): Query<PaginationParams>,
 ) -> ApiResult<Json<Vec<ConsentRecord>>> {
+    let limit  = params.limit.clamp(1, 200);
+    let offset = params.offset.max(0);
+    let now    = now_ms();
+
     let rows = sqlx::query(
         "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at
-         FROM consents WHERE tenant_id=? ORDER BY created_at DESC",
+         FROM consents WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
     )
     .bind(&tenant.0)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.db)
     .await?;
 
     let records = rows.iter().map(|r| -> Result<ConsentRecord, sqlx::Error> {
+        let db_status: String    = r.try_get(2)?;
+        let expires_ms: Option<i64> = r.try_get(4)?;
         Ok(ConsentRecord {
             id:              r.try_get(0)?,
             peer_verify_key: r.try_get(1)?,
-            status:          r.try_get(2)?,
+            // H5: compute effective status at query time
+            status:          effective_status(&db_status, expires_ms, now),
             granted_at:      r.try_get(3)?,
-            expires_at:      r.try_get(4)?,
+            expires_at:      expires_ms,
             revoked_at:      r.try_get(5)?,
             created_at:      r.try_get(6)?,
         })
@@ -157,11 +215,14 @@ pub async fn list(
     Ok(Json(records))
 }
 
+/// H5: enforce expiry on single-peer lookup
 pub async fn get(
     State(state): State<AppState>,
     tenant: TenantId,
     Path(peer_key): Path<String>,
 ) -> ApiResult<Json<ConsentRecord>> {
+    let now = now_ms();
+
     let row = sqlx::query(
         "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at
          FROM consents WHERE tenant_id=? AND peer_verify_key=?",
@@ -172,12 +233,16 @@ pub async fn get(
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("No consent for peer {peer_key}")))?;
 
+    let db_status: String       = row.try_get(2)?;
+    let expires_ms: Option<i64> = row.try_get(4)?;
+
     Ok(Json(ConsentRecord {
         id:              row.try_get(0)?,
         peer_verify_key: row.try_get(1)?,
-        status:          row.try_get(2)?,
+        // H5: effective status considers expiry
+        status:          effective_status(&db_status, expires_ms, now),
         granted_at:      row.try_get(3)?,
-        expires_at:      row.try_get(4)?,
+        expires_at:      expires_ms,
         revoked_at:      row.try_get(5)?,
         created_at:      row.try_get(6)?,
     }))

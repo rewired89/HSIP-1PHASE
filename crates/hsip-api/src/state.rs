@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use crate::db::Db;
 
 /// Per-key velocity record for AI agent anomaly detection
@@ -35,22 +35,30 @@ impl RateWindow {
     }
 }
 
-pub type AgentTracker = Arc<DashMap<String, VelocityRecord>>;
-pub type RateLimiter  = Arc<DashMap<String, RateWindow>>;
+pub type AgentTracker      = Arc<DashMap<String, VelocityRecord>>;
+pub type RateLimiter       = Arc<DashMap<String, RateWindow>>;
+/// Keys that have been flagged for revocation but DB write may be in-flight.
+/// Requests are rejected immediately once a key_id appears here.
+pub type PendingRevocation = Arc<DashSet<String>>;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db:            Db,
-    pub agent_tracker: AgentTracker,
-    pub rate_limiter:  RateLimiter,
+    pub db:                 Db,
+    pub agent_tracker:      AgentTracker,
+    pub rate_limiter:       RateLimiter,
+    pub pending_revocation: PendingRevocation,
+    /// Loaded once at startup from HSIP_MASTER_KEY env var.
+    pub master_key:         Arc<Vec<u8>>,
 }
 
 impl AppState {
-    pub fn new(db: Db) -> Self {
+    pub fn new(db: Db, master_key: Vec<u8>) -> Self {
         Self {
             db,
-            agent_tracker: Arc::new(DashMap::new()),
-            rate_limiter:  Arc::new(DashMap::new()),
+            agent_tracker:      Arc::new(DashMap::new()),
+            rate_limiter:       Arc::new(DashMap::new()),
+            pending_revocation: Arc::new(DashSet::new()),
+            master_key:         Arc::new(master_key),
         }
     }
 }
