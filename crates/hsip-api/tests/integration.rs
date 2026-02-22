@@ -54,7 +54,7 @@ async fn test_app() -> (axum::Router, String) {
     .await
     .unwrap();
 
-    let state = hsip_api::state::AppState::new(db);
+    let state = hsip_api::state::AppState::new(db, vec![0u8; 32]);
     let app   = hsip_api::routes::router().with_state(state);
 
     (app, raw_key)

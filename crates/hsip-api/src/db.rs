@@ -126,6 +126,19 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Indexes on tenant_id for all high-traffic tables (L4)
+    let indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_tenant    ON api_keys (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_consents_tenant    ON consents (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_messages_tenant    ON messages (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_credentials_tenant ON credentials (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_tenant       ON audit_entries (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON audit_entries (timestamp)",
+    ];
+    for idx in &indexes {
+        sqlx::query(idx).execute(pool).await?;
+    }
+
     Ok(())
 }
 

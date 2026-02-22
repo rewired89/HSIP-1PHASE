@@ -1,5 +1,6 @@
 use axum::{extract::{Path, State}, Json};
-use rand::Rng;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -10,7 +11,7 @@ use crate::{auth::{TenantId, hash_key}, db::now_ms, errors::{ApiError, ApiResult
 pub struct CreateKeyRequest {
     pub name:       Option<String>,
     pub agent_type: Option<String>, // "human" | "service" | "ai_agent"
-    pub expires_in_days: Option<i64>, // optional TTL in days; None = never expires
+    pub expires_in_days: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -112,11 +113,15 @@ pub async fn revoke(
 
     state.agent_tracker.remove(&key_id);
     state.rate_limiter.remove(&key_id);
+    // Also clear from pending_revocation if present
+    state.pending_revocation.remove(&key_id);
 
     Ok(Json(serde_json::json!({ "revoked": key_id })))
 }
 
+/// L1: Use OsRng explicitly for cryptographic key generation.
 fn gen_key() -> String {
-    let bytes: Vec<u8> = (0..32).map(|_| rand::thread_rng().gen::<u8>()).collect();
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
     format!("hsip_{}", hex::encode(bytes))
 }
