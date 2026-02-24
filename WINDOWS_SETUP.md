@@ -300,7 +300,8 @@ $env:RUST_LOG = "debug"
 
 - Full deployment guide: `DEPLOYMENT.md`
 - API documentation: http://localhost:3000/docs
-- Protocol spec: `PROTOCOL_SPEC.md`
+- Threat model and security scope: `THREAT_MODEL.md`
+- Licensing: sanchezleal1989@gmail.com
 
 ---
 
