@@ -1,0 +1,52 @@
+# HSIP API Server Configuration
+# Copy this file to config.toml and customize for your deployment
+
+[server]
+host = "0.0.0.0"
+port = 3000
+
+# TLS Configuration (REQUIRED for production)
+# Generate self-signed certs for testing:
+#   openssl req -x509 -newkey rsa:4096 -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=localhost"
+# For production, use Let's Encrypt or your CA-issued certificates
+[server.tls]
+cert_path = "cert.pem"
+key_path = "key.pem"
+require_https = true  # Reject non-HTTPS connections in production
+
+[database]
+# SQLite for development/testing (not recommended for production)
+# url = "sqlite:hsip.db"
+
+# PostgreSQL for production (recommended)
+url = "postgresql://hsip_user:your_password@localhost/hsip_db"
+max_connections = 10
+run_migrations = true
+
+[security]
+# Path to 32-byte master key file (generate with: openssl rand -hex 32 > hsip_master_key.bin)
+master_key_path = "hsip_master_key.bin"
+
+# Path to admin API key file (generate with server on first run)
+admin_key_path = "hsip_admin_key.txt"
+
+# Rate limit: requests per minute per API key
+rate_limit_per_minute = 60
+
+[cors]
+# CORS allowed origins (empty = deny all cross-origin requests)
+# For development: allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+# For production: allowed_origins = ["https://yourdomain.com"]
+allowed_origins = []
+
+[metrics]
+# Optional bearer token to protect /metrics endpoint
+# Leave empty to disable metrics endpoint authentication
+token = "your-metrics-token-here"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log format: pretty (human-readable) or json (machine-parseable)
+format = "json"

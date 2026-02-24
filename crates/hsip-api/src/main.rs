@@ -11,8 +11,10 @@ use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer, PropagateReques
 use axum::http::header::HeaderName;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
+use anyhow::{Context, Result};
 
 mod auth;
+mod config;
 mod db;
 mod errors;
 mod key_encryption;
@@ -20,36 +22,61 @@ mod metrics;
 mod routes;
 mod state;
 
+use config::Config;
 use state::AppState;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "hsip_api=info".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+async fn main() -> Result<()> {
+    // Load configuration
+    let config_path = std::env::var("HSIP_CONFIG")
+        .unwrap_or_else(|_| "config.toml".to_string());
 
+    let config = match Config::load(&config_path) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("❌ Configuration error: {}", e);
+            eprintln!("\nTo generate a sample config file, run:");
+            eprintln!("  cp crates/hsip-api/config.toml.example config.toml");
+            eprintln!("\nThen edit config.toml with your settings.");
+            std::process::exit(1);
+        }
+    };
+
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        eprintln!("❌ Configuration validation failed: {}", e);
+        std::process::exit(1);
+    }
+
+    // Initialize logging based on config
+    init_logging(&config);
+
+    tracing::info!("Starting HSIP API v{}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Loaded configuration from: {}", config_path);
+
+    // Initialize metrics
     metrics::init();
 
-    // C1: load master key at startup — exits with clear error if not set
-    let master_key = key_encryption::load_master_key();
+    // Load master encryption key
+    let master_key = load_master_key(&config.security.master_key_path)?;
+    tracing::info!("✓ Master encryption key loaded");
 
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        let path = std::env::var("HSIP_DB_PATH").unwrap_or_else(|_| "hsip_api.db".to_string());
-        format!("sqlite:{path}")
-    });
+    // Initialize database
+    let db = db::init_with_config(&config.database).await?;
+    tracing::info!("✓ Database initialized: {}",
+        if config.database.url.contains("postgres") { "PostgreSQL" }
+        else { "SQLite" }
+    );
 
-    let db = db::init(&database_url).await?;
-    bootstrap_admin(&db).await?;
+    // Bootstrap admin tenant and key
+    bootstrap_admin(&db, &config.security.admin_key_path).await?;
 
     let state = AppState::new(db, master_key);
 
-    // H4: build CORS from CORS_ORIGINS env var, defaulting to restrictive
-    let cors = build_cors_layer();
+    // Build CORS layer from config
+    let cors = build_cors_layer(&config.cors);
 
-    // L2: request-id header name
+    // Request ID header
     let x_request_id = HeaderName::from_static("x-request-id");
 
     let app = Router::new()
@@ -60,44 +87,111 @@ async fn main() -> anyhow::Result<()> {
         .route("/docs",    get(docs_handler))
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
-        // L2: attach a unique request ID to every request and propagate to response
         .layer(SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid))
         .layer(PropagateRequestIdLayer::new(x_request_id))
         .with_state(state);
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    let addr = format!("0.0.0.0:{port}");
+    let addr = format!("{}:{}", config.server.host, config.server.port);
 
-    tracing::info!("HSIP API listening on http://{addr}");
-    tracing::info!("Docs:    http://{addr}/docs");
-    tracing::info!("Metrics: http://{addr}/metrics  (set METRICS_TOKEN to protect)");
-    tracing::info!("Health:  http://{addr}/health");
+    // Start server with TLS if configured
+    if let Some(ref tls_config) = config.server.tls {
+        tracing::info!("🔒 TLS enabled");
+        tracing::info!("   Certificate: {}", tls_config.cert_path);
+        tracing::info!("   Private key: {}", tls_config.key_path);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+            &tls_config.cert_path,
+            &tls_config.key_path,
+        )
+        .await
+        .context("Failed to load TLS certificates")?;
+
+        tracing::info!("🚀 HSIP API listening on https://{}", addr);
+        tracing::info!("   Docs:    https://{}/docs", addr);
+        tracing::info!("   Metrics: https://{}/metrics", addr);
+        tracing::info!("   Health:  https://{}/health", addr);
+
+        let bind_addr: std::net::SocketAddr = addr.parse()?;
+        axum_server::bind_rustls(bind_addr, rustls_config)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        tracing::warn!("⚠️  TLS is DISABLED - this is insecure for production!");
+        tracing::warn!("   Configure [server.tls] in config.toml to enable HTTPS");
+
+        tracing::info!("🚀 HSIP API listening on http://{}", addr);
+        tracing::info!("   Docs:    http://{}/docs", addr);
+        tracing::info!("   Metrics: http://{}/metrics", addr);
+        tracing::info!("   Health:  http://{}/health", addr);
+
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        axum::serve(listener, app).await?;
+    }
+
     Ok(())
 }
 
-/// H4: Build a CORS layer from CORS_ORIGINS env var.
-/// Set CORS_ORIGINS=https://your-dashboard.com,https://app.example.com
-/// Defaults to deny all cross-origin if not set.
-fn build_cors_layer() -> CorsLayer {
-    let origins_env = std::env::var("CORS_ORIGINS").unwrap_or_default();
-    if origins_env.trim().is_empty() {
-        // No CORS_ORIGINS set: deny all cross-origin requests
+fn init_logging(config: &Config) {
+    use tracing_subscriber::fmt::format::FmtSpan;
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new(&config.logging.level)
+        });
+
+    match config.logging.format {
+        config::LogFormat::Json => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_span_events(FmtSpan::CLOSE))
+                .init();
+        }
+        config::LogFormat::Pretty => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer()
+                    .with_span_events(FmtSpan::CLOSE))
+                .init();
+        }
+    }
+}
+
+fn load_master_key(path: &str) -> Result<Vec<u8>> {
+    let key_hex = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read master key from: {}", path))?;
+
+    let key_hex = key_hex.trim();
+
+    let key_bytes = hex::decode(key_hex)
+        .context("Master key must be valid hexadecimal")?;
+
+    if key_bytes.len() != 32 {
+        anyhow::bail!("Master key must be exactly 32 bytes (64 hex characters), got {} bytes", key_bytes.len());
+    }
+
+    tracing::debug!("Master key loaded from: {}", path);
+    Ok(key_bytes)
+}
+
+fn build_cors_layer(cors_config: &config::CorsConfig) -> CorsLayer {
+    if cors_config.allowed_origins.is_empty() {
+        tracing::info!("CORS: deny all cross-origin requests (no allowed_origins configured)");
         return CorsLayer::new();
     }
 
-    let origins: Vec<axum::http::HeaderValue> = origins_env
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+    let origins: Vec<axum::http::HeaderValue> = cors_config.allowed_origins
+        .iter()
         .filter_map(|o| o.parse().ok())
         .collect();
 
     if origins.is_empty() {
+        tracing::warn!("CORS: invalid origins configured, denying all");
         return CorsLayer::new();
     }
+
+    tracing::info!("CORS: allowing {} origin(s)", origins.len());
 
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
@@ -109,22 +203,24 @@ fn build_cors_layer() -> CorsLayer {
         .allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE])
 }
 
-/// H7: Metrics endpoint protected by METRICS_TOKEN env var.
-/// Set METRICS_TOKEN=<secret> and pass Authorization: Bearer <secret> to access.
-async fn metrics_handler(
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let token_env = std::env::var("METRICS_TOKEN").unwrap_or_default();
-    if !token_env.is_empty() {
-        let provided = headers
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .unwrap_or("");
-        if provided != token_env.trim() {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+async fn metrics_handler(headers: HeaderMap) -> impl IntoResponse {
+    // Get metrics token from environment (can override config)
+    let token_env = std::env::var("METRICS_TOKEN").ok();
+
+    if let Some(expected_token) = token_env {
+        if !expected_token.is_empty() {
+            let provided = headers
+                .get("Authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .unwrap_or("");
+
+            if provided != expected_token.trim() {
+                return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+            }
         }
     }
+
     (
         [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
         metrics::render(),
@@ -145,9 +241,6 @@ async fn openapi_handler() -> impl IntoResponse {
     )
 }
 
-/// M3: Swagger UI with pinned CDN version and SRI integrity hashes.
-/// SRI hashes are for swagger-ui-dist@5.17.14 — verify with:
-///   curl -s https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js | openssl dgst -sha384 -binary | openssl base64 -A
 async fn docs_handler() -> impl IntoResponse {
     (
         [(axum::http::header::CONTENT_TYPE, "text/html")],
@@ -183,7 +276,7 @@ async fn docs_handler() -> impl IntoResponse {
     )
 }
 
-async fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
+async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
     use auth::hash_key;
     use db::now_ms;
     use rand::rngs::OsRng;
@@ -196,8 +289,11 @@ async fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
     let count: i64 = row.try_get(0)?;
 
     if count > 0 {
+        tracing::info!("✓ Admin tenant already exists");
         return Ok(());
     }
+
+    tracing::info!("🔧 First-time setup: creating admin tenant and API key");
 
     let tenant_id = Uuid::new_v4().to_string();
     let now       = now_ms();
@@ -208,7 +304,6 @@ async fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
         .execute(db)
         .await?;
 
-    // L1: use OsRng explicitly for admin key generation
     let mut raw_bytes = [0u8; 32];
     OsRng.fill_bytes(&mut raw_bytes);
     let raw_key  = format!("hsip_{}", hex::encode(&raw_bytes));
@@ -237,22 +332,23 @@ async fn bootstrap_admin(db: &db::Db) -> anyhow::Result<()> {
     println!("║  {:<48}  ║", raw_key);
     println!("║                                                  ║");
     println!("║  Authorization: Bearer <key>                     ║");
-    println!("║  Key also saved to: hsip_admin_key.txt (0600)   ║");
+    println!("║  Key saved to: {:<33}  ║", admin_key_path);
     println!("╚══════════════════════════════════════════════════╝");
     println!();
 
-    // C2: write key file with restricted permissions (owner read-only)
-    std::fs::write("hsip_admin_key.txt", &raw_key)
-        .unwrap_or_else(|e| eprintln!("Warning: could not write key file: {e}"));
+    std::fs::write(admin_key_path, &raw_key)
+        .with_context(|| format!("Failed to write admin key to: {}", admin_key_path))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            "hsip_admin_key.txt",
+        std::fs::set_permissions(
+            admin_key_path,
             std::fs::Permissions::from_mode(0o600),
-        );
+        )?;
     }
+
+    tracing::info!("✓ Admin tenant and key created");
 
     Ok(())
 }
