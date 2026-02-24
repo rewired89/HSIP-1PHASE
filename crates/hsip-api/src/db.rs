@@ -1,5 +1,6 @@
 use std::sync::Once;
 use sqlx::AnyPool;
+use crate::config::DatabaseConfig;
 
 pub type Db = AnyPool;
 
@@ -25,6 +26,39 @@ pub async fn init(database_url: &str) -> anyhow::Result<Db> {
     }
 
     run_migrations(&pool).await?;
+    Ok(pool)
+}
+
+pub async fn init_with_config(config: &DatabaseConfig) -> anyhow::Result<Db> {
+    DRIVERS.call_once(|| {
+        sqlx::any::install_default_drivers();
+    });
+
+    // In-memory databases must use exactly 1 connection, otherwise each connection
+    // gets a separate database instance and tables/data won't be shared.
+    let max_conns = if config.url.contains(":memory:") {
+        1
+    } else {
+        config.max_connections
+    };
+
+    tracing::debug!("Connecting to database with {} max connections", max_conns);
+
+    let pool = sqlx::pool::PoolOptions::<sqlx::Any>::new()
+        .max_connections(max_conns)
+        .connect(&config.url)
+        .await?;
+
+    if config.url.starts_with("sqlite") {
+        sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
+        sqlx::query("PRAGMA foreign_keys=ON").execute(&pool).await?;
+    }
+
+    if config.run_migrations {
+        tracing::info!("Running database migrations...");
+        run_migrations(&pool).await?;
+    }
+
     Ok(pool)
 }
 
