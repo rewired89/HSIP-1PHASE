@@ -397,7 +397,7 @@ If target company has a startup program:
 - Use Hunter.io to find email patterns (e.g., firstname@company.com)
 
 **If you need help:**
-- Email me at nyxsystemsllc@gmail.com with "Contact Help" in subject
+- Email me at sanchezleal1989@gmail.com with "Contact Help" in subject
 
 ---
 

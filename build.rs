@@ -18,8 +18,8 @@ fn compile_windows_resources() {
     // Set executable metadata
     resource_config.set("FileDescription", "HSIP Command Line");
     resource_config.set("ProductName", "HSIP CLI");
-    resource_config.set("CompanyName", "Nyx Systems LLC");
-    resource_config.set("LegalCopyright", "© 2025 Nyx Systems LLC");
+    resource_config.set("CompanyName", "Dayana Sanchez");
+    resource_config.set("LegalCopyright", "© 2025 Dayana Sanchez");
     resource_config.set("ProductVersion", "0.2.0.0");
     resource_config.set("FileVersion", "0.2.0.0");
     

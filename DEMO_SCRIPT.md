@@ -148,7 +148,7 @@ Invoke-RestMethod -Method POST `
 >
 > "If you need consent management for AI agents, APIs, or compliance, let's talk."
 >
-> "Email me at nyxsystemsllc@gmail.com or check out the full documentation at github.com/nyxsystems/HSIP-1PHASE."
+> "Email me at sanchezleal1989@gmail.com or check out the full documentation at github.com/nyxsystems/HSIP-1PHASE."
 >
 > "Thanks for watching."
 
@@ -157,7 +157,7 @@ Invoke-RestMethod -Method POST `
 ```
 HSIP — Cryptographic Consent Management
 
-Email: nyxsystemsllc@gmail.com
+Email: sanchezleal1989@gmail.com
 GitHub: github.com/nyxsystems/HSIP-1PHASE
 Demo available: 30-day POC trial
 ```
@@ -259,4 +259,4 @@ After watching, viewers should:
 
 **Good luck with your recording! 🎬**
 
-If you need help or want feedback on the video, send it to nyxsystemsllc@gmail.com.
+If you need help or want feedback on the video, send it to sanchezleal1989@gmail.com.
