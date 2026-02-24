@@ -57,11 +57,9 @@ Future versions:
 
 ## ≡ƒô₧ Contact / Attribution
 
-**Nyx Systems LLC**
-HSIP ΓÇö Human-Secure Internet Protocol
-Miami, FL
-
-Primary author: Rewired89
+**Dayana Sanchez**
+HSIP — High Security Internet Protocol
+Contact: sanchezleal1989@gmail.com
 
 ---
 

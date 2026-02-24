@@ -74,7 +74,7 @@ fn embed_windows_resources(icon_path: &std::path::Path) {
     // Application metadata for Windows Explorer
     resource_builder.set("FileDescription", "HSIP Command Line");
     resource_builder.set("ProductName", "HSIP CLI");
-    resource_builder.set("CompanyName", "Nyx Systems LLC");
+    resource_builder.set("CompanyName", "Dayana Sanchez");
     resource_builder.set("ProductVersion", "0.2.0.0");
     resource_builder.set("FileVersion", "0.2.0.0");
 

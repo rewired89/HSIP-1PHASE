@@ -255,7 +255,7 @@ Tested on **4-core CPU, 8GB RAM, PostgreSQL on same host:**
 
 ### Request a Demo
 
-**Email:** nyxsystemsllc@gmail.com
+**Email:** sanchezleal1989@gmail.com
 **Subject:** "HSIP Enterprise Demo Request"
 
 **Include:**
@@ -341,7 +341,6 @@ We offer a **30-day POC** to evaluate HSIP in your environment:
 
 ## 📚 **Resources**
 
-- **[Live Demo API](http://demo.hsip.dev)** (coming soon)
 - **[Integration Guide](SDK_INTEGRATION.md)** — REST API examples
 - **[Protocol Spec](PROTOCOL_SPEC.md)** — Wire format details
 - **[Deployment Guide](DEPLOYMENT.md)** — Production setup
@@ -414,16 +413,15 @@ POST /v1/credentials/verify
 ## 📥 **Get Started Today**
 
 1. **[Download Source Code](https://github.com/nyxsystems/HSIP-1PHASE)** (evaluate on your infrastructure)
-2. **[Request Demo](mailto:nyxsystemsllc@gmail.com)** (30-minute technical walkthrough)
-3. **[Start POC](mailto:nyxsystemsllc@gmail.com)** (30-day trial with support)
+2. **[Request Demo](mailto:sanchezleal1989@gmail.com)** (30-minute technical walkthrough)
+3. **[Start POC](mailto:sanchezleal1989@gmail.com)** (30-day trial with support)
 
 ---
 
 ## 📞 **Contact**
 
-**Email:** nyxsystemsllc@gmail.com
+**Email:** sanchezleal1989@gmail.com
 **GitHub:** https://github.com/nyxsystems/HSIP-1PHASE
-**Website:** (coming soon)
 
 **For enterprise inquiries, include:**
 - Company name and size
@@ -443,8 +441,10 @@ POST /v1/credentials/verify
 
 ## 📜 **License**
 
-HSIP is available under **commercial licensing** for enterprise use. Free for non-commercial research and evaluation.
+HSIP is **proprietary software** available exclusively under commercial licensing.
+
+**All use requires a valid commercial license** — no free, open-source, or evaluation use is permitted without written authorization from Dayana Sanchez.
 
 See [LICENSE](LICENSE) for full terms.
 
-**Commercial License Inquiries:** nyxsystemsllc@gmail.com
+**Commercial License Inquiries:** sanchezleal1989@gmail.com
