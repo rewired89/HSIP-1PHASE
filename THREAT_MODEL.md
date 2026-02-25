@@ -1,228 +1,251 @@
-# HSIP Phase 1 Threat Model
+# HSIP Threat Model
 
-Last updated: 2026-01
+Last updated: 2026-02
 
-This document states what HSIP Phase 1 protects against and what it does not.
-
----
-
-## What HSIP Phase 1 Does
-
-HSIP enforces consent before communication. If Alice wants to contact Bob, Bob must explicitly authorize that contact before Alice can send data. The protocol generates court-usable, tamper-evident logs of these decisions.
-
-**Core protections:**
-
-1. **Consent enforcement**: No peer can send application data without a cryptographically signed consent response from the recipient.
-
-2. **Identity binding**: Peer IDs are derived from Ed25519 public keys. Signatures prevent impersonation at the protocol level.
-
-3. **Replay prevention**: Consent requests include nonces and timestamps. Responses are cryptographically bound to their requests via BLAKE3 hashes.
-
-4. **Session confidentiality**: Data is encrypted with ChaCha20-Poly1305 after ephemeral X25519 key exchange. Perfect forward secrecy: compromising long-term keys doesn't decrypt past sessions.
-
-5. **Tamper-evident audit logs**: All consent decisions are recorded in a hash-chained append-only log. Chain integrity is verifiable. Exports include genesis hash, head hash, and export counter to detect selective or modified exports.
-
-6. **Mid-session revocation**: Consent can be revoked during active connections. Sessions check consent status before encrypting or decrypting each packet.
-
-7. **DoS resistance** (Phase 1 scope):
-   - Rate limits per source IP:
-     - E1 handshakes: 20 per 5 seconds
-     - Bad signatures: 5 per minute
-     - Control frames: 120 per minute
-     - Consent requests: 30 per minute
-   - Message size limits:
-     - HELLO: 1024 bytes
-     - Consent request: 2048 bytes
-     - Consent response: 2048 bytes
-     - Control frames: 4096 bytes
-   - Early validation before expensive signature verification
-   - IP blocklist for known tracker infrastructure
-   - Timestamp checks reject stale or far-future requests
-
-8. **Automatic key rotation**: Sessions rekey after 1 hour or 100,000 packets, whichever comes first.
+This document states what HSIP protects against and what it does not. It describes the current REST API architecture as deployed in Phase 1.
 
 ---
 
-## What HSIP Phase 1 Does Not Protect Against
+## What HSIP Is
 
-HSIP is not a complete security system. It solves consent enforcement and evidence generation, not all possible threats.
+HSIP is a multi-tenant cryptographic consent management API. It allows organizations (tenants) to:
 
-### Network-level attacks
+- Issue **Ed25519-signed credentials** proving that a user granted consent for a specific action or data access
+- **Verify** those credentials cryptographically, confirming authenticity and checking revocation status
+- **Revoke** credentials instantly when consent is withdrawn
+- **Grant and revoke peer consent** with time-limited validity
+- **Sign and verify messages** with non-repudiable Ed25519 signatures
+- Generate a **tamper-evident audit trail** of all consent and identity operations
 
-- **IP spoofing**: HSIP runs over UDP. Source IP validation depends on the network. An attacker with raw socket access can send packets with forged source IPs. Rate limits apply per observed source IP, not authenticated identity.
+Primary use cases: AI agent authorization, API data access governance, GDPR consent enforcement, and cryptographic proof of authorization for regulated industries.
 
-- **Amplification or reflection**: HSIP responses are not smaller than requests. An attacker cannot use HSIP as an amplifier, but they can still exhaust bandwidth by flooding both sides of a connection.
+---
 
-- **Network infrastructure compromise**: If an attacker controls routers or ISPs between peers, they can drop packets, delay handshakes, or observe encrypted traffic metadata. HSIP does not protect against traffic analysis or correlation attacks.
+## System Architecture
 
-### Cryptographic limitations
+HSIP runs as a Rust HTTP API (Axum framework) backed by either SQLite or PostgreSQL. Tenants authenticate with bearer API keys. Each tenant has an isolated Ed25519 keypair used to sign credentials and messages.
 
-- **Quantum computers**: HSIP uses Ed25519 and X25519, which are not quantum-safe. A sufficiently powerful quantum computer could forge signatures or decrypt past sessions.
+**Data isolation**: All tables are partitioned by `tenant_id`. One tenant cannot read or modify another tenant's data through the API.
 
-- **Implementation bugs**: HSIP uses audited Rust cryptography libraries (ed25519-dalek, chacha20poly1305, blake3), but bugs in those libraries or in HSIP itself could compromise security.
+**Transport security**: Production deployments use TLS (via axum-server with rustls). Credentials are only ever transmitted over encrypted channels in production configurations.
 
-- **Side channels**: HSIP does not protect against timing attacks, power analysis, or other side-channel attacks on endpoints.
+**Key protection**: Tenant signing keys are encrypted at rest using ChaCha20-Poly1305 with a server-side master key. The master key is loaded from disk at startup and never stored in the database.
 
-### Endpoint security
+---
 
-- **Malware on endpoints**: If Alice's or Bob's machine is compromised, the attacker can read keys, forge consent, or tamper with logs. HSIP cannot protect data on a compromised endpoint.
+## What HSIP Protects Against
 
-- **Consent coercion**: HSIP enforces cryptographic consent, not human consent. If Alice forces Bob to click "allow" at gunpoint, the protocol has no way to detect this.
+### 1. Credential Forgery
 
-- **Key theft**: If an attacker steals Alice's signing key, they can impersonate Alice for future communications. HSIP does not include key revocation or certificate infrastructure in Phase 1.
+HSIP credentials carry Ed25519 signatures over a canonical JSON payload. An attacker who intercepts or copies a credential cannot modify the `claim`, `user_token`, `issuer_verify_key`, `issued_at`, or `expires_at` fields without invalidating the signature. The verification endpoint (`POST /v1/credentials/verify`) will reject any credential with an invalid signature.
 
-### Application-layer threats
+**Guarantee**: Without access to the tenant's private signing key, credential forgery is computationally infeasible.
 
-- **Content filtering**: HSIP encrypts data in transit but does not inspect or filter malicious content. Bob can consent to receive data from Alice, but HSIP does not protect Bob if that data contains malware or exploits.
+### 2. Credential Replay After Revocation
 
-- **Phishing or social engineering**: HSIP does not authenticate the human behind a peer ID. Alice can lie about who she is when requesting consent.
+Once a credential is revoked via `DELETE /v1/credentials/:id`, all subsequent verification requests return `revoked: true` and `valid: false`. The revocation check happens at the database level on every verify call — there is no client-side cache that could serve a stale "valid" result.
 
-- **Spam or abuse after consent**: If Bob grants Alice consent, Alice can send Bob data up to the TTL expiration. HSIP does not rate-limit application data within a consented session.
+**Guarantee**: Revocation takes effect immediately on the next verification call.
 
-### Availability
+### 3. Expired Credential Acceptance
 
-- **Targeted DoS**: Rate limits reduce impact, but a determined attacker with sufficient resources (botnets, distributed infrastructure) can still exhaust CPU, memory, or bandwidth.
+Credentials carry an `expires_at` timestamp (milliseconds since epoch). The verify endpoint checks expiration on every call and returns `expired: true` if the current time exceeds `expires_at`. Expired credentials return `valid: false` regardless of signature validity.
 
-- **State exhaustion**: HSIP maintains per-IP counters and per-peer session state. An attacker can force memory allocation by using many source IPs or peer IDs. The system will eventually run out of memory if attacked at scale.
+**Guarantee**: Time-limited credentials are enforced server-side on every verification.
 
-- **Asymmetric resource costs**: Signature verification costs more CPU than sending garbage. Rate limits help, but an attacker can still force the defender to burn cycles on bad packets.
+### 4. Identity Impersonation
 
-### Out of scope for Phase 1
+Tenant identities are Ed25519 keypairs. The `verify_key` (public key) is the tenant's cryptographic identity. Messages signed by a tenant can be verified against their `verify_key` by any party. An attacker cannot produce a valid signature without the corresponding private signing key.
 
-These are not threats HSIP Phase 1 claims to solve:
+**Guarantee**: Tenant identity is cryptographically bound to key possession.
 
-- **Anonymity or metadata privacy**: HSIP does not hide who is talking to whom. Peer IDs, IP addresses, and traffic patterns are visible to network observers.
+### 5. Unauthorized API Access
 
-- **Discovery or peer finding**: HSIP does not include a directory, DHT, or discovery mechanism. Peers must already know each other's IP addresses and public keys.
+All `/v1/*` endpoints require a valid bearer API key. Keys are stored as BLAKE3 hashes in the database — the plaintext key is shown only once on creation and never stored. An attacker who reads the database cannot recover plaintext API keys.
 
-- **Multi-party or group communication**: HSIP is peer-to-peer. Group chat, broadcast, or multicast is not supported.
+The admin key (created at first startup) is required to provision new tenant keys. Per-tenant keys are scoped to that tenant's data only.
 
-- **Long-term key management**: HSIP does not include key rotation, revocation lists, or certificate authorities. If a key is compromised, there's no standard way to revoke it.
+**Guarantee**: No cross-tenant data access is possible through the API without possession of a valid key for that tenant.
 
-- **Legal enforceability outside the protocol**: HSIP generates evidence, but whether that evidence is admissible in court depends on jurisdiction, local rules, and expert testimony. HSIP does not guarantee legal outcomes.
+### 6. Audit Log Manipulation
+
+Every security-relevant operation (identity creation, key rotation, credential issuance, credential revocation, consent grants and revocations, GDPR erasure) is recorded in the `audit_entries` table with action type, timestamp, and relevant peer key. Audit entries are append-only — there is no update or delete endpoint for audit records.
+
+**Guarantee**: The audit log is a complete, append-only record of all consent and identity operations for compliance and legal evidence purposes.
+
+### 7. Unauthorized Peer Access
+
+The consent system (`/v1/consent`) tracks which peer public keys a tenant has explicitly granted access to, and for how long. Applications integrating HSIP can check consent status before serving data to a peer. Consents expire automatically based on the configured TTL (default: 1 hour, configurable per grant).
+
+**Guarantee**: Consent grants are time-bounded and instantly revocable.
+
+### 8. Non-Repudiation of Messages
+
+Messages signed via `POST /v1/messages/sign` carry Ed25519 signatures over the message content and timestamp. The signing tenant cannot later deny having signed a message — the signature is verifiable by any party who knows the tenant's `verify_key`.
+
+**Guarantee**: Signed messages provide cryptographic non-repudiation.
+
+### 9. Signing Key Exposure at Rest
+
+Tenant signing keys are encrypted using ChaCha20-Poly1305 with HKDF key derivation from the server master key before being stored in the database. An attacker who reads the database without the master key cannot recover tenant signing keys.
+
+**Guarantee**: Database compromise alone does not expose signing keys.
+
+---
+
+## What HSIP Does Not Protect Against
+
+### Endpoint Compromise
+
+If the HSIP server itself is compromised (OS-level access, process injection), an attacker can read the master key from memory, decrypt all tenant signing keys, and forge arbitrary credentials. HSIP is not designed to resist a fully compromised host.
+
+**Mitigation**: Use OS-level hardening, container isolation, and secrets management (e.g., HashiCorp Vault for the master key) to reduce risk.
+
+### API Key Theft
+
+If a tenant's API key is stolen (e.g., via credential leak, environment variable exposure, or insider access), an attacker can issue credentials, revoke existing ones, and access all data for that tenant until the key is rotated. HSIP does not detect unauthorized key use.
+
+**Mitigation**: Use short-lived API keys (`expires_in_days`), rotate keys regularly, restrict key permissions by `agent_type`, and monitor the `/v1/audit` log for anomalous activity.
+
+### Consent Coercion
+
+HSIP enforces cryptographic consent, not voluntary human consent. If a user is coerced into granting consent, the credential is cryptographically valid even though the human decision was not free. HSIP cannot distinguish coerced consent from genuine consent.
+
+**Out of scope**: Social engineering, duress, or deception leading to consent grants.
+
+### Quantum Cryptography
+
+HSIP uses Ed25519 (elliptic curve) and ChaCha20-Poly1305, which are not quantum-safe. A sufficiently powerful quantum computer could forge Ed25519 signatures or break key derivation. Post-quantum cryptography is reserved for a future phase (capability flag already exists in the protocol).
+
+**Out of scope**: Quantum adversaries.
+
+### Side-Channel Attacks
+
+HSIP does not protect against timing attacks on signing operations, power analysis, or other hardware-level side channels. Constant-time comparisons are used for nonce validation but not uniformly throughout the codebase.
+
+**Out of scope**: Physical or hardware-level side channels.
+
+### Large-Scale DoS
+
+The API includes in-memory rate limiting and request size enforcement, but a distributed botnet with sufficient volume can exhaust connection pools, CPU, or memory. HSIP is not designed to withstand nation-state-level denial of service.
+
+**Mitigation**: Deploy behind a CDN or DDoS protection layer (Cloudflare, AWS Shield) for production.
+
+### Network-Level Traffic Analysis
+
+HSIP encrypts data in transit (TLS) but does not hide traffic patterns, request timing, or the fact that two parties are communicating. Observers on the network can see that a client is calling the HSIP API even if they cannot read the content.
+
+**Out of scope**: Anonymity or metadata privacy.
+
+### Malicious Content in Credentials
+
+HSIP signs and verifies the `claim` and `user_token` fields as strings but does not interpret, sanitize, or validate their semantic meaning. An application can issue a credential with any claim value. HSIP does not prevent issuance of misleading or malicious claim strings.
+
+**Mitigation**: Enforce claim validation at the application layer before calling `/v1/credentials/issue`.
+
+### Third-Party Dependency Vulnerabilities
+
+HSIP depends on external crates (ed25519-dalek, axum, sqlx, chacha20poly1305, blake3). Vulnerabilities in these dependencies could compromise HSIP security. Use `cargo audit` regularly and monitor the RustSec advisory database.
+
+---
+
+## Trust Boundaries
+
+| Boundary | Trust Level | Notes |
+|---|---|---|
+| HTTPS API client → HSIP server | Authenticated | Valid bearer key required |
+| HSIP server → database | Trusted | Database should not be publicly accessible |
+| Master key storage → HSIP server | Critical | Compromise = all signing keys exposed |
+| Tenant A ↔ Tenant B | Untrusted | Tenant isolation enforced by tenant_id scoping |
+| Admin key holder | Full | Can provision all tenant keys; protect carefully |
 
 ---
 
 ## Residual Risks
 
-Even with all protections active, HSIP has residual risks:
+1. **In-memory rate limiter**: The rate limiter resets on server restart. A burst attack timed around deployments or crashes may bypass rate limits temporarily.
 
-1. **Clock skew**: HSIP allows 5 minutes of clock skew for timestamp checks. An attacker can replay requests within that window if they intercept them.
+2. **SQLite in development**: The default development config uses SQLite in-memory. Data is lost on restart. Do not use in-memory SQLite for production.
 
-2. **Memory limits**: Audit logs are capped at 50,000 entries in memory. Older entries are evicted. If an attacker generates enough events, early evidence may be lost unless exported to durable storage.
+3. **TTL clock skew**: Expiration checks use server time. If the server clock is incorrect, credentials may expire early or late. Use NTP synchronization in production.
 
-3. **Export integrity**: Exports include tamper-detection metadata, but HSIP does not enforce external storage or backup. If logs are deleted before export, there's no recovery.
+4. **Admin key bootstrapping**: On first run, the admin key is written to `hsip_admin_key.txt`. If this file is accessible to unauthorized parties, they gain full control. Secure file permissions immediately after first run.
 
-4. **Computational cost**: Signature verification is cheap (sub-millisecond on modern CPUs), but not free. An attacker with enough volume can still cause CPU spikes even within rate limits.
-
-5. **IPv6 address space**: Rate limits are per-IP. An attacker with a /64 IPv6 block can distribute attacks across trillions of source addresses. HSIP does not aggregate by prefix in Phase 1.
+5. **Audit log size**: Audit entries are stored indefinitely in the database. High-volume deployments should implement log rotation or archival to prevent unbounded storage growth.
 
 ---
 
-## Threat Actors HSIP Is Designed For
+## Threat Actors
 
-### In scope (Phase 1 targets these):
+### In Scope
 
-- **Amateur harassers**: Individuals sending unsolicited messages or low-volume spam. HSIP's consent layer blocks these entirely.
+- **Unauthorized API callers**: Clients without a valid bearer token. Blocked by authentication middleware.
+- **Credential tamperers**: Attackers attempting to modify intercepted credentials. Blocked by Ed25519 signature verification.
+- **Stale credential replay**: Using an expired or revoked credential. Blocked by server-side expiration and revocation checks.
+- **Cross-tenant data access**: One tenant attempting to access another's data. Blocked by tenant_id scoping.
+- **Audit log erasure**: Attempting to delete audit records. No delete endpoint exists for audit entries.
 
-- **Intermediate attackers**: Small-scale DoS attempts, replay attacks, or attempts to forge consent. Rate limits and cryptographic binding prevent these.
+### Out of Scope
 
-- **Evidence collection for litigation**: Domestic violence survivors, stalking victims, or others who need court-admissible proof of who contacted them and when.
-
-### Out of scope (Phase 1 does not claim to stop these):
-
-- **Nation-state adversaries**: Attackers with access to backbone infrastructure, zero-day exploits, or quantum computers.
-
-- **Large-scale DDoS**: Botnets with millions of nodes can overwhelm any single endpoint regardless of rate limits.
-
-- **Insider threats**: Someone with legitimate access to keys or infrastructure.
-
----
-
-## Testing and Validation
-
-HSIP Phase 1 includes:
-
-- Unit tests for cryptographic primitives
-- Integration tests for handshake and consent flows
-- Formal verification hooks (optional Z3-based proofs of consent non-forgery, temporal consistency, identity binding)
-- Security test suite for OWASP Top 10 classes of attacks
-
-HSIP does not include:
-
-- Third-party security audit (not yet funded)
-- Penetration testing against live deployments
-- Fuzzing of wire protocol parsers (planned for Phase 2)
+- **Nation-state adversaries** with access to the host OS or network infrastructure.
+- **Compromised server** (root access, memory dump, or hardware-level attacks).
+- **Quantum computers** capable of breaking elliptic curve cryptography.
+- **Social engineering** of users into granting consent they do not intend.
+- **Large-scale DDoS** exceeding the capacity of the deployment infrastructure.
 
 ---
 
-## Comparison to Other Protocols
+## API Security Controls Summary
 
-- **vs. TLS**: HSIP enforces consent before data exchange. TLS authenticates servers but does not require recipient consent for each connection.
-
-- **vs. Signal Protocol**: Signal provides strong endpoint security and forward secrecy for messaging. HSIP focuses on consent enforcement and evidence generation, not confidentiality of long-term conversations.
-
-- **vs. WireGuard**: WireGuard is a VPN protocol optimized for performance. HSIP is a consent layer, not a tunneling protocol.
-
-- **vs. Tor**: Tor provides anonymity. HSIP explicitly does not hide identities or metadata.
-
----
-
-## Deployment Considerations
-
-**Safe to use HSIP for:**
-
-- Personal communication between mutually consenting parties who want cryptographic proof of consent
-- Environments where legal evidence of consent is required (restraining orders, stalking cases)
-- Testing and educational purposes
-
-**Do not use HSIP as the sole protection for:**
-
-- Systems requiring anonymity
-- High-value targets likely to attract nation-state attackers
-- Applications where consent coercion is a risk (use additional out-of-band verification)
-- Safety-critical systems where availability is essential (HSIP can be DoS'd)
+| Control | Implementation |
+|---|---|
+| Authentication | Bearer API keys (BLAKE3-hashed in DB) |
+| Authorization | Tenant isolation via tenant_id |
+| Transport security | TLS (rustls, configurable) |
+| Credential integrity | Ed25519 signatures |
+| Signing key protection | ChaCha20-Poly1305 encryption at rest |
+| Revocation | Immediate, server-side, checked on every verify call |
+| Expiration | Server-side TTL enforcement |
+| Audit trail | Append-only, covers all security-relevant operations |
+| Rate limiting | In-memory per-endpoint limits |
+| GDPR erasure | `/v1/tenant/erase` permanently removes all tenant data |
 
 ---
 
-## Updates and Scope Expansion
+## Out of Scope for Phase 1
 
-This threat model applies to **HSIP Phase 1** as of January 2026.
-
-Future phases may add:
-
-- Post-quantum cryptography (reserved capability flag already exists)
-- Prefix-based IPv6 rate limiting
-- Distributed audit log verification
-- Federation or discovery mechanisms
-
-This document will be updated as the protocol evolves. The version number and last-updated date at the top indicate the current scope.
+- Post-quantum cryptography (reserved for Phase 2)
+- Federated or cross-server credential verification
+- Key revocation certificates or a PKI infrastructure
+- Webhook notifications for revocation events
+- Hardware security module (HSM) integration for master key storage
+- Anonymous or privacy-preserving credential schemes
 
 ---
 
 ## Questions This Document Answers
 
-**Q: Can HSIP stop a determined attacker from disrupting my communication?**
-A: No. HSIP reduces the cost of attacks and makes them visible in logs, but a sufficiently resourced attacker can still cause disruption.
+**Q: Can a credential be forged by someone who intercepts it?**
+A: No. Ed25519 signatures cannot be forged without the signing key. Intercepted credentials can be replayed (until expiration or revocation) but not modified.
 
-**Q: Is HSIP safe to use for activists under government surveillance?**
-A: No. HSIP does not provide anonymity and is not designed to resist nation-state adversaries.
+**Q: What happens if a signing key is compromised?**
+A: All credentials issued by that tenant become suspect. Rotate the key immediately via `POST /v1/identity/rotate`. Existing issued credentials retain the old `issuer_verify_key` and should be treated as potentially forged after a key compromise.
 
-**Q: Will HSIP logs be admissible in court?**
-A: That depends on your jurisdiction and legal representation. HSIP generates tamper-evident evidence, but admissibility is a legal question, not a technical one.
+**Q: Can HSIP credentials be verified without calling the HSIP API?**
+A: Signature verification is mathematically self-contained — any Ed25519 library can verify a credential's signature offline using the `issuer_verify_key`. However, revocation and expiration status require calling `POST /v1/credentials/verify` against the HSIP server.
 
-**Q: Can I use HSIP to prove someone did NOT contact me?**
-A: No. HSIP only logs events that happen. Proving absence requires continuous monitoring and is outside the protocol's scope.
+**Q: Is HSIP GDPR-compliant?**
+A: HSIP provides the technical primitives for GDPR compliance (cryptographic consent records, right-to-erasure via `/v1/tenant/erase`, audit trail). Whether a deployment is GDPR-compliant depends on how the application uses HSIP, not on HSIP alone.
 
-**Q: What happens if my signing key is stolen?**
-A: An attacker can impersonate you for future communications. HSIP Phase 1 does not include key revocation. Generate a new keypair and notify your contacts out of band.
+**Q: Can the audit log be falsified?**
+A: Not through the API — there is no update or delete endpoint for audit entries. A compromise of the database or server OS could allow direct database manipulation. Use database-level access controls and audit your infrastructure access separately.
 
 ---
 
 ## Summary
 
-HSIP Phase 1 enforces consent and generates evidence. It protects against unauthorized contact, impersonation, and replay attacks. It does not protect against nation-states, anonymity threats, or large-scale DDoS.
+HSIP Phase 1 is a cryptographic consent management API. It protects against credential forgery, unauthorized data access, replay of revoked or expired credentials, and identity impersonation. It generates an append-only audit log for compliance.
 
-If your threat model requires anonymity, resistance to advanced persistent threats, or guarantees of availability under attack, HSIP Phase 1 is not sufficient by itself.
+HSIP does not protect against a compromised server host, stolen API keys, consent coercion, quantum adversaries, or large-scale DDoS.
 
-Use HSIP for what it's built to do: making consent cryptographically enforceable and generating court-ready logs of who contacted whom and when.
+Deploy HSIP behind TLS, restrict database access, secure the master key, and monitor the audit log for anomalous activity.
