@@ -10,14 +10,16 @@ import ProveIt         from './pages/ProveIt';
 import ConsentWallet   from './pages/ConsentWallet';
 import AIWatch         from './pages/AIWatch';
 import TrackerInspector from './pages/TrackerInspector';
-import Onboarding      from './pages/Onboarding';
+import ProtectionSetup  from './pages/ProtectionSetup';
+import Onboarding       from './pages/Onboarding';
 import './App.css';
 
 const SIMPLE_TABS = [
-  { id: 'prove-it',        label: '✍️ Prove It' },
-  { id: 'consent-wallet',  label: '🛡️ My Consents' },
-  { id: 'ai-watch',        label: '🤖 AI Watch' },
+  { id: 'prove-it',          label: '✍️ Prove It' },
+  { id: 'consent-wallet',    label: '🛡️ My Consents' },
+  { id: 'ai-watch',          label: '🤖 AI Watch' },
   { id: 'tracker-inspector', label: '🔍 Trackers' },
+  { id: 'protection',        label: '🔒 Protection' },
 ];
 
 const EXPERT_TABS = ['identity', 'consent', 'messages', 'credentials', 'audit', 'keys'];
@@ -164,6 +166,7 @@ export default function App() {
             {tab === 'consent-wallet'    && <ConsentWallet    apiKey={apiKey} />}
             {tab === 'ai-watch'          && <AIWatch          apiKey={apiKey} />}
             {tab === 'tracker-inspector' && <TrackerInspector />}
+            {tab === 'protection'        && <ProtectionSetup />}
           </>
         ) : (
           <>
