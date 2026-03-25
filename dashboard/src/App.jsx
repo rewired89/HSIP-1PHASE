@@ -1,32 +1,37 @@
 import React, { useState } from 'react';
 import { request } from './api';
-import Identity     from './pages/Identity';
-import Consent      from './pages/Consent';
-import Messages     from './pages/Messages';
-import Audit        from './pages/Audit';
-import Keys         from './pages/Keys';
-import Credentials  from './pages/Credentials';
-import ProveIt      from './pages/ProveIt';
-import ConsentWallet from './pages/ConsentWallet';
-import AIWatch      from './pages/AIWatch';
+import Identity        from './pages/Identity';
+import Consent         from './pages/Consent';
+import Messages        from './pages/Messages';
+import Audit           from './pages/Audit';
+import Keys            from './pages/Keys';
+import Credentials     from './pages/Credentials';
+import ProveIt         from './pages/ProveIt';
+import ConsentWallet   from './pages/ConsentWallet';
+import AIWatch         from './pages/AIWatch';
+import TrackerInspector from './pages/TrackerInspector';
+import Onboarding      from './pages/Onboarding';
 import './App.css';
 
 const SIMPLE_TABS = [
-  { id: 'prove-it',       label: '✍️ Prove It' },
-  { id: 'consent-wallet', label: '🛡️ My Consents' },
-  { id: 'ai-watch',       label: '🤖 AI Watch' },
+  { id: 'prove-it',        label: '✍️ Prove It' },
+  { id: 'consent-wallet',  label: '🛡️ My Consents' },
+  { id: 'ai-watch',        label: '🤖 AI Watch' },
+  { id: 'tracker-inspector', label: '🔍 Trackers' },
 ];
 
 const EXPERT_TABS = ['identity', 'consent', 'messages', 'credentials', 'audit', 'keys'];
 
 export default function App() {
-  const [apiKey, setApiKey] = useState(localStorage.getItem('hsip_api_key') || '');
-  const [authed, setAuthed] = useState(false);
-  const [error,  setError]  = useState('');
-  const [mode,   setMode]   = useState(localStorage.getItem('hsip_mode') || 'simple');
-  const [tab,    setTab]    = useState(
+  const [apiKey,    setApiKey]    = useState(localStorage.getItem('hsip_api_key') || '');
+  const [authed,    setAuthed]    = useState(false);
+  const [error,     setError]     = useState('');
+  const [mode,      setMode]      = useState(localStorage.getItem('hsip_mode') || 'simple');
+  const [tab,       setTab]       = useState(
     localStorage.getItem('hsip_mode') === 'expert' ? 'identity' : 'prove-it'
   );
+  // Show onboarding if user has never completed it
+  const [onboarding, setOnboarding] = useState(false);
 
   function switchMode(m) {
     setMode(m);
@@ -41,6 +46,10 @@ export default function App() {
       localStorage.setItem('hsip_api_key', apiKey);
       setAuthed(true);
       setError('');
+      // Show onboarding on first ever login (simple mode only)
+      if (!localStorage.getItem('hsip_onboarding_done') && mode === 'simple') {
+        setOnboarding(true);
+      }
     } catch {
       setError('Invalid access key. Please check and try again.');
     }
@@ -96,6 +105,11 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* First-run onboarding overlay */}
+      {onboarding && (
+        <Onboarding onComplete={() => setOnboarding(false)} />
+      )}
+
       <header>
         <h1 className="app-title">
           HSIP {mode === 'expert' && <span className="mode-badge">Dev</span>}
@@ -122,6 +136,15 @@ export default function App() {
               ))
           }
           <div className="nav-right">
+            {mode === 'simple' && (
+              <button
+                className="mode-switch-btn ob-replay-btn"
+                onClick={() => setOnboarding(true)}
+                title="What does HSIP do on my machine?"
+              >
+                ❓ What is HSIP?
+              </button>
+            )}
             <button
               className="mode-switch-btn"
               onClick={() => switchMode(mode === 'simple' ? 'expert' : 'simple')}
@@ -137,9 +160,10 @@ export default function App() {
       <main>
         {mode === 'simple' ? (
           <>
-            {tab === 'prove-it'       && <ProveIt       apiKey={apiKey} />}
-            {tab === 'consent-wallet' && <ConsentWallet apiKey={apiKey} />}
-            {tab === 'ai-watch'       && <AIWatch       apiKey={apiKey} />}
+            {tab === 'prove-it'          && <ProveIt          apiKey={apiKey} />}
+            {tab === 'consent-wallet'    && <ConsentWallet    apiKey={apiKey} />}
+            {tab === 'ai-watch'          && <AIWatch          apiKey={apiKey} />}
+            {tab === 'tracker-inspector' && <TrackerInspector />}
           </>
         ) : (
           <>
