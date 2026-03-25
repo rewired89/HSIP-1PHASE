@@ -34,3 +34,226 @@ button.primary:hover { background: #4f46e5; }
 button.danger { padding: 0.5rem 1rem; background: transparent; border: 1px solid #e53e3e; border-radius: 6px; color: #fc8181; cursor: pointer; font-size: 0.8rem; }
 button.danger:hover { background: #63171b; }
 .empty { color: #718096; text-align: center; padding: 2rem; }
+
+/* ── Login enhancements ─────────────────────────────────────────────── */
+.login-logo { font-size: 2.5rem; margin-bottom: 0.5rem; }
+.login-hint { color: #718096; font-size: 0.8rem; margin-top: 1rem; }
+
+.mode-toggle-login {
+  display: flex;
+  gap: 0;
+  background: #0f1117;
+  border: 1px solid #2d3748;
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 1.25rem;
+}
+.mode-toggle-login button {
+  flex: 1;
+  padding: 0.5rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #718096;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.15s;
+}
+.mode-toggle-login button.active { background: #6366f1; color: white; }
+
+/* ── Header additions ───────────────────────────────────────────────── */
+.app-title { font-size: 1.25rem; color: #6366f1; display: flex; align-items: center; gap: 0.5rem; }
+.mode-badge {
+  font-size: 0.65rem;
+  background: #2d3748;
+  color: #718096;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.nav-right { margin-left: auto; display: flex; gap: 0.5rem; }
+.mode-switch-btn {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid #4a5568;
+  border-radius: 6px;
+  color: #a0aec0;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.mode-switch-btn:hover { background: #2d3748; color: #e2e8f0; border-color: #718096; }
+
+/* ── Consumer hero ──────────────────────────────────────────────────── */
+.consumer-hero {
+  text-align: center;
+  padding: 2rem 1rem 1.5rem;
+  margin-bottom: 1rem;
+}
+.consumer-hero-icon { font-size: 2.75rem; margin-bottom: 0.75rem; }
+.consumer-hero h2   { font-size: 1.75rem; margin-bottom: 0.5rem; color: #e2e8f0; }
+.consumer-hero p    { color: #718096; max-width: 520px; margin: 0 auto; line-height: 1.6; }
+
+/* ── Consumer tab switcher ──────────────────────────────────────────── */
+.consumer-tabs {
+  display: flex;
+  gap: 0;
+  background: #1a1d27;
+  border: 1px solid #2d3748;
+  border-radius: 10px;
+  padding: 4px;
+  margin-bottom: 1rem;
+  max-width: 380px;
+}
+.consumer-tabs button {
+  flex: 1;
+  padding: 0.6rem 1rem;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: #718096;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.15s;
+}
+.consumer-tabs button.active { background: #6366f1; color: white; }
+
+/* ── Form helpers ───────────────────────────────────────────────────── */
+.consumer-field-label { font-size: 0.875rem; font-weight: 600; color: #a0aec0; margin-bottom: 0.25rem; }
+.consumer-field-hint  { font-size: 0.8rem; color: #718096; margin-bottom: 0.25rem; line-height: 1.5; }
+.consumer-action-btn  { width: 100%; margin-top: 0.25rem; }
+.consumer-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.consumer-reset-btn {
+  background: transparent;
+  border: none;
+  color: #718096;
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 0.5rem 0;
+  text-decoration: underline;
+}
+.consumer-reset-btn:hover { color: #a0aec0; }
+
+/* ── Proof result ───────────────────────────────────────────────────── */
+.proof-result { }
+.proof-result-header { display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 1rem; }
+.proof-check { font-size: 1.75rem; flex-shrink: 0; }
+.proof-meta { color: #718096; font-size: 0.85rem; margin-top: 0.2rem; }
+.proof-message-preview {
+  background: #0f1117;
+  border-left: 3px solid #6366f1;
+  padding: 0.75rem 1rem;
+  border-radius: 0 6px 6px 0;
+  color: #e2e8f0;
+  font-style: italic;
+  line-height: 1.5;
+  margin-top: 0.5rem;
+}
+.cert-display { font-size: 0.72rem; max-height: 200px; overflow-y: auto; }
+
+/* ── Explainer card ─────────────────────────────────────────────────── */
+.consumer-explainer h3  { font-size: 1rem; margin-bottom: 1rem; color: #a0aec0; text-transform: uppercase; letter-spacing: 0.05em; }
+.explainer-body { color: #718096; line-height: 1.7; font-size: 0.9rem; }
+.explainer-steps { display: flex; flex-direction: column; gap: 1rem; }
+.explainer-step  { display: flex; gap: 1rem; align-items: flex-start; }
+.explainer-step span {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  background: #6366f1;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.8rem; font-weight: 700;
+}
+.explainer-step p { color: #718096; font-size: 0.875rem; line-height: 1.6; margin: 0; }
+
+/* ── Wallet summary ─────────────────────────────────────────────────── */
+.wallet-summary {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+}
+.wallet-stat { display: flex; flex-direction: column; }
+.wallet-stat-number { font-size: 1.75rem; font-weight: 700; color: #6366f1; line-height: 1; }
+.wallet-stat-label  { font-size: 0.75rem; color: #718096; margin-top: 0.2rem; }
+
+/* ── Grant panel ────────────────────────────────────────────────────── */
+.grant-panel h3   { font-size: 1rem; margin-bottom: 0.5rem; }
+.grant-desc { color: #718096; font-size: 0.875rem; margin-bottom: 1rem; line-height: 1.5; }
+.duration-selector { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.4rem; }
+.dur-btn {
+  padding: 0.4rem 0.9rem;
+  background: transparent;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  color: #718096;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.dur-btn.active { background: #6366f1; color: white; border-color: #6366f1; }
+.dur-btn:hover:not(.active) { border-color: #4a5568; color: #a0aec0; }
+
+/* ── Consent cards ──────────────────────────────────────────────────── */
+.consent-cards        { display: flex; flex-direction: column; gap: 0.75rem; }
+.consent-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #0f1117;
+  border: 1px solid #2d3748;
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+}
+.consent-card-inactive { opacity: 0.55; }
+.consent-card-left { display: flex; align-items: center; gap: 0.75rem; }
+.consent-avatar    { font-size: 1.5rem; }
+.consent-id        { font-family: monospace; font-size: 0.8rem; color: #a0aec0; }
+.consent-expires   { font-size: 0.75rem; color: #718096; margin-top: 0.2rem; }
+
+/* ── AI Watch ───────────────────────────────────────────────────────── */
+.aiwatch-empty {
+  text-align: center;
+  padding: 2rem;
+  color: #718096;
+}
+.aiwatch-empty-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+.aiwatch-empty strong { display: block; color: #e2e8f0; margin-bottom: 0.25rem; }
+
+.aiwatch-alert-card { border-color: #d69e2e !important; background: #1a1506 !important; }
+.aiwatch-alert-header { font-weight: 700; color: #f6e05e; font-size: 1rem; margin-bottom: 0.5rem; }
+.aiwatch-alert-body   { color: #fed7aa; font-size: 0.875rem; margin-bottom: 1rem; line-height: 1.5; }
+.aiwatch-normal-note  { color: #718096; font-size: 0.875rem; margin-bottom: 1rem; }
+
+.agent-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #0f1117;
+  border: 1px solid #2d3748;
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  margin-top: 0.75rem;
+}
+.agent-card-anomalous { border-color: #d69e2e; background: #1a1203; }
+.agent-card-left { display: flex; align-items: center; gap: 0.75rem; }
+.agent-icon  { font-size: 1.5rem; }
+.agent-name  { font-size: 0.9rem; font-weight: 600; color: #e2e8f0; }
+.agent-stats { font-size: 0.78rem; color: #718096; margin-top: 0.2rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.agent-dot   { color: #4a5568; }
+.agent-anomaly { color: #fc8181; }
+
+/* ── Protection grid ────────────────────────────────────────────────── */
+.protection-card h2 { margin-bottom: 1rem; }
+.protection-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 600px) { .protection-grid { grid-template-columns: 1fr; } }
+.protection-item {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+.protection-item > span { font-size: 1.5rem; flex-shrink: 0; }
+.protection-item strong { display: block; font-size: 0.9rem; margin-bottom: 0.25rem; color: #e2e8f0; }
+.protection-item p      { font-size: 0.8rem; color: #718096; line-height: 1.5; margin: 0; }

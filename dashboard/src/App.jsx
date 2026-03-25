@@ -1,18 +1,38 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { request } from './api';
-import Identity    from './pages/Identity';
-import Consent     from './pages/Consent';
-import Messages    from './pages/Messages';
-import Audit       from './pages/Audit';
-import Keys        from './pages/Keys';
-import Credentials from './pages/Credentials';
+import Identity     from './pages/Identity';
+import Consent      from './pages/Consent';
+import Messages     from './pages/Messages';
+import Audit        from './pages/Audit';
+import Keys         from './pages/Keys';
+import Credentials  from './pages/Credentials';
+import ProveIt      from './pages/ProveIt';
+import ConsentWallet from './pages/ConsentWallet';
+import AIWatch      from './pages/AIWatch';
 import './App.css';
 
+const SIMPLE_TABS = [
+  { id: 'prove-it',       label: '✍️ Prove It' },
+  { id: 'consent-wallet', label: '🛡️ My Consents' },
+  { id: 'ai-watch',       label: '🤖 AI Watch' },
+];
+
+const EXPERT_TABS = ['identity', 'consent', 'messages', 'credentials', 'audit', 'keys'];
+
 export default function App() {
-  const [apiKey,  setApiKey]  = useState(localStorage.getItem('hsip_api_key') || '');
-  const [tab,     setTab]     = useState('identity');
-  const [authed,  setAuthed]  = useState(false);
-  const [error,   setError]   = useState('');
+  const [apiKey, setApiKey] = useState(localStorage.getItem('hsip_api_key') || '');
+  const [authed, setAuthed] = useState(false);
+  const [error,  setError]  = useState('');
+  const [mode,   setMode]   = useState(localStorage.getItem('hsip_mode') || 'simple');
+  const [tab,    setTab]    = useState(
+    localStorage.getItem('hsip_mode') === 'expert' ? 'identity' : 'prove-it'
+  );
+
+  function switchMode(m) {
+    setMode(m);
+    localStorage.setItem('hsip_mode', m);
+    setTab(m === 'simple' ? 'prove-it' : 'identity');
+  }
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -22,59 +42,115 @@ export default function App() {
       setAuthed(true);
       setError('');
     } catch {
-      setError('Invalid API key');
+      setError('Invalid access key. Please check and try again.');
     }
+  }
+
+  function logout() {
+    localStorage.removeItem('hsip_api_key');
+    setAuthed(false);
   }
 
   if (!authed) {
     return (
       <div className="login-screen">
         <div className="login-card">
-          <h1>🔐 HSIP Dashboard</h1>
-          <p>Cryptographic consent &amp; message verification</p>
+          <div className="login-logo">🔐</div>
+          <h1>HSIP</h1>
+          <p>{mode === 'simple' ? 'Your personal data security hub' : 'Cryptographic consent & verification'}</p>
+
+          <div className="mode-toggle-login">
+            <button
+              className={mode === 'simple' ? 'active' : ''}
+              onClick={() => switchMode('simple')}
+            >
+              For Everyone
+            </button>
+            <button
+              className={mode === 'expert' ? 'active' : ''}
+              onClick={() => switchMode('expert')}
+            >
+              Developer Mode
+            </button>
+          </div>
+
           <form onSubmit={handleLogin}>
             <input
               type="text"
-              placeholder="Enter API key (hsip_...)"
+              placeholder={mode === 'simple' ? 'Enter your access key (hsip_…)' : 'Enter API key (hsip_…)'}
               value={apiKey}
               onChange={e => setApiKey(e.target.value)}
             />
-            <button type="submit">Connect</button>
+            <button type="submit">{mode === 'simple' ? 'Enter' : 'Connect'}</button>
           </form>
           {error && <p className="error">{error}</p>}
+          {mode === 'simple' && (
+            <p className="login-hint">
+              Don't have a key? Ask your administrator or check your setup guide.
+            </p>
+          )}
         </div>
       </div>
     );
   }
 
-  const tabs = ['identity', 'consent', 'messages', 'credentials', 'audit', 'keys'];
-
   return (
     <div className="app">
       <header>
-        <h1>HSIP Dashboard</h1>
+        <h1 className="app-title">
+          HSIP {mode === 'expert' && <span className="mode-badge">Dev</span>}
+        </h1>
         <nav>
-          {tabs.map(t => (
+          {mode === 'simple'
+            ? SIMPLE_TABS.map(t => (
+                <button
+                  key={t.id}
+                  className={tab === t.id ? 'active' : ''}
+                  onClick={() => setTab(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))
+            : EXPERT_TABS.map(t => (
+                <button
+                  key={t}
+                  className={tab === t ? 'active' : ''}
+                  onClick={() => setTab(t)}
+                >
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
+                </button>
+              ))
+          }
+          <div className="nav-right">
             <button
-              key={t}
-              className={tab === t ? 'active' : ''}
-              onClick={() => setTab(t)}
+              className="mode-switch-btn"
+              onClick={() => switchMode(mode === 'simple' ? 'expert' : 'simple')}
+              title={mode === 'simple' ? 'Switch to Developer Mode' : 'Switch to Simple Mode'}
             >
-              {t.charAt(0).toUpperCase() + t.slice(1)}
+              {mode === 'simple' ? '⚙️ Dev Mode' : '👤 Simple Mode'}
             </button>
-          ))}
-          <button onClick={() => { localStorage.removeItem('hsip_api_key'); setAuthed(false); }}>
-            Logout
-          </button>
+            <button onClick={logout}>Logout</button>
+          </div>
         </nav>
       </header>
+
       <main>
-        {tab === 'identity'    && <Identity    apiKey={apiKey} />}
-        {tab === 'consent'     && <Consent     apiKey={apiKey} />}
-        {tab === 'messages'    && <Messages    apiKey={apiKey} />}
-        {tab === 'credentials' && <Credentials apiKey={apiKey} />}
-        {tab === 'audit'       && <Audit       apiKey={apiKey} />}
-        {tab === 'keys'        && <Keys        apiKey={apiKey} />}
+        {mode === 'simple' ? (
+          <>
+            {tab === 'prove-it'       && <ProveIt       apiKey={apiKey} />}
+            {tab === 'consent-wallet' && <ConsentWallet apiKey={apiKey} />}
+            {tab === 'ai-watch'       && <AIWatch       apiKey={apiKey} />}
+          </>
+        ) : (
+          <>
+            {tab === 'identity'    && <Identity    apiKey={apiKey} />}
+            {tab === 'consent'     && <Consent     apiKey={apiKey} />}
+            {tab === 'messages'    && <Messages    apiKey={apiKey} />}
+            {tab === 'credentials' && <Credentials apiKey={apiKey} />}
+            {tab === 'audit'       && <Audit       apiKey={apiKey} />}
+            {tab === 'keys'        && <Keys        apiKey={apiKey} />}
+          </>
+        )}
       </main>
     </div>
   );
