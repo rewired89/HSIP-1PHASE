@@ -1,3 +1,7 @@
+// On Windows release builds, suppress the console window so the app
+// runs silently in the background (browser opens automatically).
+#![cfg_attr(all(windows, feature = "embed-dashboard"), windows_subsystem = "windows")]
+
 use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
