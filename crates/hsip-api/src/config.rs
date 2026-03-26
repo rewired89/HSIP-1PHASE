@@ -76,21 +76,18 @@ pub enum LogFormat {
 
 /// Normalise a SQLite URL so it works correctly on all platforms including Windows.
 ///
-/// Converts:
-///   `sqlite:C:\Users\foo\hsip.db`  →  `sqlite:///C:/Users/foo/hsip.db`
-///   `sqlite:C:/Users/foo/hsip.db`  →  `sqlite:///C:/Users/foo/hsip.db`
-///   `sqlite:/home/user/.hsip/db`   →  `sqlite:///home/user/.hsip/db`
-///   `sqlite::memory:`              →  unchanged
+/// The only transformation applied is converting Windows backslashes to forward
+/// slashes. The scheme prefix is kept as `sqlite:` (no extra slashes added) so
+/// that sqlx receives the path in the form it can parse on each platform:
+///   Windows: `sqlite:C:\Users\foo\hsip.db` → `sqlite:C:/Users/foo/hsip.db`
+///   Unix:    `sqlite:/home/user/.hsip/db`  → unchanged
+///   Special: `sqlite::memory:`             → unchanged
 fn normalise_sqlite_url(url: &str) -> String {
-    let after_scheme = url.trim_start_matches("sqlite:");
-    // Already in canonical form or is a special form like :memory:
-    if after_scheme.starts_with("///") || after_scheme.starts_with(":") {
+    // Already a special form (:memory: etc.) — leave untouched
+    if url.contains(":memory:") {
         return url.to_string();
     }
-    // Strip any leading slashes and convert backslashes to forward slashes
-    let path = after_scheme.replace('\\', "/");
-    let path = path.trim_start_matches('/');
-    format!("sqlite:///{}", path)
+    url.replace('\\', "/")
 }
 
 fn default_true() -> bool { true }
@@ -235,14 +232,12 @@ impl Config {
         // Allow DATABASE_URL env var to override the default path (useful for debugging)
         let db_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| {
-                // Use the sqlite:/// (three-slash) URI form for absolute paths.
-                // This is the canonical form that sqlx handles correctly on all
-                // platforms, including Windows where backslashes would break parsing.
-                //   Unix:    /home/user/.hsip/hsip.db  → sqlite:///home/user/.hsip/hsip.db
-                //   Windows: C:\Users\...\hsip.db      → sqlite:///C:/Users/.../hsip.db
+                // Use sqlite: + path with forward slashes.
+                // Windows: C:\Users\...\hsip.db → sqlite:C:/Users/.../hsip.db
+                // Unix:    /home/user/.hsip/db  → sqlite:/home/user/.hsip/db
+                // Backslashes break sqlx's URL parser; forward slashes work on all platforms.
                 let path_fwd = db_path.to_string_lossy().replace('\\', "/");
-                let path_trimmed = path_fwd.trim_start_matches('/');
-                format!("sqlite:///{}", path_trimmed)
+                format!("sqlite:{}", path_fwd)
             });
 
         Ok(Config {
