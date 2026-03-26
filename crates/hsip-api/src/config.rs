@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -147,6 +147,93 @@ impl Config {
         }
 
         Ok(())
+    }
+}
+
+// ── Desktop / zero-config helpers ────────────────────────────────────────────
+
+/// Return the HSIP data directory:
+///   Windows → %APPDATA%\HSIP
+///   Unix    → ~/.hsip
+pub fn hsip_data_dir() -> PathBuf {
+    #[cfg(windows)]
+    let base = std::env::var("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    #[cfg(not(windows))]
+    let base = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    #[cfg(windows)]
+    return base.join("HSIP");
+    #[cfg(not(windows))]
+    return base.join(".hsip");
+}
+
+impl Config {
+    /// Build a zero-config setup that works out-of-the-box for desktop users.
+    ///
+    /// On first call it:
+    ///   1. Creates the HSIP data directory if it doesn't exist.
+    ///   2. Generates a random 32-byte master key and saves it as hex.
+    ///   3. Creates an empty admin key file (bootstrap_admin fills it on first run).
+    ///
+    /// Subsequent calls reuse whatever is already on disk.
+    pub fn desktop_defaults() -> Result<Self> {
+        use rand::RngCore;
+
+        let dir = hsip_data_dir();
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("Cannot create HSIP data directory: {}", dir.display()))?;
+
+        let master_key_path = dir.join("master.key");
+        let admin_key_path  = dir.join("admin.key");
+        let db_path         = dir.join("hsip.db");
+
+        // Generate master key on first run
+        if !master_key_path.exists() {
+            let mut raw = [0u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut raw);
+            fs::write(&master_key_path, hex::encode(raw))
+                .context("Cannot write master key")?;
+            tracing::info!("Generated new master key at {}", master_key_path.display());
+        }
+
+        // Create an empty placeholder for the admin key file
+        // (bootstrap_admin overwrites it with the real key on first DB setup)
+        if !admin_key_path.exists() {
+            fs::write(&admin_key_path, "")
+                .context("Cannot create admin key placeholder")?;
+        }
+
+        Ok(Config {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+                tls: None,
+            },
+            database: DatabaseConfig {
+                url: format!("sqlite:{}", db_path.display()),
+                max_connections: 5,
+                run_migrations: true,
+            },
+            security: SecurityConfig {
+                master_key_path: master_key_path.to_string_lossy().into_owned(),
+                admin_key_path:  admin_key_path.to_string_lossy().into_owned(),
+                rate_limit_per_minute: 300,
+            },
+            cors: CorsConfig {
+                allowed_origins: vec![
+                    "http://localhost:3000".to_string(),
+                    "http://127.0.0.1:3000".to_string(),
+                ],
+            },
+            metrics: MetricsConfig { token: None },
+            logging: LoggingConfig {
+                level: "info".to_string(),
+                format: LogFormat::Pretty,
+            },
+        })
     }
 }
 

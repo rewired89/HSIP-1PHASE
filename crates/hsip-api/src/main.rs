@@ -21,6 +21,7 @@ mod key_encryption;
 mod metrics;
 mod routes;
 mod state;
+mod static_files;
 
 use config::Config;
 use state::AppState;
@@ -33,19 +34,38 @@ async fn main() -> Result<()> {
 
     let config = match Config::load(&config_path) {
         Ok(cfg) => cfg,
+        Err(_) if config_path == "config.toml" => {
+            // No config.toml found — use zero-config desktop defaults.
+            // This is the normal path for users who downloaded the binary.
+            match config::Config::desktop_defaults() {
+                Ok(cfg) => {
+                    tracing::info!(
+                        "Desktop mode — data stored in {}",
+                        config::hsip_data_dir().display()
+                    );
+                    cfg
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to initialise desktop data directory: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
         Err(e) => {
             eprintln!("❌ Configuration error: {}", e);
             eprintln!("\nTo generate a sample config file, run:");
             eprintln!("  cp crates/hsip-api/config.toml.example config.toml");
-            eprintln!("\nThen edit config.toml with your settings.");
             std::process::exit(1);
         }
     };
 
-    // Validate configuration
-    if let Err(e) = config.validate() {
-        eprintln!("❌ Configuration validation failed: {}", e);
-        std::process::exit(1);
+    // Skip file-existence validation in desktop mode (admin.key may be a
+    // freshly-created empty placeholder that bootstrap_admin will fill).
+    if config_path != "config.toml" || std::path::Path::new("config.toml").exists() {
+        if let Err(e) = config.validate() {
+            eprintln!("❌ Configuration validation failed: {}", e);
+            std::process::exit(1);
+        }
     }
 
     // Initialize logging based on config
@@ -79,12 +99,20 @@ async fn main() -> Result<()> {
     // Request ID header
     let x_request_id = HeaderName::from_static("x-request-id");
 
-    let app = Router::new()
+    let mut app = Router::new()
         .merge(routes::router())
         .route("/metrics", get(metrics_handler))
         .route("/health",  get(health_handler))
         .route("/openapi.json", get(openapi_handler))
-        .route("/docs",    get(docs_handler))
+        .route("/docs",    get(docs_handler));
+
+    // Serve the embedded React dashboard on all non-API paths (release builds only)
+    #[cfg(feature = "embed-dashboard")]
+    {
+        app = app.fallback(static_files::serve);
+    }
+
+    let app = app
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .layer(SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid))
@@ -119,10 +147,25 @@ async fn main() -> Result<()> {
         tracing::warn!("⚠️  TLS is DISABLED - this is insecure for production!");
         tracing::warn!("   Configure [server.tls] in config.toml to enable HTTPS");
 
-        tracing::info!("🚀 HSIP API listening on http://{}", addr);
+        let url = format!("http://{}", addr);
+        tracing::info!("🚀 HSIP API listening on {}", url);
         tracing::info!("   Docs:    http://{}/docs", addr);
         tracing::info!("   Metrics: http://{}/metrics", addr);
         tracing::info!("   Health:  http://{}/health", addr);
+
+        // Auto-open the dashboard in the default browser (desktop/release builds)
+        #[cfg(feature = "embed-dashboard")]
+        {
+            let open_url = url.clone();
+            tokio::spawn(async move {
+                // Small delay so the server finishes binding before the browser hits it
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                if let Err(e) = webbrowser::open(&open_url) {
+                    tracing::warn!("Could not open browser automatically: {}", e);
+                    println!("\n  Open your browser at: {}\n", open_url);
+                }
+            });
+        }
 
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         axum::serve(listener, app).await?;

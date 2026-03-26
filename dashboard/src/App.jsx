@@ -98,11 +98,15 @@ export default function App() {
             <button type="submit">{mode === 'simple' ? 'Enter' : 'Connect'}</button>
           </form>
           {error && <p className="error">{error}</p>}
-          {mode === 'simple' && (
-            <p className="login-hint">
-              Don't have a key? Ask your administrator or check your setup guide.
-            </p>
-          )}
+          <div className="login-key-hint">
+            <p className="login-hint-head">First time? Your access key was shown in the terminal when HSIP first started, and saved to:</p>
+            <div className="login-hint-paths">
+              <span className="login-hint-os">Windows</span>
+              <code>%APPDATA%\HSIP\admin.key</code>
+              <span className="login-hint-os">Mac&nbsp;/&nbsp;Linux</span>
+              <code>~/.hsip/admin.key</code>
+            </div>
+          </div>
         </div>
       </div>
     );
