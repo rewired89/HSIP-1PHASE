@@ -195,7 +195,7 @@ Issues and pull requests are welcome. If you're building something with HSIP or 
 
 ## Contact
 
-If you're interested in the project, want to collaborate, or want to hire me:
+If you're interested in the project:
 
 **Email:** sanchezleal1989@gmail.com
 
