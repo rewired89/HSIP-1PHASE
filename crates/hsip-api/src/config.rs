@@ -206,6 +206,14 @@ impl Config {
                 .context("Cannot create admin key placeholder")?;
         }
 
+        // Allow DATABASE_URL env var to override the default path (useful for debugging)
+        let db_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| {
+                // SQLite URLs must use forward slashes — backslashes in Windows
+                // paths cause the URL parser to fail with "unable to open database file".
+                format!("sqlite:{}", db_path.to_string_lossy().replace('\\', "/"))
+            });
+
         Ok(Config {
             server: ServerConfig {
                 host: "127.0.0.1".to_string(),
@@ -213,9 +221,7 @@ impl Config {
                 tls: None,
             },
             database: DatabaseConfig {
-                // SQLite URLs must use forward slashes — backslashes in Windows
-                // paths cause the URL parser to fail with "unable to open database file".
-                url: format!("sqlite:{}", db_path.to_string_lossy().replace('\\', "/")),
+                url: db_url,
                 max_connections: 5,
                 run_migrations: true,
             },

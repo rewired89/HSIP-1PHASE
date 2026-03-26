@@ -26,8 +26,29 @@ mod static_files;
 use config::Config;
 use state::AppState;
 
+/// On Windows desktop (embed-dashboard feature), fatal errors would cause the
+/// terminal window to vanish before the user can read the message.
+/// This helper prints the error and waits for Enter before exiting.
+fn fatal(msg: &str) -> ! {
+    eprintln!("\n{}", msg);
+    #[cfg(all(windows, feature = "embed-dashboard"))]
+    {
+        use std::io::BufRead;
+        eprintln!("\nPress Enter to close...");
+        let mut buf = String::new();
+        let _ = std::io::stdin().lock().read_line(&mut buf);
+    }
+    std::process::exit(1);
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        fatal(&format!("❌ {:#}", e));
+    }
+}
+
+async fn run() -> Result<()> {
     // Load configuration
     let config_path = std::env::var("HSIP_CONFIG")
         .unwrap_or_else(|_| "config.toml".to_string());
@@ -46,16 +67,15 @@ async fn main() -> Result<()> {
                     cfg
                 }
                 Err(e) => {
-                    eprintln!("❌ Failed to initialise desktop data directory: {}", e);
-                    std::process::exit(1);
+                    fatal(&format!("❌ Failed to initialise desktop data directory: {}", e));
                 }
             }
         }
         Err(e) => {
-            eprintln!("❌ Configuration error: {}", e);
-            eprintln!("\nTo generate a sample config file, run:");
-            eprintln!("  cp crates/hsip-api/config.toml.example config.toml");
-            std::process::exit(1);
+            fatal(&format!(
+                "❌ Configuration error: {}\n\nTo generate a sample config file, run:\n  cp crates/hsip-api/config.toml.example config.toml",
+                e
+            ));
         }
     };
 
@@ -63,8 +83,7 @@ async fn main() -> Result<()> {
     // freshly-created empty placeholder that bootstrap_admin will fill).
     if config_path != "config.toml" || std::path::Path::new("config.toml").exists() {
         if let Err(e) = config.validate() {
-            eprintln!("❌ Configuration validation failed: {}", e);
-            std::process::exit(1);
+            fatal(&format!("❌ Configuration validation failed: {}", e));
         }
     }
 
