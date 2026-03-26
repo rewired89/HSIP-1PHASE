@@ -5,7 +5,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{auth::TenantId, db::now_ms, errors::{ApiError, ApiResult}, metrics, state::AppState};
+use crate::{
+    auth::TenantId,
+    db::now_ms,
+    errors::{ApiError, ApiResult},
+    key_encryption::decrypt_signing_key,
+    metrics,
+    state::AppState,
+};
 
 #[derive(Deserialize)]
 pub struct SignRequest {
@@ -59,12 +66,11 @@ pub async fn sign(
     .await?
     .ok_or_else(|| ApiError::BadRequest("No identity. POST /v1/identity first.".into()))?;
 
-    let signing_b64: String = row.try_get(0)?;
+    let encrypted_b64: String = row.try_get(0)?;
 
-    let key_bytes: [u8; 32] = BASE64.decode(&signing_b64)
-        .map_err(|e| ApiError::Internal(format!("key decode: {e}")))?
-        .try_into()
-        .map_err(|_| ApiError::Internal("bad key length".into()))?;
+    // The signing key is stored encrypted — decrypt it with the master key.
+    let key_bytes = decrypt_signing_key(&encrypted_b64, &state.master_key)
+        .map_err(|e| ApiError::Internal(format!("key decryption failed: {e}")))?;
 
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let signature   = signing_key.sign(req.content.as_bytes());
