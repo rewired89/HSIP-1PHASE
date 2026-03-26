@@ -74,6 +74,25 @@ pub enum LogFormat {
     Json,
 }
 
+/// Normalise a SQLite URL so it works correctly on all platforms including Windows.
+///
+/// Converts:
+///   `sqlite:C:\Users\foo\hsip.db`  →  `sqlite:///C:/Users/foo/hsip.db`
+///   `sqlite:C:/Users/foo/hsip.db`  →  `sqlite:///C:/Users/foo/hsip.db`
+///   `sqlite:/home/user/.hsip/db`   →  `sqlite:///home/user/.hsip/db`
+///   `sqlite::memory:`              →  unchanged
+fn normalise_sqlite_url(url: &str) -> String {
+    let after_scheme = url.trim_start_matches("sqlite:");
+    // Already in canonical form or is a special form like :memory:
+    if after_scheme.starts_with("///") || after_scheme.starts_with(":") {
+        return url.to_string();
+    }
+    // Strip any leading slashes and convert backslashes to forward slashes
+    let path = after_scheme.replace('\\', "/");
+    let path = path.trim_start_matches('/');
+    format!("sqlite:///{}", path)
+}
+
 fn default_true() -> bool { true }
 fn default_max_connections() -> u32 { 10 }
 fn default_rate_limit() -> u32 { 60 }
@@ -91,6 +110,13 @@ impl Config {
         // Environment variable overrides
         if let Ok(db_url) = std::env::var("DATABASE_URL") {
             config.database.url = db_url;
+        }
+
+        // Normalise SQLite URLs: convert any Windows backslashes in the path
+        // to forward slashes and ensure the canonical sqlite:/// form is used
+        // for absolute paths (e.g. C:\path → sqlite:///C:/path).
+        if config.database.url.starts_with("sqlite:") && !config.database.url.contains(":memory:") {
+            config.database.url = normalise_sqlite_url(&config.database.url);
         }
         if let Ok(master_key_path) = std::env::var("MASTER_KEY_PATH") {
             config.security.master_key_path = master_key_path;
@@ -209,9 +235,14 @@ impl Config {
         // Allow DATABASE_URL env var to override the default path (useful for debugging)
         let db_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| {
-                // SQLite URLs must use forward slashes — backslashes in Windows
-                // paths cause the URL parser to fail with "unable to open database file".
-                format!("sqlite:{}", db_path.to_string_lossy().replace('\\', "/"))
+                // Use the sqlite:/// (three-slash) URI form for absolute paths.
+                // This is the canonical form that sqlx handles correctly on all
+                // platforms, including Windows where backslashes would break parsing.
+                //   Unix:    /home/user/.hsip/hsip.db  → sqlite:///home/user/.hsip/hsip.db
+                //   Windows: C:\Users\...\hsip.db      → sqlite:///C:/Users/.../hsip.db
+                let path_fwd = db_path.to_string_lossy().replace('\\', "/");
+                let path_trimmed = path_fwd.trim_start_matches('/');
+                format!("sqlite:///{}", path_trimmed)
             });
 
         Ok(Config {

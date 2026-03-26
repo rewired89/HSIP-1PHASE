@@ -26,12 +26,11 @@ mod static_files;
 use config::Config;
 use state::AppState;
 
-/// On Windows desktop (embed-dashboard feature), fatal errors would cause the
-/// terminal window to vanish before the user can read the message.
-/// This helper prints the error and waits for Enter before exiting.
+/// On Windows the terminal window vanishes on exit — pause so the user can
+/// read the error message regardless of how the binary was compiled.
 fn fatal(msg: &str) -> ! {
     eprintln!("\n{}", msg);
-    #[cfg(all(windows, feature = "embed-dashboard"))]
+    #[cfg(windows)]
     {
         use std::io::BufRead;
         eprintln!("\nPress Enter to close...");
@@ -43,8 +42,26 @@ fn fatal(msg: &str) -> ! {
 
 #[tokio::main]
 async fn main() {
+    // Write errors to a log file before showing the pause prompt, so the user
+    // can check %APPDATA%\HSIP\hsip.log even if they miss the terminal output.
     if let Err(e) = run().await {
-        fatal(&format!("❌ {:#}", e));
+        let msg = format!("❌ {:#}", e);
+        write_error_log(&msg);
+        fatal(&msg);
+    }
+}
+
+/// Append a fatal error to the HSIP log file (best-effort, never panics).
+fn write_error_log(msg: &str) {
+    use std::io::Write;
+    let log_path = config::hsip_data_dir().join("hsip.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{}] {}", ts, msg);
+        eprintln!("\n(Error written to {})", log_path.display());
     }
 }
 
