@@ -17,6 +17,7 @@ members = [
     "crates/hsip-telemetry-guard",
     "crates/hsip-integration-sdk",
     "crates/hsip-api",
+    "crates/hsip-dns",
 ]
 
 

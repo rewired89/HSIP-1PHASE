@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
 use dashmap::{DashMap, DashSet};
+use tokio::sync::Mutex;
 use crate::db::Db;
 
 /// Per-key velocity record for AI agent anomaly detection
@@ -41,6 +42,9 @@ pub type RateLimiter       = Arc<DashMap<String, RateWindow>>;
 /// Requests are rejected immediately once a key_id appears here.
 pub type PendingRevocation = Arc<DashSet<String>>;
 
+/// Shared DNS resolver handle — None when the resolver is stopped.
+pub type DnsState = Arc<Mutex<Option<hsip_dns::DnsHandle>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db:                 Db,
@@ -49,6 +53,8 @@ pub struct AppState {
     pub pending_revocation: PendingRevocation,
     /// Loaded once at startup from HSIP_MASTER_KEY env var.
     pub master_key:         Arc<Vec<u8>>,
+    /// Optional running DNS resolver handle.
+    pub dns:                DnsState,
 }
 
 impl AppState {
@@ -59,6 +65,7 @@ impl AppState {
             rate_limiter:       Arc::new(DashMap::new()),
             pending_revocation: Arc::new(DashSet::new()),
             master_key:         Arc::new(master_key),
+            dns:                Arc::new(Mutex::new(None)),
         }
     }
 }

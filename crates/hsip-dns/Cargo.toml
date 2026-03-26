@@ -1,0 +1,11 @@
+[package]
+name = "hsip-dns"
+version = "0.1.0"
+edition = "2021"
+description = "HSIP local DNS resolver — tracker-blocking UDP DNS server"
+license-file = "../LICENSE"
+
+[dependencies]
+tokio  = { version = "1", features = ["net", "sync", "rt", "rt-multi-thread", "time", "macros"] }
+tracing = "0.1"
+serde  = { version = "1", features = ["derive"] }

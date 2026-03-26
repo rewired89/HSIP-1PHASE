@@ -2,6 +2,7 @@ pub mod agents;
 pub mod audit;
 pub mod consent;
 pub mod credentials;
+pub mod dns;
 pub mod identity;
 pub mod keys;
 pub mod messages;
@@ -44,4 +45,9 @@ pub fn router() -> Router<AppState> {
         // Tenant
         .route("/v1/tenant",                  get(tenant::info))
         .route("/v1/tenant/erase",            post(tenant::erase))
+        // DNS Resolver
+        .route("/v1/dns/status",              get(dns::status))
+        .route("/v1/dns/enable",              post(dns::enable))
+        .route("/v1/dns/disable",             post(dns::disable))
+        .route("/v1/dns/log",                 get(dns::log))
 }

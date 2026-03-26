@@ -774,3 +774,56 @@ button.danger:hover { background: #63171b; }
 .home-action-icon       { font-size: 1.6rem; flex-shrink: 0; }
 .home-action-btn strong { display: block; font-size: 0.9rem; color: #e2e8f0; margin-bottom: 0.25rem; }
 .home-action-btn p      { font-size: 0.78rem; color: #718096; line-height: 1.4; margin: 0; }
+
+/* ── DNS Blocker section ───────────────────────────────────────────────────── */
+.dns-card               { border: 1px solid #2d3748; }
+.dns-card--active       { border-color: #38a169 !important; }
+
+.dns-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+}
+.dns-header-left        { display: flex; align-items: flex-start; gap: 0.75rem; flex: 1; }
+.dns-icon               { font-size: 1.4rem; flex-shrink: 0; margin-top: 0.1rem; }
+.dns-title              { font-size: 1.05rem; margin: 0 0 0.2rem; color: #e2e8f0; }
+.dns-subtitle           { font-size: 0.82rem; color: #718096; margin: 0; line-height: 1.5; }
+
+.dns-toggle-btn {
+  padding: 0.55rem 1.2rem; border-radius: 8px; border: 1px solid #4a5568;
+  background: #1a1d2e; color: #e2e8f0; cursor: pointer; font-size: 0.85rem;
+  font-weight: 600; flex-shrink: 0; transition: all 0.15s;
+}
+.dns-toggle-btn:hover         { border-color: #6366f1; background: #13162b; }
+.dns-toggle-btn--on           { background: #22543d; border-color: #38a169; color: #9ae6b4; }
+.dns-toggle-btn--on:hover     { background: #276749; }
+.dns-toggle-btn:disabled      { opacity: 0.5; cursor: default; }
+
+.dns-stats-row {
+  display: flex; gap: 1.5rem; flex-wrap: wrap;
+  padding: 0.85rem 0; border-top: 1px solid #2d3748; margin-top: 1rem;
+}
+.dns-stat             { display: flex; flex-direction: column; gap: 0.15rem; }
+.dns-stat-num         { font-size: 1.4rem; font-weight: 700; color: #68d391; }
+.dns-stat-label       { font-size: 0.75rem; color: #718096; }
+
+.dns-log {
+  margin-top: 0.75rem; padding: 0.75rem; background: #090b12;
+  border-radius: 8px; border: 1px solid #2d3748;
+}
+.dns-log-title   { font-size: 0.72rem; font-weight: 600; color: #4a5568; text-transform: uppercase;
+                   letter-spacing: 0.08em; margin-bottom: 0.5rem; }
+.dns-log-entry   { display: flex; align-items: center; gap: 0.6rem;
+                   padding: 0.25rem 0; border-bottom: 1px solid #1a2030; }
+.dns-log-entry:last-child { border-bottom: none; }
+.dns-log-domain  { font-family: monospace; font-size: 0.78rem; color: #fc8181; flex: 1;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dns-log-vendor  { font-size: 0.72rem; color: #718096; flex-shrink: 0; }
+
+.dns-explainer   { margin-top: 1rem; }
+.dns-explainer p { font-size: 0.82rem; color: #718096; line-height: 1.6; margin: 0 0 0.6rem; }
+.dns-explainer code { background: #1a2030; padding: 0.1em 0.35em; border-radius: 4px;
+                      font-size: 0.8rem; color: #90cdf4; }
+
+.dns-setup-panel  { margin-top: 0.75rem; padding: 1rem; background: #090b12;
+                    border-radius: 8px; border: 1px solid #2d3748; }
+.dns-setup-note   { font-size: 0.82rem; color: #718096; line-height: 1.5; margin: 0 0 1rem; }
