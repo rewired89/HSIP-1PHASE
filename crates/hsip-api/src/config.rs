@@ -213,7 +213,9 @@ impl Config {
                 tls: None,
             },
             database: DatabaseConfig {
-                url: format!("sqlite:{}", db_path.display()),
+                // SQLite URLs must use forward slashes — backslashes in Windows
+                // paths cause the URL parser to fail with "unable to open database file".
+                url: format!("sqlite:{}", db_path.to_string_lossy().replace('\\', "/")),
                 max_connections: 5,
                 run_migrations: true,
             },
