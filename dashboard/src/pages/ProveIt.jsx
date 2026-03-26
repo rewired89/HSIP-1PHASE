@@ -78,10 +78,12 @@ export default function ProveIt({ apiKey }) {
     <div>
       <div className="consumer-hero">
         <div className="consumer-hero-icon">✍️</div>
-        <h2>Prove It</h2>
+        <h2>Digital Alibi</h2>
         <p>
-          Sign any message, agreement, or creative work so anyone can verify it genuinely came from
-          you — and hasn't been changed since.
+          Prove you sent that message. Prove no one tampered with your agreement.
+          Sign anything — a contract, a statement, a creative work — and get a
+          certificate that holds up even in a legal dispute.
+          One changed word and the proof breaks. That's the point.
         </p>
       </div>
 
@@ -90,13 +92,13 @@ export default function ProveIt({ apiKey }) {
           className={tab === 'create' ? 'active' : ''}
           onClick={() => { setTab('create'); resetVerify(); }}
         >
-          Create a Proof
+          Create Proof
         </button>
         <button
           className={tab === 'verify' ? 'active' : ''}
           onClick={() => { setTab('verify'); resetCreate(); }}
         >
-          Check a Proof
+          Verify a Proof
         </button>
       </div>
 
@@ -104,13 +106,13 @@ export default function ProveIt({ apiKey }) {
         <div className="card">
           {!certificate ? (
             <>
-              <div className="consumer-field-label">What do you want to prove?</div>
+              <div className="consumer-field-label">What do you need to prove?</div>
               <div className="consumer-field-hint">
-                Type a message, agreement, creative work, or any statement you want timestamped proof of.
+                Type your message, agreement, or statement. Once signed, nobody can claim you said something different.
               </div>
               <textarea
                 rows={5}
-                placeholder="Example: I, Jane Smith, agreed to design 3 logos for $500 on this date. Scope: homepage, about page, logo."
+                placeholder="Example: I, Jane Smith, agreed to design 3 logos for $500. Scope: homepage, about page, logo. Any changes require written approval."
                 value={message}
                 onChange={e => setMessage(e.target.value)}
                 style={{ marginTop: '0.75rem' }}
@@ -141,8 +143,8 @@ export default function ProveIt({ apiKey }) {
                 Your Proof Certificate
               </div>
               <div className="consumer-field-hint">
-                Copy this and share it with whoever needs to verify your message is authentic.
-                Anyone with an HSIP account can paste it into "Check a Proof".
+                Send this to the other person, save it in your email, screenshot it.
+                Anyone with HSIP can paste it into "Verify a Proof" and confirm it's genuine.
               </div>
               <div className="key-display cert-display">
                 {JSON.stringify(certificate, null, 2)}
@@ -233,22 +235,24 @@ export default function ProveIt({ apiKey }) {
           <div className="explainer-step">
             <span>1</span>
             <p>
-              You type a message and click "Sign". HSIP uses your private cryptographic key
-              to create a unique fingerprint of your exact words.
+              You type your message and click "Sign". HSIP creates a unique mathematical
+              fingerprint of your exact words using a private key only your account holds.
             </p>
           </div>
           <div className="explainer-step">
             <span>2</span>
             <p>
-              You receive a "proof certificate" — a small bundle containing your message,
-              a timestamp, and an unforgeable signature only your key could produce.
+              You get a Proof Certificate — a tamper-proof bundle with your message,
+              a timestamp, and a signature that can only come from your key.
+              Share it by email, screenshot, or paste.
             </p>
           </div>
           <div className="explainer-step">
             <span>3</span>
             <p>
-              Anyone can paste that certificate into "Check a Proof" to confirm it came from
-              you and hasn't been modified — even a single character change will fail the check.
+              If anyone ever doubts you sent it — or claims you said something different —
+              they paste the certificate into "Verify a Proof". Even one changed word
+              breaks the proof. That's your alibi.
             </p>
           </div>
         </div>

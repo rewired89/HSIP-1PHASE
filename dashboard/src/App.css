@@ -699,3 +699,78 @@ button.danger:hover { background: #63171b; }
 }
 .blocked-vendor { font-weight: 600; color: #a0aec0; flex-shrink: 0; min-width: 130px; }
 .blocked-plain  { color: #4a5568; }
+
+/* ── Home Dashboard ─────────────────────────────────────────────────── */
+.creep-card h2  { margin-bottom: 0.25rem; }
+.creep-header   { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.25rem; }
+.creep-badge {
+  font-size: 0.65rem; padding: 2px 8px; border-radius: 999px;
+  background: #2d3748; color: #718096; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+.creep-result {
+  margin-top: 1rem; padding: 1rem; border-radius: 10px;
+  border: 1px solid #2d3748; background: #0f1117;
+}
+.creep-result--critical { border-color: #63171b; background: #0f0809; }
+.creep-result--high     { border-color: #7b341e; background: #0f0a07; }
+.creep-result--medium   { border-color: #5f370e; background: #0f0e07; }
+.creep-result--low      { border-color: #22543d; background: #070f0b; }
+.creep-score-row {
+  display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.6rem;
+}
+.creep-score-num   { font-size: 3rem; font-weight: 800; line-height: 1; }
+.creep-score-denom { font-size: 1.1rem; color: #4a5568; }
+.creep-tier-label  {
+  font-size: 0.78rem; font-weight: 700; padding: 3px 10px;
+  border-radius: 999px; margin-left: 0.25rem;
+}
+.creep-bar-track {
+  height: 8px; background: #2d3748; border-radius: 999px;
+  overflow: hidden; margin-bottom: 0.85rem;
+}
+.creep-bar-fill {
+  height: 100%; border-radius: 999px;
+  transition: width 0.6s cubic-bezier(.4,0,.2,1);
+}
+.creep-verdict       { font-size: 0.875rem; color: #a0aec0; line-height: 1.5; margin: 0 0 0.4rem; }
+.creep-detail        { font-size: 0.8rem; color: #718096; line-height: 1.6; margin: 0; }
+
+.shame-list { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.75rem; }
+.shame-card {
+  border: 1px solid #2d3748; border-radius: 8px; overflow: hidden;
+  cursor: pointer; transition: border-color 0.15s;
+}
+.shame-card--critical { border-left: 4px solid #fc8181; }
+.shame-card--high     { border-left: 4px solid #f6ad55; }
+.shame-card:hover     { border-color: #4a5568; }
+.shame-card--open     { border-color: #6366f1 !important; }
+.shame-card-top {
+  display: flex; align-items: center; gap: 0.75rem; padding: 0.85rem 1rem;
+}
+.shame-rank {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.75rem; font-weight: 700; flex-shrink: 0;
+}
+.shame-body   { flex: 1; }
+.shame-vendor { font-weight: 600; font-size: 0.9rem; color: #e2e8f0; }
+.shame-plain  { font-size: 0.8rem; color: #718096; margin-top: 0.15rem; }
+.shame-toggle { color: #4a5568; font-size: 0.7rem; flex-shrink: 0; }
+.shame-detail { padding: 0 1rem 0.85rem; border-top: 1px solid #2d3748; padding-top: 0.75rem; }
+.shame-detail p { font-size: 0.83rem; color: #718096; line-height: 1.6; margin: 0; }
+
+.home-actions {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 0.75rem;
+}
+@media (max-width: 600px) { .home-actions { grid-template-columns: 1fr; } }
+.home-action-btn {
+  display: flex; gap: 0.85rem; align-items: flex-start; padding: 1rem;
+  background: #0f1117; border: 1px solid #2d3748; border-radius: 10px;
+  color: inherit; cursor: pointer; text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.home-action-btn:hover  { border-color: #6366f1; background: #13162b; }
+.home-action-icon       { font-size: 1.6rem; flex-shrink: 0; }
+.home-action-btn strong { display: block; font-size: 0.9rem; color: #e2e8f0; margin-bottom: 0.25rem; }
+.home-action-btn p      { font-size: 0.78rem; color: #718096; line-height: 1.4; margin: 0; }

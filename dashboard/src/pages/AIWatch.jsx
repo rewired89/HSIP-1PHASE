@@ -78,8 +78,10 @@ export default function AIWatch({ apiKey }) {
         <div className="consumer-hero-icon">🤖</div>
         <h2>AI Watch</h2>
         <p>
-          See every AI system connected to your account, what it's doing, and disconnect
-          any of them instantly — no forms, no waiting.
+          AI systems are connected to your account right now. Some you put there.
+          Some you might not remember. This is your live feed —
+          see exactly what's running, how active it is, and shut anything down
+          in one click.
         </p>
       </div>
 

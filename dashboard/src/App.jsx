@@ -6,6 +6,7 @@ import Messages        from './pages/Messages';
 import Audit           from './pages/Audit';
 import Keys            from './pages/Keys';
 import Credentials     from './pages/Credentials';
+import HomeDashboard   from './pages/HomeDashboard';
 import ProveIt         from './pages/ProveIt';
 import ConsentWallet   from './pages/ConsentWallet';
 import AIWatch         from './pages/AIWatch';
@@ -15,7 +16,8 @@ import Onboarding       from './pages/Onboarding';
 import './App.css';
 
 const SIMPLE_TABS = [
-  { id: 'prove-it',          label: '✍️ Prove It' },
+  { id: 'home',              label: '🏠 Home' },
+  { id: 'prove-it',          label: '✍️ Alibi' },
   { id: 'consent-wallet',    label: '🛡️ My Consents' },
   { id: 'ai-watch',          label: '🤖 AI Watch' },
   { id: 'tracker-inspector', label: '🔍 Trackers' },
@@ -30,7 +32,7 @@ export default function App() {
   const [error,     setError]     = useState('');
   const [mode,      setMode]      = useState(localStorage.getItem('hsip_mode') || 'simple');
   const [tab,       setTab]       = useState(
-    localStorage.getItem('hsip_mode') === 'expert' ? 'identity' : 'prove-it'
+    localStorage.getItem('hsip_mode') === 'expert' ? 'identity' : 'home'
   );
   // Show onboarding if user has never completed it
   const [onboarding, setOnboarding] = useState(false);
@@ -38,7 +40,7 @@ export default function App() {
   function switchMode(m) {
     setMode(m);
     localStorage.setItem('hsip_mode', m);
-    setTab(m === 'simple' ? 'prove-it' : 'identity');
+    setTab(m === 'simple' ? 'home' : 'identity');
   }
 
   async function handleLogin(e) {
@@ -52,6 +54,7 @@ export default function App() {
       if (!localStorage.getItem('hsip_onboarding_done') && mode === 'simple') {
         setOnboarding(true);
       }
+      setTab(mode === 'simple' ? 'home' : 'identity');
     } catch {
       setError('Invalid access key. Please check and try again.');
     }
@@ -162,6 +165,7 @@ export default function App() {
       <main>
         {mode === 'simple' ? (
           <>
+            {tab === 'home'              && <HomeDashboard    onNavigate={setTab} />}
             {tab === 'prove-it'          && <ProveIt          apiKey={apiKey} />}
             {tab === 'consent-wallet'    && <ConsentWallet    apiKey={apiKey} />}
             {tab === 'ai-watch'          && <AIWatch          apiKey={apiKey} />}

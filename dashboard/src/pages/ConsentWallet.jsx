@@ -64,8 +64,9 @@ export default function ConsentWallet({ apiKey }) {
         <div className="consumer-hero-icon">🛡️</div>
         <h2>My Consent Wallet</h2>
         <p>
-          You decide who can communicate with you. Every permission is cryptographically
-          recorded and can be removed at any time — instantly.
+          You're the gatekeeper. Nobody gets in unless you say so.
+          Every permission you give is locked with your cryptographic signature —
+          and you can kick anyone out instantly, with no emails, no forms, no waiting.
         </p>
       </div>
 
@@ -179,12 +180,13 @@ export default function ConsentWallet({ apiKey }) {
       )}
 
       <div className="consumer-explainer card">
-        <h3>Why does this matter?</h3>
+        <h3>Why this is different from everything else</h3>
         <p className="explainer-body">
-          Unlike a checkbox in a privacy policy, every "access granted" and "access removed"
-          event here is cryptographically signed and stored in a tamper-proof audit log.
-          These records can't be altered after the fact — giving you genuine, verifiable proof
-          of what you allowed and exactly when.
+          Every other "privacy control" is a checkbox in a settings page that a company
+          can quietly ignore. Here, every "access granted" and "access removed" is
+          cryptographically signed and stored in a tamper-proof log that even HSIP cannot edit.
+          That's not a promise — it's math. You have proof of what you allowed and when,
+          forever.
         </p>
       </div>
     </div>
