@@ -229,6 +229,15 @@ impl Config {
                 .context("Cannot create admin key placeholder")?;
         }
 
+        // Pre-create the SQLite database file.
+        // sqlx's AnyPool opens with READWRITE but not CREATE, so it returns
+        // SQLITE_CANTOPEN (14) if the file does not already exist.
+        // SQLite treats a 0-byte file as a brand-new empty database.
+        if !db_path.exists() {
+            fs::write(&db_path, b"")
+                .with_context(|| format!("Cannot create database file at {}", db_path.display()))?;
+        }
+
         // Allow DATABASE_URL env var to override the default path (useful for debugging)
         let db_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| {
