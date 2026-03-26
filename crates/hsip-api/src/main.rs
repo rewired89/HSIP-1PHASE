@@ -66,39 +66,51 @@ fn write_error_log(msg: &str) {
 }
 
 async fn run() -> Result<()> {
-    // Load configuration
-    let config_path = std::env::var("HSIP_CONFIG")
-        .unwrap_or_else(|_| "config.toml".to_string());
-
-    let config = match Config::load(&config_path) {
-        Ok(cfg) => cfg,
-        Err(_) if config_path == "config.toml" => {
-            // No config.toml found — use zero-config desktop defaults.
-            // This is the normal path for users who downloaded the binary.
-            match config::Config::desktop_defaults() {
-                Ok(cfg) => {
-                    tracing::info!(
-                        "Desktop mode — data stored in {}",
-                        config::hsip_data_dir().display()
-                    );
-                    cfg
-                }
-                Err(e) => {
-                    fatal(&format!("❌ Failed to initialise desktop data directory: {}", e));
-                }
-            }
-        }
-        Err(e) => {
-            fatal(&format!(
-                "❌ Configuration error: {}\n\nTo generate a sample config file, run:\n  cp crates/hsip-api/config.toml.example config.toml",
-                e
-            ));
+    // Desktop release binary (embed-dashboard): always use zero-config desktop
+    // defaults so non-tech users never have to touch a config file.
+    // The HSIP_CONFIG env var can still override this for power users.
+    #[cfg(feature = "embed-dashboard")]
+    let (config, config_source) = {
+        if let Ok(path) = std::env::var("HSIP_CONFIG") {
+            let cfg = Config::load(&path).unwrap_or_else(|e| {
+                fatal(&format!("❌ Configuration error ({}): {}", path, e))
+            });
+            (cfg, path)
+        } else {
+            let cfg = config::Config::desktop_defaults().unwrap_or_else(|e| {
+                fatal(&format!("❌ Failed to initialise HSIP data directory: {}", e))
+            });
+            (cfg, format!("desktop defaults ({})", config::hsip_data_dir().display()))
         }
     };
 
-    // Skip file-existence validation in desktop mode (admin.key may be a
-    // freshly-created empty placeholder that bootstrap_admin will fill).
-    if config_path != "config.toml" || std::path::Path::new("config.toml").exists() {
+    // Dev / server binary: load config.toml from current directory, fall back
+    // to desktop defaults if no file is found.
+    #[cfg(not(feature = "embed-dashboard"))]
+    let (config, config_source) = {
+        let config_path = std::env::var("HSIP_CONFIG")
+            .unwrap_or_else(|_| "config.toml".to_string());
+
+        match Config::load(&config_path) {
+            Ok(cfg) => (cfg, config_path),
+            Err(_) if config_path == "config.toml" => {
+                let cfg = config::Config::desktop_defaults().unwrap_or_else(|e| {
+                    fatal(&format!("❌ Failed to initialise HSIP data directory: {}", e))
+                });
+                (cfg, format!("desktop defaults ({})", config::hsip_data_dir().display()))
+            }
+            Err(e) => {
+                fatal(&format!(
+                    "❌ Configuration error: {}\n\nSet HSIP_CONFIG=/path/to/config.toml or run from a directory with config.toml",
+                    e
+                ));
+            }
+        }
+    };
+
+    // Validate config (skip in desktop-defaults mode where key files are
+    // freshly created placeholders that bootstrap_admin will fill).
+    if !config_source.starts_with("desktop defaults") {
         if let Err(e) = config.validate() {
             fatal(&format!("❌ Configuration validation failed: {}", e));
         }
@@ -108,7 +120,7 @@ async fn run() -> Result<()> {
     init_logging(&config);
 
     tracing::info!("Starting HSIP API v{}", env!("CARGO_PKG_VERSION"));
-    tracing::info!("Loaded configuration from: {}", config_path);
+    tracing::info!("Configuration: {}", config_source);
 
     // Initialize metrics
     metrics::init();
