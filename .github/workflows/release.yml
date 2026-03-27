@@ -121,37 +121,33 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Create the release if it doesn't exist yet
-          gh release view latest --repo rewired89/HSIP-1PHASE > /dev/null 2>&1 || \
-            gh release create latest \
-              --repo rewired89/HSIP-1PHASE \
-              --prerelease \
-              --title "Latest build (auto-updated)" \
-              --notes "Auto-created"
-
-          # Update release notes
-          gh release edit latest \
-            --repo rewired89/HSIP-1PHASE \
-            --title "Latest build (auto-updated)" \
-            --notes "$(cat <<'NOTES'
-          This release is **automatically rebuilt every time a fix is pushed to main**.
+          # Write release notes to a file (avoids heredoc indentation issues)
+          cat > release-notes.md << 'EOF'
+          This release rebuilds automatically on every push to main. Always download from here for the latest version.
 
           | Platform | Download |
           |----------|----------|
-          | **Windows** | \`hsip-windows-x64.exe\` — double-click, done |
-          | macOS Apple Silicon | \`hsip-macos-arm64\` |
-          | macOS Intel | \`hsip-macos-x64\` |
-          | Linux | \`hsip-linux-x64\` |
+          | **Windows** | `hsip-windows-x64.exe` |
+          | macOS Apple Silicon | `hsip-macos-arm64` |
+          | macOS Intel | `hsip-macos-x64` |
+          | Linux | `hsip-linux-x64` |
 
-          **Windows:** Download \`hsip-windows-x64.exe\` and double-click it.
-          On first run it installs itself, creates a Desktop shortcut and Start Menu entry, then opens in your browser.
-          Use the shortcut from then on.
+          **Windows:** Download `hsip-windows-x64.exe` and double-click it. On first run it installs itself, creates a Desktop shortcut and Start Menu entry, then opens in your browser. Use the shortcut from then on.
+          EOF
 
-          Last updated: ${{ github.sha }}
-          NOTES
-          )"
+          echo "Last updated: ${{ github.sha }}" >> release-notes.md
 
-          # Upload all binaries, overwriting any existing files
+          # Create release if it doesn't exist yet
+          gh release view latest --repo rewired89/HSIP-1PHASE > /dev/null 2>&1 \
+            || gh release create latest --repo rewired89/HSIP-1PHASE \
+                 --prerelease --title "Latest build (auto-updated)" --notes "init"
+
+          # Update title and notes
+          gh release edit latest --repo rewired89/HSIP-1PHASE \
+            --title "Latest build (auto-updated)" \
+            --notes-file release-notes.md
+
+          # Upload all binaries, overwriting stale files
           gh release upload latest \
             hsip-windows-x64.exe \
             hsip-macos-arm64 \
