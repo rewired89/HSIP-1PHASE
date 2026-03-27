@@ -45,8 +45,8 @@ function LookupResult({ result }) {
       <div className="lookup-result lookup-result--clean">
         <span>✅</span>
         <div>
-          <strong>Not in HSIP's tracker database</strong>
-          <p>This domain isn't a known tracker. That doesn't guarantee it's safe, but HSIP has no record of it tracking users.</p>
+          <strong>Not a known tracker service</strong>
+          <p>This domain isn't in HSIP's database of third-party tracking services. That means it's probably not secretly embedded in other websites to spy on you — but it doesn't mean the site itself doesn't collect your data. Every website collects some data about visitors.</p>
         </div>
       </div>
     );
