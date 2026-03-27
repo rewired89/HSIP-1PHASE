@@ -46,8 +46,11 @@ fn fatal(msg: &str) -> ! {
 
 #[tokio::main]
 async fn main() {
-    // Write errors to a log file before showing the pause prompt, so the user
-    // can check %APPDATA%\HSIP\hsip.log even if they miss the terminal output.
+    // On Windows desktop builds: self-install on first run (creates shortcuts,
+    // copies exe to %LOCALAPPDATA%\HSIP, then re-launches from there).
+    #[cfg(all(windows, feature = "embed-dashboard"))]
+    maybe_self_install(); // may exit this process
+
     if let Err(e) = run().await {
         let msg = format!("❌ {:#}", e);
         write_error_log(&msg);
@@ -400,6 +403,67 @@ async fn docs_handler() -> impl IntoResponse {
 </body>
 </html>"#,
     )
+}
+
+/// Windows-only, embed-dashboard builds.
+///
+/// If the binary is NOT already running from %LOCALAPPDATA%\HSIP\hsip.exe:
+///   1. Creates %LOCALAPPDATA%\HSIP\
+///   2. Copies itself there
+///   3. Creates a Desktop shortcut and a Start Menu shortcut
+///   4. Launches the installed copy
+///   5. Exits this process
+///
+/// On subsequent launches the installed copy detects it's already in the
+/// right place and skips straight to starting the server.
+#[cfg(all(windows, feature = "embed-dashboard"))]
+fn maybe_self_install() {
+    use std::path::PathBuf;
+
+    // Resolve install directory
+    let local_appdata = match std::env::var("LOCALAPPDATA") {
+        Ok(v) if !v.is_empty() => v,
+        _ => return,
+    };
+    let install_dir = PathBuf::from(&local_appdata).join("HSIP");
+    let install_exe = install_dir.join("hsip.exe");
+
+    // Already running from the installed location — nothing to do
+    let current_exe = match std::env::current_exe() {
+        Ok(p) => match p.canonicalize() { Ok(c) => c, Err(_) => p },
+        Err(_) => return,
+    };
+    let install_canon = install_exe.canonicalize().unwrap_or_else(|_| install_exe.clone());
+    if current_exe == install_canon { return; }
+
+    // ── Copy to install location ──────────────────────────────────────────
+    if std::fs::create_dir_all(&install_dir).is_err() { return; }
+    if std::fs::copy(&current_exe, &install_exe).is_err() { return; }
+
+    // ── Create Desktop + Start Menu shortcuts via PowerShell ──────────────
+    let exe = install_exe.to_string_lossy().replace('\'', "''");
+    let appdata      = std::env::var("APPDATA").unwrap_or_default();
+    let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
+
+    let desktop    = format!(r"{user_profile}\Desktop\HSIP.lnk");
+    let start_menu = format!(r"{appdata}\Microsoft\Windows\Start Menu\Programs\HSIP.lnk");
+
+    let ps = format!(
+        "$ws=New-Object -COM WScript.Shell;\
+         $s=$ws.CreateShortcut('{desktop}');$s.TargetPath='{exe}';$s.Description='Open HSIP';$s.Save();\
+         $s=$ws.CreateShortcut('{start_menu}');$s.TargetPath='{exe}';$s.Description='Open HSIP';$s.Save()",
+        desktop    = desktop.replace('\'', "''"),
+        start_menu = start_menu.replace('\'', "''"),
+        exe        = exe,
+    );
+    // Wait for shortcuts to finish before we exit
+    let _ = std::process::Command::new("powershell")
+        .args(["-WindowStyle", "Hidden", "-NonInteractive", "-Command", &ps])
+        .status();
+
+    // ── Launch installed copy and exit ────────────────────────────────────
+    let _ = std::process::Command::new(&install_exe).spawn();
+    std::process::exit(0);
 }
 
 async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {

@@ -98,31 +98,6 @@ jobs:
         shell: pwsh
         run: Copy-Item "${{ matrix.binary }}" "${{ matrix.asset }}"
 
-      # ── Build Windows installer with Inno Setup ────────────────────────────
-      - name: Build Windows installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Install Inno Setup 6
-          choco install innosetup --no-progress -y
-
-          # Copy binary next to the .iss script
-          Copy-Item "${{ matrix.asset }}" "installer\hsip-windows-x64.exe"
-
-          # Create output directory
-          New-Item -ItemType Directory -Force -Path "installer\output" | Out-Null
-
-          # Compile installer
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\hsip.iss"
-
-          # Verify and move to repo root
-          if (!(Test-Path "installer\output\hsip-setup-windows.exe")) {
-            Write-Error "Installer build failed — output file not found"
-            exit 1
-          }
-          Move-Item "installer\output\hsip-setup-windows.exe" "hsip-setup-windows.exe"
-          Write-Host "Installer built successfully."
-
       # ── On push to main: update the rolling "latest" pre-release ─────────────
       - name: Upload to rolling "latest" release (push to main)
         if: github.event_name == 'push'
@@ -137,24 +112,21 @@ jobs:
 
             | Platform | Download |
             |----------|----------|
-            | **Windows** | `hsip-setup-windows.exe` — double-click to install |
+            | **Windows** | `hsip-windows-x64.exe` — double-click, done |
             | macOS Apple Silicon | `hsip-macos-arm64` |
             | macOS Intel | `hsip-macos-x64` |
             | Linux | `hsip-linux-x64` |
 
-            **Windows install:** Run `hsip-setup-windows.exe` → click Install → done.
-            HSIP appears on your Desktop and in your Start Menu. Click the shortcut to open it anytime.
+            **Windows:** Download `hsip-windows-x64.exe` and double-click it.
+            On first run it installs itself, creates a Desktop shortcut and Start Menu entry, then opens in your browser.
+            Use the shortcut from then on.
 
             Last updated: ${{ github.sha }}
-          files: |
-            ${{ matrix.asset }}
-            hsip-setup-windows.exe
+          files: ${{ matrix.asset }}
 
       # ── On versioned release: attach to that release ──────────────────────────
       - name: Upload to versioned release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ${{ matrix.asset }}
-            hsip-setup-windows.exe
+          files: ${{ matrix.asset }}
