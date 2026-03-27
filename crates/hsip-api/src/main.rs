@@ -229,9 +229,6 @@ async fn run() -> Result<()> {
                 }
             });
 
-            // First-run: create a desktop shortcut so the user can always find HSIP
-            #[cfg(windows)]
-            create_desktop_shortcut_once();
         }
 
         let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -403,34 +400,6 @@ async fn docs_handler() -> impl IntoResponse {
 </body>
 </html>"#,
     )
-}
-
-/// Create a Windows desktop shortcut to this executable on first run.
-/// Uses PowerShell's WScript.Shell COM object — no extra dependencies.
-/// Safe to call every launch; skips silently if the shortcut already exists.
-#[cfg(all(windows, feature = "embed-dashboard"))]
-fn create_desktop_shortcut_once() {
-    let Ok(exe) = std::env::current_exe() else { return };
-    let exe_str = exe.to_string_lossy().replace('\'', "''");
-
-    let desktop = std::env::var("USERPROFILE")
-        .map(|p| format!(r"{p}\Desktop\HSIP.lnk"))
-        .unwrap_or_default();
-    if desktop.is_empty() { return; }
-
-    // Skip if shortcut already exists
-    if std::path::Path::new(&desktop).exists() { return; }
-
-    let script = format!(
-        "$s=(New-Object -COM WScript.Shell).CreateShortcut('{desktop}'); \
-         $s.TargetPath='{exe_str}'; \
-         $s.Description='Open HSIP'; \
-         $s.IconLocation='{exe_str},0'; \
-         $s.Save()"
-    );
-    let _ = std::process::Command::new("powershell")
-        .args(["-WindowStyle", "Hidden", "-NonInteractive", "-Command", &script])
-        .spawn();
 }
 
 async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {

@@ -98,6 +98,26 @@ jobs:
         shell: pwsh
         run: Copy-Item "${{ matrix.binary }}" "${{ matrix.asset }}"
 
+      # ── Build Windows installer with Inno Setup ────────────────────────────
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Generate icon + banner assets
+          powershell -ExecutionPolicy Bypass -File installer\create-icon.ps1
+
+          # Install Inno Setup (already available on windows-latest runners via chocolatey)
+          choco install innosetup --no-progress -y
+
+          # Copy binary next to the .iss script so Inno Setup can find it
+          Copy-Item "${{ matrix.asset }}" "installer\hsip-windows-x64.exe"
+
+          # Compile the installer
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\hsip.iss
+
+          # Move output to repo root
+          Move-Item installer\hsip-setup-windows.exe hsip-setup-windows.exe
+
       # ── On push to main: update the rolling "latest" pre-release ─────────────
       - name: Upload to rolling "latest" release (push to main)
         if: github.event_name == 'push'
@@ -110,14 +130,26 @@ jobs:
             This release is **automatically rebuilt every time a fix is pushed to main**.
             Always download from here to get the most recent version.
 
-            **Windows:** Download `hsip-windows-x64.exe`, double-click it. HSIP opens in your browser automatically. A desktop shortcut is created on first run so you can always find it.
+            | Platform | Download |
+            |----------|----------|
+            | **Windows** | `hsip-setup-windows.exe` — double-click to install |
+            | macOS Apple Silicon | `hsip-macos-arm64` |
+            | macOS Intel | `hsip-macos-x64` |
+            | Linux | `hsip-linux-x64` |
+
+            **Windows install:** Run `hsip-setup-windows.exe` → click Install → done.
+            HSIP appears on your Desktop and in your Start Menu. Click the shortcut to open it anytime.
 
             Last updated: ${{ github.sha }}
-          files: ${{ matrix.asset }}
+          files: |
+            ${{ matrix.asset }}
+            hsip-setup-windows.exe
 
       # ── On versioned release: attach to that release ──────────────────────────
       - name: Upload to versioned release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset }}
+          files: |
+            ${{ matrix.asset }}
+            hsip-setup-windows.exe
