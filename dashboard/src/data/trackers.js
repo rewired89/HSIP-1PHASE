@@ -753,3 +753,106 @@ export const TRACKER_STATS = {
   high:     TRACKERS.filter(t => t.risk === 'high').length,
   safeToBlock: TRACKERS.filter(t => t.safeToBlock).length,
 };
+
+/**
+ * Well-known first-party sites that users commonly look up.
+ * These are the companies' own websites — not cross-site tracker services —
+ * but they DO collect your data and/or operate tracking services listed above.
+ *
+ * Keys are bare domains (no www, no wildcard). Values include:
+ *   name          — display name
+ *   note          — plain-English explanation for non-tech users
+ *   relatedTrackers — tracker domains from TRACKERS that this company operates
+ */
+export const FIRST_PARTY_BRANDS = {
+  'google.com': {
+    name: 'Google',
+    note: "Google's own website is not a third-party tracker service embedded across other sites — but Google runs some of the most widespread tracking services on the internet, including Google Analytics (present on over 55% of all websites) and DoubleClick ads. Your activity on Google Search and other Google products feeds directly into their advertising profile of you.",
+    relatedTrackers: ['google-analytics.com', 'doubleclick.net', 'googletagmanager.com'],
+  },
+  'openai.com': {
+    name: 'OpenAI',
+    note: "OpenAI operates ChatGPT and other AI services. It stores your conversations and usage data on its own servers and uses it to improve its models. It is not a third-party tracking service secretly embedded in other websites.",
+    relatedTrackers: [],
+  },
+  'chatgpt.com': {
+    name: 'ChatGPT (OpenAI)',
+    note: "ChatGPT is OpenAI's AI assistant. Every conversation you have is stored on OpenAI's servers and used to train their models unless you opt out. It is not a tracker embedded across other websites.",
+    relatedTrackers: [],
+  },
+  'amazon.com': {
+    name: 'Amazon',
+    note: "Amazon's shopping website collects everything you browse, search, add to cart, and buy — even things you don't purchase. Amazon also runs one of the world's largest advertising networks that tracks you across the web.",
+    relatedTrackers: ['amazon-adsystem.com'],
+  },
+  'netflix.com': {
+    name: 'Netflix',
+    note: "Netflix tracks every video you watch, pause, rewind, search for, and rate. They use this to power recommendations and license data to studios. Netflix is not a cross-site tracker — it only collects data on its own platform.",
+    relatedTrackers: [],
+  },
+  'youtube.com': {
+    name: 'YouTube (Google)',
+    note: "YouTube is owned by Google and tracks every video you watch, search for, pause, and click on. As a Google platform, your YouTube activity is linked to your broader Google advertising profile.",
+    relatedTrackers: ['google-analytics.com', 'doubleclick.net'],
+  },
+  'instagram.com': {
+    name: 'Instagram (Meta)',
+    note: "Instagram is owned by Meta (Facebook) and tracks your posts, likes, stories, searches, and who you follow. Meta also runs tracking pixels that follow you across millions of other websites — even when you're not on Instagram.",
+    relatedTrackers: ['facebook.com', 'fbcdn.net'],
+  },
+  'twitter.com': {
+    name: 'Twitter / X',
+    note: "Twitter/X tracks your tweets, reads, follows, and how long you look at each post. They also run ad conversion pixels embedded on external websites that track you after you see a tweet.",
+    relatedTrackers: ['ads-twitter.com'],
+  },
+  'x.com': {
+    name: 'X (formerly Twitter)',
+    note: "X tracks your activity on their platform and also runs ad tracking pixels on external websites to measure whether you take action after seeing ads in your feed.",
+    relatedTrackers: ['ads-twitter.com'],
+  },
+  'microsoft.com': {
+    name: 'Microsoft',
+    note: "Microsoft's website is not a cross-site tracker, but Microsoft operates multiple tracking services: Clarity (session recording on millions of sites), Xandr/AppNexus (ad exchange), Bing Ads, and Windows telemetry that phones home from your computer.",
+    relatedTrackers: ['clarity.ms', 'adnxs.com', 'bat.bing.com', 'applicationinsights.io'],
+  },
+  'reddit.com': {
+    name: 'Reddit',
+    note: "Reddit tracks your posts, upvotes, subreddits, and reading patterns on their platform. They have expanded their advertising business significantly and now run conversion tracking for advertisers.",
+    relatedTrackers: [],
+  },
+  'spotify.com': {
+    name: 'Spotify',
+    note: "Spotify tracks every song, podcast, and playlist you listen to, skip, or save. This data is used for recommendations and shared with music labels and advertisers for targeting.",
+    relatedTrackers: [],
+  },
+  'apple.com': {
+    name: 'Apple',
+    note: "Apple positions itself as privacy-focused and does not operate a large cross-site tracking network. However, Apple collects device usage data, App Store behavior, and Siri queries. Apple Search Ads also tracks app installs.",
+    relatedTrackers: [],
+  },
+  'whatsapp.com': {
+    name: 'WhatsApp (Meta)',
+    note: "WhatsApp is owned by Meta (Facebook). While your messages are end-to-end encrypted, Meta collects metadata about who you contact, how often, and when. This feeds into Meta's advertising profile of you.",
+    relatedTrackers: ['facebook.com'],
+  },
+  'yahoo.com': {
+    name: 'Yahoo',
+    note: "Yahoo operates a search engine, news site, and advertising network. Verizon Media (now Oath/Yahoo) runs one of the largest ad exchanges and tracks users across the web for targeted advertising.",
+    relatedTrackers: [],
+  },
+  'bing.com': {
+    name: 'Bing (Microsoft)',
+    note: "Bing is Microsoft's search engine. Every search is logged and used to build an advertising profile. Microsoft Advertising also tracks conversions on external websites through the Bing Ads pixel.",
+    relatedTrackers: ['bat.bing.com', 'adnxs.com'],
+  },
+  'temu.com': {
+    name: 'Temu',
+    note: "Temu is a shopping app that has been scrutinized for extensive data collection practices. Its apps request unusually broad device permissions and send behavioral data back to servers in China.",
+    relatedTrackers: [],
+  },
+  'shein.com': {
+    name: 'SHEIN',
+    note: "SHEIN is a fast-fashion retailer that collects browsing, purchase, and device data. Privacy researchers have flagged SHEIN's apps for excessive data collection and sending data to Chinese servers.",
+    relatedTrackers: [],
+  },
+};

@@ -290,11 +290,12 @@ button.danger:hover { background: #63171b; }
   border-radius: 8px;
   border: 1px solid #2d3748;
 }
-.lookup-result--clean   { background: #0d1f13; border-color: #22543d; }
-.lookup-result--found   { background: #1a0d0d; border-color: #63171b; }
-.lookup-result--high    { background: #1a110d; border-color: #7b341e; }
-.lookup-result--medium  { background: #1a190d; border-color: #5f370e; }
-.lookup-result--low     { background: #0d1a12; border-color: #22543d; }
+.lookup-result--clean      { background: #0d1f13; border-color: #22543d; }
+.lookup-result--firstparty { background: #0d1320; border-color: #2b4a7a; }
+.lookup-result--found      { background: #1a0d0d; border-color: #63171b; }
+.lookup-result--high       { background: #1a110d; border-color: #7b341e; }
+.lookup-result--medium     { background: #1a190d; border-color: #5f370e; }
+.lookup-result--low        { background: #0d1a12; border-color: #22543d; }
 .lookup-result > span   { font-size: 1.5rem; flex-shrink: 0; }
 .lookup-result strong   { display: block; margin-bottom: 0.25rem; }
 .lookup-result p        { color: #718096; font-size: 0.875rem; line-height: 1.5; margin: 0; }

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { TRACKERS, CATEGORIES, RISK_LEVEL, TRACKER_STATS } from '../data/trackers';
+import { TRACKERS, CATEGORIES, RISK_LEVEL, TRACKER_STATS, FIRST_PARTY_BRANDS } from '../data/trackers';
 
 function RiskBadge({ risk }) {
   const r = RISK_LEVEL[risk];
@@ -40,6 +40,7 @@ function TrackerCard({ tracker }) {
 
 function LookupResult({ result }) {
   if (!result) return null;
+
   if (result === 'clean') {
     return (
       <div className="lookup-result lookup-result--clean">
@@ -51,6 +52,34 @@ function LookupResult({ result }) {
       </div>
     );
   }
+
+  if (result.type === 'firstParty') {
+    return (
+      <div className="lookup-result lookup-result--firstparty">
+        <span style={{ fontSize: '1.5rem' }}>🏢</span>
+        <div>
+          <strong>{result.name} — This is their own website, not a third-party tracker</strong>
+          <p style={{ marginTop: '0.5rem' }}>{result.note}</p>
+          {result.relatedTrackers.length > 0 && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <strong style={{ fontSize: '0.85rem' }}>Related tracker services this company operates:</strong>
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                {result.relatedTrackers.map(t => (
+                  <span key={t.domain} className="block-badge block-badge--no" title={t.plain}>
+                    {t.domain}
+                  </span>
+                ))}
+              </div>
+              <p style={{ fontSize: '0.8rem', marginTop: '0.4rem', opacity: 0.8 }}>
+                Try checking those domains above in the lookup box to learn more.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`lookup-result lookup-result--found lookup-result--${result.risk}`}>
       <span style={{ fontSize: '1.5rem' }}>
@@ -97,12 +126,30 @@ export default function TrackerInspector() {
     if (!lookup.trim()) return;
     const host = lookup.trim().toLowerCase()
       .replace(/^https?:\/\//, '')
-      .replace(/\/.*$/, '');
+      .replace(/\/.*$/, '')
+      .replace(/^www\./, '');
+
+    // Check our tracker database first
     const match = TRACKERS.find(t => {
       const pattern = t.domain.replace('*.', '');
       return host === pattern || host.endsWith('.' + pattern) || host.endsWith(pattern);
     });
-    setLookupResult(match || 'clean');
+    if (match) { setLookupResult(match); return; }
+
+    // Check if it's a well-known first-party brand
+    const brandKey = Object.keys(FIRST_PARTY_BRANDS).find(k =>
+      host === k || host.endsWith('.' + k)
+    );
+    if (brandKey) {
+      const brand = FIRST_PARTY_BRANDS[brandKey];
+      const relatedTrackers = TRACKERS.filter(t =>
+        brand.relatedTrackers.some(d => t.domain.replace('*.', '') === d)
+      );
+      setLookupResult({ type: 'firstParty', ...brand, relatedTrackers });
+      return;
+    }
+
+    setLookupResult('clean');
   }
 
   return (
@@ -144,11 +191,11 @@ export default function TrackerInspector() {
       <div className="card">
         <h2>Check Any Domain</h2>
         <p className="aiwatch-normal-note">
-          Paste a website URL or domain name to see if HSIP recognises it as a tracker.
+          Type any domain or URL. HSIP will tell you if it's a known tracker service — or explain what the site does with your data.
         </p>
         <div className="lookup-row">
           <input
-            placeholder="e.g. hotjar.com or https://www.example.com"
+            placeholder="e.g. google.com, facebook.com, hotjar.com, doubleclick.net…"
             value={lookup}
             onChange={e => { setLookup(e.target.value); setLookupResult(null); }}
             onKeyDown={e => e.key === 'Enter' && doLookup()}
