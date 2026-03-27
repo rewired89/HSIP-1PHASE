@@ -441,21 +441,38 @@ fn maybe_self_install() {
     if std::fs::copy(&current_exe, &install_exe).is_err() { return; }
 
     // ── Create Desktop + Start Menu shortcuts via PowerShell ──────────────
-    // Use [Environment]::GetFolderPath() so we get the correct Desktop path
-    // even when OneDrive has moved it (e.g. %USERPROFILE%\OneDrive\Desktop).
-    let exe = install_exe.to_string_lossy().replace('"', r#"`""#);
-    let ps = format!(
-        r#"$exe="{exe}"; \
-$ws=New-Object -COM WScript.Shell; \
-$desk=[Environment]::GetFolderPath('Desktop'); \
-$prog=[Environment]::GetFolderPath('Programs'); \
-$s=$ws.CreateShortcut("$desk\HSIP.lnk"); $s.TargetPath=$exe; $s.Description='Open HSIP'; $s.Save(); \
-$s=$ws.CreateShortcut("$prog\HSIP.lnk"); $s.TargetPath=$exe; $s.Description='Open HSIP'; $s.Save()"#
+    // Write a real .ps1 file so there are zero quoting/escaping issues with
+    // the -Command inline approach (which silently broke the old code).
+    // [Environment]::GetFolderPath() handles OneDrive-moved Desktop paths.
+    let exe_path = install_exe.to_string_lossy();
+    let script = format!(
+        "$exe = \"{exe}\"\r\n\
+         $ws  = New-Object -COM WScript.Shell\r\n\
+         $d   = [Environment]::GetFolderPath('Desktop')\r\n\
+         $p   = [Environment]::GetFolderPath('Programs')\r\n\
+         $s = $ws.CreateShortcut(\"$d\\HSIP.lnk\")\r\n\
+         $s.TargetPath  = $exe\r\n\
+         $s.Description = 'Open HSIP'\r\n\
+         $s.Save()\r\n\
+         $s = $ws.CreateShortcut(\"$p\\HSIP.lnk\")\r\n\
+         $s.TargetPath  = $exe\r\n\
+         $s.Description = 'Open HSIP'\r\n\
+         $s.Save()\r\n",
+        exe = exe_path.replace('"', "`\""),
     );
+    let ps1_path = install_dir.join("_create_shortcuts.ps1");
+    let _ = std::fs::write(&ps1_path, script.as_bytes());
+
     // Wait for shortcuts to finish before we exit
     let _ = std::process::Command::new("powershell")
-        .args(["-WindowStyle", "Hidden", "-NonInteractive", "-Command", &ps])
+        .args([
+            "-WindowStyle",    "Hidden",
+            "-NonInteractive",
+            "-ExecutionPolicy", "Bypass",
+            "-File",            &ps1_path.to_string_lossy(),
+        ])
         .status();
+    let _ = std::fs::remove_file(&ps1_path);
 
     // ── Launch installed copy and exit ────────────────────────────────────
     let _ = std::process::Command::new(&install_exe).spawn();
