@@ -110,12 +110,19 @@ jobs:
             This release is **automatically rebuilt every time a fix is pushed to main**.
             Always download from here to get the most recent version.
 
+            **Windows users:** Download both `hsip-windows-x64.exe` AND `launch-hsip.bat`.
+            Put them in the same folder. Double-click `launch-hsip.bat` to start HSIP and open it in your browser.
+
             Last updated: ${{ github.sha }}
-          files: ${{ matrix.asset }}
+          files: |
+            ${{ matrix.asset }}
+            launch-hsip.bat
 
       # ── On versioned release: attach to that release ──────────────────────────
       - name: Upload to versioned release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset }}
+          files: |
+            ${{ matrix.asset }}
+            launch-hsip.bat

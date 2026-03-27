@@ -18,6 +18,7 @@ import './App.css';
 const SIMPLE_TABS = [
   { id: 'home',              label: '🏠 Home' },
   { id: 'prove-it',          label: '✍️ Alibi' },
+  { id: 'messages',          label: '💬 Messages' },
   { id: 'consent-wallet',    label: '🛡️ My Consents' },
   { id: 'ai-watch',          label: '🤖 AI Watch' },
   { id: 'tracker-inspector', label: '🔍 Trackers' },
@@ -171,10 +172,11 @@ export default function App() {
           <>
             {tab === 'home'              && <HomeDashboard    onNavigate={setTab} />}
             {tab === 'prove-it'          && <ProveIt          apiKey={apiKey} />}
+            {tab === 'messages'          && <Messages         apiKey={apiKey} />}
             {tab === 'consent-wallet'    && <ConsentWallet    apiKey={apiKey} />}
             {tab === 'ai-watch'          && <AIWatch          apiKey={apiKey} />}
             {tab === 'tracker-inspector' && <TrackerInspector />}
-            {tab === 'protection'        && <ProtectionSetup  apiKey={apiKey} />}
+            {tab === 'protection'        && <ProtectionSetup  apiKey={apiKey} />
           </>
         ) : (
           <>
