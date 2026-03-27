@@ -103,20 +103,25 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Generate icon + banner assets
-          powershell -ExecutionPolicy Bypass -File installer\create-icon.ps1
-
-          # Install Inno Setup (already available on windows-latest runners via chocolatey)
+          # Install Inno Setup 6
           choco install innosetup --no-progress -y
 
-          # Copy binary next to the .iss script so Inno Setup can find it
+          # Copy binary next to the .iss script
           Copy-Item "${{ matrix.asset }}" "installer\hsip-windows-x64.exe"
 
-          # Compile the installer
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\hsip.iss
+          # Create output directory
+          New-Item -ItemType Directory -Force -Path "installer\output" | Out-Null
 
-          # Move output to repo root
-          Move-Item installer\hsip-setup-windows.exe hsip-setup-windows.exe
+          # Compile installer
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\hsip.iss"
+
+          # Verify and move to repo root
+          if (!(Test-Path "installer\output\hsip-setup-windows.exe")) {
+            Write-Error "Installer build failed — output file not found"
+            exit 1
+          }
+          Move-Item "installer\output\hsip-setup-windows.exe" "hsip-setup-windows.exe"
+          Write-Host "Installer built successfully."
 
       # ── On push to main: update the rolling "latest" pre-release ─────────────
       - name: Upload to rolling "latest" release (push to main)
