@@ -1,0 +1,854 @@
+# HSIP API Production Deployment Guide
+
+This guide covers production deployment, high availability architecture, backup strategies, and disaster recovery procedures for the HSIP API.
+
+---
+
+## Table of Contents
+
+1. [Quick Start](#quick-start)
+2. [Production Configuration](#production-configuration)
+3. [TLS/HTTPS Setup](#tlshttps-setup)
+4. [Database Configuration](#database-configuration)
+5. [High Availability Architecture](#high-availability-architecture)
+6. [Backup and Disaster Recovery](#backup-and-disaster-recovery)
+7. [Monitoring and Alerting](#monitoring-and-alerting)
+8. [Security Hardening](#security-hardening)
+9. [Performance Tuning](#performance-tuning)
+10. [Troubleshooting](#troubleshooting)
+
+---
+
+## Quick Start
+
+### 1. Generate Configuration Files
+
+```bash
+# Copy example config
+cp crates/hsip-api/config.toml.example config.toml
+
+# Generate master encryption key (32 bytes = 64 hex chars)
+openssl rand -hex 32 > hsip_master_key.bin
+chmod 600 hsip_master_key.bin
+
+# Generate TLS certificates (self-signed for testing)
+openssl req -x509 -newkey rsa:4096 -nodes \
+  -keyout key.pem -out cert.pem -days 365 \
+  -subj "/CN=yourdomain.com"
+chmod 600 key.pem
+```
+
+### 2. Edit Configuration
+
+Edit `config.toml` with your production settings:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[server.tls]
+cert_path = "cert.pem"
+key_path = "key.pem"
+require_https = true
+
+[database]
+url = "postgresql://hsip_user:password@localhost/hsip_db"
+max_connections = 10
+run_migrations = true
+
+[security]
+master_key_path = "hsip_master_key.bin"
+admin_key_path = "hsip_admin_key.txt"
+rate_limit_per_minute = 60
+
+[cors]
+allowed_origins = ["https://yourdomain.com"]
+
+[logging]
+level = "info"
+format = "json"
+```
+
+### 3. Build and Run
+
+```bash
+# Build release binary
+cargo build --release --bin hsip-api
+
+# Run server
+./target/release/hsip-api
+```
+
+---
+
+## Production Configuration
+
+### Environment Variables
+
+The following environment variables override config file settings:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `HSIP_CONFIG` | Path to config file | `config.toml` |
+| `DATABASE_URL` | Database connection string | `postgresql://...` |
+| `MASTER_KEY_PATH` | Path to master encryption key | `hsip_master_key.bin` |
+| `ADMIN_KEY_PATH` | Path to admin API key file | `hsip_admin_key.txt` |
+| `PORT` | Server port | `3000` |
+| `RUST_LOG` | Log level override | `info,hsip_api=debug` |
+| `METRICS_TOKEN` | Bearer token for `/metrics` | `secret-token` |
+
+### Configuration Validation
+
+The server performs comprehensive validation on startup:
+
+- ✅ Database URL format (SQLite/PostgreSQL)
+- ✅ Master key file exists and is readable
+- ✅ Admin key file path is valid
+- ✅ TLS certificate and private key exist (if TLS enabled)
+- ✅ Port number is valid (1-65535)
+- ✅ Log level is valid (trace/debug/info/warn/error)
+
+**The server will exit immediately with a clear error message if validation fails.**
+
+---
+
+## TLS/HTTPS Setup
+
+### Production Certificates (Let's Encrypt)
+
+For production deployments, use Let's Encrypt certificates:
+
+```bash
+# Install certbot
+sudo apt-get install certbot
+
+# Generate certificate (standalone mode)
+sudo certbot certonly --standalone -d yourdomain.com
+
+# Certificates will be in:
+# /etc/letsencrypt/live/yourdomain.com/fullchain.pem
+# /etc/letsencrypt/live/yourdomain.com/privkey.pem
+
+# Update config.toml
+[server.tls]
+cert_path = "/etc/letsencrypt/live/yourdomain.com/fullchain.pem"
+key_path = "/etc/letsencrypt/live/yourdomain.com/privkey.pem"
+require_https = true
+```
+
+### Certificate Auto-Renewal
+
+```bash
+# Test renewal
+sudo certbot renew --dry-run
+
+# Add cron job for auto-renewal
+sudo crontab -e
+
+# Renew daily at 3am, restart server if renewed
+0 3 * * * certbot renew --quiet --post-hook "systemctl restart hsip-api"
+```
+
+### Reverse Proxy (Alternative)
+
+If you prefer nginx/Caddy for TLS termination:
+
+**Caddy (automatic HTTPS):**
+
+```caddy
+yourdomain.com {
+    reverse_proxy localhost:3000
+}
+```
+
+**nginx:**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name yourdomain.com;
+
+    ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+If using a reverse proxy, **disable TLS in HSIP config** (remove `[server.tls]` section).
+
+---
+
+## Database Configuration
+
+### PostgreSQL Setup (Recommended)
+
+PostgreSQL is **strongly recommended** for production due to:
+- ✅ Better concurrency handling
+- ✅ ACID compliance
+- ✅ Point-in-time recovery
+- ✅ Replication support
+
+**Installation:**
+
+```bash
+# Install PostgreSQL
+sudo apt-get install postgresql postgresql-contrib
+
+# Create database and user
+sudo -u postgres psql
+```
+
+```sql
+CREATE DATABASE hsip_db;
+CREATE USER hsip_user WITH ENCRYPTED PASSWORD 'your_secure_password';
+GRANT ALL PRIVILEGES ON DATABASE hsip_db TO hsip_user;
+\q
+```
+
+**Connection String:**
+
+```toml
+[database]
+url = "postgresql://hsip_user:your_secure_password@localhost/hsip_db"
+max_connections = 10
+run_migrations = true
+```
+
+### Connection Pool Tuning
+
+Adjust `max_connections` based on your workload:
+
+- **Low traffic (< 100 req/s):** `max_connections = 5`
+- **Medium traffic (100-1000 req/s):** `max_connections = 10`
+- **High traffic (> 1000 req/s):** `max_connections = 20`
+
+**Formula:** `max_connections = (CPU cores * 2) + effective_spindle_count`
+
+For cloud databases (AWS RDS, etc.), monitor connection pool exhaustion and adjust accordingly.
+
+### SQLite (Development Only)
+
+⚠️ **Do NOT use SQLite for production** — it does not support:
+- High concurrency
+- Remote connections
+- Replication
+- Point-in-time recovery
+
+SQLite is acceptable for:
+- Local development
+- Testing
+- Single-user demos
+
+---
+
+## High Availability Architecture
+
+### Single Instance (Minimum)
+
+```
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  HSIP API   │
+│  + TLS      │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│ PostgreSQL  │
+└─────────────┘
+```
+
+**Pros:** Simple, low cost
+**Cons:** Single point of failure, no redundancy
+
+### Multi-Instance with Load Balancer (Recommended)
+
+```
+                      ┌─────────────┐
+                      │   Client    │
+                      └──────┬──────┘
+                             │
+                             ▼
+                      ┌─────────────┐
+                      │Load Balancer│  (nginx/HAProxy/AWS ALB)
+                      └──────┬──────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+              ▼              ▼              ▼
+       ┌─────────────┐┌─────────────┐┌─────────────┐
+       │  HSIP API   ││  HSIP API   ││  HSIP API   │
+       │  Instance 1 ││  Instance 2 ││  Instance 3 │
+       └──────┬──────┘└──────┬──────┘└──────┬──────┘
+              │              │              │
+              └──────────────┼──────────────┘
+                             │
+                             ▼
+                      ┌─────────────┐
+                      │ PostgreSQL  │
+                      │  Primary    │
+                      └──────┬──────┘
+                             │
+                      ┌──────┴──────┐
+                      │             │
+                      ▼             ▼
+               ┌─────────────┐┌─────────────┐
+               │ PostgreSQL  ││ PostgreSQL  │
+               │  Replica 1  ││  Replica 2  │
+               └─────────────┘└─────────────┘
+```
+
+**Pros:** High availability, horizontal scaling, zero-downtime deployments
+**Cons:** More complex, higher cost
+
+### Configuration for Multi-Instance
+
+**Key Requirements:**
+
+1. **Shared Database:** All HSIP instances connect to the same PostgreSQL cluster
+2. **Shared Master Key:** All instances must use the **identical** `hsip_master_key.bin` file
+3. **Stateless Design:** HSIP API is stateless (in-memory rate limiter is eventually consistent)
+
+**Deployment Steps:**
+
+```bash
+# On each instance, copy the SAME master key
+scp hsip_master_key.bin instance1:/opt/hsip/
+scp hsip_master_key.bin instance2:/opt/hsip/
+scp hsip_master_key.bin instance3:/opt/hsip/
+
+# Update config.toml on each instance to point to shared database
+[database]
+url = "postgresql://hsip_user:password@db.internal/hsip_db"
+```
+
+### Health Checks
+
+Configure your load balancer to check `/health`:
+
+```bash
+# Health check endpoint
+GET https://hsip-api.yourdomain.com/health
+
+# Expected response (200 OK):
+{"status":"ok","version":"0.2.0"}
+```
+
+**HAProxy Example:**
+
+```
+backend hsip_api
+    balance roundrobin
+    option httpchk GET /health
+    http-check expect status 200
+    server hsip1 10.0.1.10:3000 check
+    server hsip2 10.0.1.11:3000 check
+    server hsip3 10.0.1.12:3000 check
+```
+
+---
+
+## Backup and Disaster Recovery
+
+### Database Backups
+
+**PostgreSQL Automated Backups:**
+
+```bash
+#!/bin/bash
+# /opt/hsip/backup.sh
+
+BACKUP_DIR="/opt/hsip/backups"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+DATABASE="hsip_db"
+
+# Create backup directory
+mkdir -p $BACKUP_DIR
+
+# Dump database
+pg_dump -U hsip_user -Fc $DATABASE > "$BACKUP_DIR/hsip_db_$TIMESTAMP.dump"
+
+# Delete backups older than 30 days
+find $BACKUP_DIR -name "*.dump" -mtime +30 -delete
+
+# Upload to S3 (optional)
+aws s3 cp "$BACKUP_DIR/hsip_db_$TIMESTAMP.dump" s3://your-backup-bucket/hsip/
+```
+
+**Cron Job (Daily at 2 AM):**
+
+```bash
+0 2 * * * /opt/hsip/backup.sh >> /var/log/hsip-backup.log 2>&1
+```
+
+### Point-in-Time Recovery (PITR)
+
+Enable WAL archiving in PostgreSQL:
+
+```bash
+# postgresql.conf
+wal_level = replica
+archive_mode = on
+archive_command = 'test ! -f /mnt/wal_archive/%f && cp %p /mnt/wal_archive/%f'
+```
+
+### Critical Files to Backup
+
+| File | Purpose | Backup Frequency | Storage |
+|------|---------|------------------|---------|
+| `hsip_master_key.bin` | Encryption key | **ONCE** (never changes) | **Encrypted off-site** |
+| `hsip_admin_key.txt` | Admin API key | **ONCE** (never changes) | Secure vault |
+| `config.toml` | Server config | On change | Version control |
+| PostgreSQL database | All data | **Daily** | Encrypted S3/GCS |
+| PostgreSQL WAL files | PITR | **Continuous** | Encrypted S3/GCS |
+
+### Disaster Recovery Procedure
+
+**Scenario: Complete server failure**
+
+1. **Provision new server**
+2. **Install HSIP API binary**
+3. **Restore critical files:**
+
+```bash
+# Restore master key (from encrypted backup)
+aws s3 cp s3://your-backup-bucket/hsip_master_key.bin /opt/hsip/
+chmod 600 /opt/hsip/hsip_master_key.bin
+
+# Restore config
+cp /opt/hsip/config.toml.backup /opt/hsip/config.toml
+```
+
+4. **Restore database:**
+
+```bash
+# Create new database
+createdb -U postgres hsip_db
+
+# Restore from dump
+pg_restore -U hsip_user -d hsip_db /path/to/hsip_db_20260223_020000.dump
+```
+
+5. **Start server and verify:**
+
+```bash
+./hsip-api
+
+# Test health endpoint
+curl https://yourdomain.com/health
+```
+
+**RTO (Recovery Time Objective):** < 1 hour
+**RPO (Recovery Point Objective):** < 24 hours (with daily backups)
+
+---
+
+## Monitoring and Alerting
+
+### Metrics Endpoint
+
+HSIP exposes Prometheus-compatible metrics at `/metrics`:
+
+```bash
+# Protect with bearer token
+export METRICS_TOKEN="your-secret-token"
+
+# Query metrics
+curl -H "Authorization: Bearer your-secret-token" \
+  https://yourdomain.com/metrics
+```
+
+**Key Metrics:**
+
+- `hsip_requests_total` — Total requests by endpoint
+- `hsip_request_duration_seconds` — Request latency histogram
+- `hsip_active_tenants` — Number of active tenants
+- `hsip_credentials_issued_total` — Total credentials issued
+- `hsip_consent_grants_total` — Total consent grants
+- `hsip_rate_limit_exceeded_total` — Rate limit violations
+
+### Prometheus Configuration
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'hsip-api'
+    scrape_interval: 15s
+    bearer_token: 'your-secret-token'
+    static_configs:
+      - targets: ['hsip-api-1:3000', 'hsip-api-2:3000', 'hsip-api-3:3000']
+```
+
+### Grafana Dashboard
+
+Import the HSIP Grafana dashboard (create custom dashboard with):
+
+- **Request rate** (requests/sec)
+- **Error rate** (5xx responses)
+- **Latency** (p50, p95, p99)
+- **Active tenants**
+- **Rate limit violations**
+- **Database connection pool usage**
+
+### Alerting Rules
+
+**Prometheus Alert Rules:**
+
+```yaml
+groups:
+  - name: hsip_alerts
+    rules:
+      - alert: HighErrorRate
+        expr: rate(hsip_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        annotations:
+          summary: "HSIP API error rate > 5%"
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, rate(hsip_request_duration_seconds_bucket[5m])) > 1.0
+        for: 5m
+        annotations:
+          summary: "HSIP API p95 latency > 1s"
+
+      - alert: ServiceDown
+        expr: up{job="hsip-api"} == 0
+        for: 1m
+        annotations:
+          summary: "HSIP API instance is down"
+```
+
+### Structured Logging
+
+HSIP uses JSON-formatted structured logs in production:
+
+```toml
+[logging]
+level = "info"
+format = "json"
+```
+
+**Integrate with log aggregation:**
+
+- **CloudWatch Logs** (AWS)
+- **Stackdriver** (GCP)
+- **ELK Stack** (Elasticsearch/Logstash/Kibana)
+- **Loki** (Grafana)
+
+**Example log entry:**
+
+```json
+{
+  "timestamp": "2026-02-23T20:30:45.123Z",
+  "level": "INFO",
+  "target": "hsip_api",
+  "message": "Request completed",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "method": "POST",
+  "path": "/v1/credentials/issue",
+  "status": 200,
+  "duration_ms": 45
+}
+```
+
+---
+
+## Security Hardening
+
+### Operating System
+
+```bash
+# Run as non-root user
+sudo useradd -r -s /bin/false hsip
+sudo chown -R hsip:hsip /opt/hsip
+
+# Restrict file permissions
+chmod 600 /opt/hsip/hsip_master_key.bin
+chmod 600 /opt/hsip/hsip_admin_key.txt
+chmod 640 /opt/hsip/config.toml
+```
+
+### Systemd Service
+
+```ini
+# /etc/systemd/system/hsip-api.service
+[Unit]
+Description=HSIP API Server
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=hsip
+Group=hsip
+WorkingDirectory=/opt/hsip
+ExecStart=/opt/hsip/hsip-api
+Restart=on-failure
+RestartSec=10s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hsip
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable hsip-api
+sudo systemctl start hsip-api
+sudo systemctl status hsip-api
+```
+
+### Firewall Configuration
+
+```bash
+# Allow HTTPS only
+sudo ufw allow 443/tcp
+sudo ufw enable
+
+# If using reverse proxy, restrict API to localhost
+sudo ufw allow from 127.0.0.1 to any port 3000
+```
+
+### Rate Limiting
+
+HSIP includes built-in rate limiting (default: 60 requests/minute per API key).
+
+Adjust in `config.toml`:
+
+```toml
+[security]
+rate_limit_per_minute = 100  # Increase for higher throughput
+```
+
+For additional DDoS protection, use a reverse proxy or cloud WAF.
+
+---
+
+## Performance Tuning
+
+### Database Optimization
+
+**PostgreSQL tuning (`postgresql.conf`):**
+
+```ini
+# Connections
+max_connections = 100
+
+# Memory
+shared_buffers = 256MB
+effective_cache_size = 1GB
+work_mem = 4MB
+maintenance_work_mem = 64MB
+
+# WAL
+wal_buffers = 16MB
+checkpoint_completion_target = 0.9
+```
+
+**Analyze query performance:**
+
+```sql
+-- Enable slow query logging
+ALTER SYSTEM SET log_min_duration_statement = 1000;  -- Log queries > 1s
+SELECT pg_reload_conf();
+
+-- Check slow queries
+SELECT query, mean_exec_time, calls
+FROM pg_stat_statements
+ORDER BY mean_exec_time DESC
+LIMIT 10;
+```
+
+### Horizontal Scaling
+
+Add more HSIP API instances behind a load balancer to handle increased load.
+
+**Scaling strategy:**
+
+- **< 1,000 req/s:** 2 instances
+- **1,000-10,000 req/s:** 3-5 instances
+- **> 10,000 req/s:** 5+ instances + database read replicas
+
+### Caching
+
+HSIP does not include built-in caching. For high-read workloads, consider:
+
+- **Redis** for session/credential caching
+- **PostgreSQL read replicas** for consent lookups
+- **CDN** for static assets (Swagger UI)
+
+---
+
+## Troubleshooting
+
+### Server Won't Start
+
+**Issue:** Configuration validation error
+
+```
+❌ Configuration validation failed: Master key file not found: hsip_master_key.bin
+```
+
+**Solution:**
+
+```bash
+openssl rand -hex 32 > hsip_master_key.bin
+chmod 600 hsip_master_key.bin
+```
+
+---
+
+**Issue:** TLS certificate error
+
+```
+❌ Failed to open certificate: cert.pem
+```
+
+**Solution:**
+
+```bash
+# Generate self-signed cert
+openssl req -x509 -newkey rsa:4096 -nodes \
+  -keyout key.pem -out cert.pem -days 365 \
+  -subj "/CN=localhost"
+```
+
+---
+
+### Database Connection Errors
+
+**Issue:** `connection refused`
+
+```
+Error: error connecting to database: Connection refused (os error 111)
+```
+
+**Solution:**
+
+```bash
+# Check PostgreSQL is running
+sudo systemctl status postgresql
+
+# Check connection string in config.toml
+[database]
+url = "postgresql://hsip_user:password@localhost/hsip_db"
+```
+
+---
+
+**Issue:** `too many connections`
+
+```
+Error: FATAL: sorry, too many clients already
+```
+
+**Solution:**
+
+```sql
+-- Increase max_connections in PostgreSQL
+ALTER SYSTEM SET max_connections = 200;
+SELECT pg_reload_conf();
+```
+
+Or reduce `max_connections` in HSIP config:
+
+```toml
+[database]
+max_connections = 5
+```
+
+---
+
+### High Latency
+
+**Issue:** Slow API responses
+
+**Diagnosis:**
+
+```bash
+# Check database query performance
+sudo -u postgres psql hsip_db
+```
+
+```sql
+SELECT * FROM pg_stat_activity WHERE state = 'active';
+```
+
+**Solution:**
+
+1. Add database indexes (already included in migrations)
+2. Increase `max_connections` in config
+3. Add read replicas for PostgreSQL
+4. Scale horizontally (add more HSIP instances)
+
+---
+
+### Memory Leaks
+
+**Issue:** Server memory usage grows over time
+
+**Diagnosis:**
+
+```bash
+# Monitor memory usage
+watch -n 5 'ps aux | grep hsip-api'
+```
+
+**Solution:**
+
+1. Update to latest version
+2. Report issue to GitHub with logs
+3. Restart service (temporary):
+
+```bash
+sudo systemctl restart hsip-api
+```
+
+---
+
+## Production Checklist
+
+Before going live, verify:
+
+- [ ] TLS/HTTPS enabled with valid certificate
+- [ ] PostgreSQL database configured (not SQLite)
+- [ ] Master key backed up to encrypted off-site storage
+- [ ] Config file reviewed and secured (chmod 640)
+- [ ] Firewall rules configured
+- [ ] Systemd service installed and enabled
+- [ ] Automated backups configured (daily)
+- [ ] Monitoring/alerting configured (Prometheus + Grafana)
+- [ ] Load balancer health checks configured
+- [ ] Disaster recovery procedure documented and tested
+- [ ] Third-party security audit completed (recommended)
+- [ ] Load testing performed with expected traffic patterns
+
+---
+
+## Support
+
+For production deployment support:
+
+- **Documentation:** See `README.md`, `PROTOCOL_SPEC.md`, `SDK_INTEGRATION.md`
+- **Issues:** https://github.com/yourusername/hsip/issues
+- **Email:** support@yourdomain.com
+
+---
+
+**End of Deployment Guide**

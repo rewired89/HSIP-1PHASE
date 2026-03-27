@@ -1,0 +1,171 @@
+# HSIP Build & Release Workflow
+#
+# Triggers on every push to main → updates the rolling "latest" pre-release.
+# Users always download from: https://github.com/rewired89/HSIP-1PHASE/releases/tag/latest
+#
+# Architecture:
+#   build  (matrix, 4 parallel jobs) → compiles each platform binary
+#   release (single job, runs after all builds finish) → uploads everything at once
+#
+# Using a single upload job eliminates race conditions that caused stale assets.
+
+name: Build & release
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Build ─────────────────────────────────────────────────────────────────
+  build:
+    name: Build — ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name:   Windows x64
+            os:     windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: target/x86_64-pc-windows-msvc/release/hsip-api.exe
+            asset:  hsip-windows-x64.exe
+
+          - name:   macOS Apple Silicon
+            os:     macos-latest
+            target: aarch64-apple-darwin
+            binary: target/aarch64-apple-darwin/release/hsip-api
+            asset:  hsip-macos-arm64
+
+          - name:   macOS Intel
+            os:     macos-latest
+            target: x86_64-apple-darwin
+            binary: target/x86_64-apple-darwin/release/hsip-api
+            asset:  hsip-macos-x64
+
+          - name:   Linux x64
+            os:     ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: target/x86_64-unknown-linux-gnu/release/hsip-api
+            asset:  hsip-linux-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: npm ci && npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build binary
+        run: cargo build --release --package hsip-api --target ${{ matrix.target }} --features hsip-api/embed-dashboard
+
+      - name: Prepare asset (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          strip ${{ matrix.binary }} || true
+          cp ${{ matrix.binary }} ${{ matrix.asset }}
+          chmod +x ${{ matrix.asset }}
+
+      - name: Prepare asset (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item "${{ matrix.binary }}" "${{ matrix.asset }}"
+
+      # Save binary as a workflow artifact so the release job can pick it up
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          retention-days: 1
+
+  # ── Release ───────────────────────────────────────────────────────────────
+  # Runs once, after ALL build jobs finish. Downloads every artifact and
+  # publishes them in a single operation — no parallel upload races.
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true   # puts every file in the working directory
+
+      - name: List files (sanity check)
+        run: ls -lh
+
+      # ── Push to main → update rolling "latest" pre-release ───────────────
+      - name: Publish to "latest" pre-release (push to main)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Write release notes to a file (avoids heredoc indentation issues)
+          cat > release-notes.md << 'EOF'
+          This release rebuilds automatically on every push to main. Always download from here for the latest version.
+
+          | Platform | Download |
+          |----------|----------|
+          | **Windows** | `hsip-windows-x64.exe` |
+          | macOS Apple Silicon | `hsip-macos-arm64` |
+          | macOS Intel | `hsip-macos-x64` |
+          | Linux | `hsip-linux-x64` |
+
+          **Windows:** Download `hsip-windows-x64.exe` and double-click it. On first run it installs itself, creates a Desktop shortcut and Start Menu entry, then opens in your browser. Use the shortcut from then on.
+          EOF
+
+          echo "Last updated: ${{ github.sha }}" >> release-notes.md
+
+          # Create release if it doesn't exist yet
+          gh release view latest --repo rewired89/HSIP-1PHASE > /dev/null 2>&1 \
+            || gh release create latest --repo rewired89/HSIP-1PHASE \
+                 --prerelease --title "Latest build (auto-updated)" --notes "init"
+
+          # Update title and notes
+          gh release edit latest --repo rewired89/HSIP-1PHASE \
+            --title "Latest build (auto-updated)" \
+            --notes-file release-notes.md
+
+          # Upload all binaries, overwriting stale files
+          gh release upload latest \
+            hsip-windows-x64.exe \
+            hsip-macos-arm64 \
+            hsip-macos-x64 \
+            hsip-linux-x64 \
+            --repo rewired89/HSIP-1PHASE \
+            --clobber
+
+      # ── Versioned release → attach binaries ──────────────────────────────
+      - name: Upload to versioned release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ github.ref_name }} \
+            hsip-windows-x64.exe \
+            hsip-macos-arm64 \
+            hsip-macos-x64 \
+            hsip-linux-x64 \
+            --repo rewired89/HSIP-1PHASE \
+            --clobber

@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+
+  hsip-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "3000:3000"
+    volumes:
+      - hsip-data:/data
+    environment:
+      - PORT=3000
+      - HSIP_DB_PATH=/data/hsip_api.db
+      - RUST_LOG=hsip_api=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  hsip-dashboard:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./dashboard:/app
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - REACT_APP_API_URL=http://localhost:3000
+    command: sh -c "npm install && npm start"
+    depends_on:
+      - hsip-api
+
+volumes:
+  hsip-data:

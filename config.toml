@@ -1,0 +1,43 @@
+# HSIP API Configuration - Windows Development Setup
+
+[server]
+host = "127.0.0.1"
+port = 3000
+# TLS disabled for local development - DO NOT use in production
+# Uncomment [server.tls] section below when you have certificates
+
+# [server.tls]
+# cert_path = "cert.pem"
+# key_path = "key.pem"
+# require_https = true
+
+[database]
+# SQLite in-memory for testing (data lost on restart)
+url = "sqlite::memory:"
+max_connections = 1
+run_migrations = true
+
+# For persistent database, use:
+# url = "sqlite:hsip.db"
+# max_connections = 10
+
+# For production PostgreSQL:
+# url = "postgresql://hsip_user:password@localhost/hsip_db"
+# max_connections = 10
+
+[security]
+master_key_path = "hsip_master_key.bin"
+admin_key_path = "hsip_admin_key.txt"
+rate_limit_per_minute = 60
+
+[cors]
+# Empty = deny all cross-origin requests (recommended for development)
+allowed_origins = []
+
+[metrics]
+# Optional token to protect /metrics endpoint
+# token = "your-metrics-token"
+
+[logging]
+level = "info"
+format = "pretty"

@@ -1,0 +1,175 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "HSIP API",
+    "description": "High Security Internet Protocol — multi-tenant identity, consent, message signing, and privacy-preserving credential verification.",
+    "version": "0.2.0",
+    "contact": { "name": "HSIP Support" }
+  },
+  "servers": [{ "url": "http://localhost:3000", "description": "Local development" }],
+  "security": [{ "bearerAuth": [] }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "description": "API key issued by POST /v1/keys or shown on first startup" }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Health check",
+        "security": [],
+        "responses": {
+          "200": { "description": "Service is healthy", "content": { "application/json": { "example": { "status": "ok", "version": "0.2.0" } } } }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Prometheus metrics",
+        "security": [],
+        "responses": { "200": { "description": "Prometheus text format metrics" } }
+      }
+    },
+    "/v1/identity": {
+      "post": {
+        "tags": ["Identity"],
+        "summary": "Create or retrieve tenant identity (Ed25519 keypair)",
+        "responses": {
+          "200": { "description": "Identity created or already exists", "content": { "application/json": { "example": { "tenant_id": "uuid", "verify_key": "base64", "created_at": 1700000000000 } } } }
+        }
+      },
+      "get": {
+        "tags": ["Identity"],
+        "summary": "Get existing tenant identity",
+        "responses": {
+          "200": { "description": "Identity found" },
+          "404": { "description": "No identity yet, POST /v1/identity first" }
+        }
+      }
+    },
+    "/v1/consent/grant": {
+      "post": {
+        "tags": ["Consent"],
+        "summary": "Grant consent to a peer",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["peer_verify_key"], "properties": { "peer_verify_key": { "type": "string", "description": "Base64-encoded Ed25519 verify key of the peer" }, "ttl_ms": { "type": "integer", "description": "Consent TTL in milliseconds (default: 3600000)" } } } } }
+        },
+        "responses": { "200": { "description": "Consent granted" } }
+      }
+    },
+    "/v1/consent/revoke": {
+      "post": {
+        "tags": ["Consent"],
+        "summary": "Revoke consent from a peer",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["peer_verify_key"], "properties": { "peer_verify_key": { "type": "string" } } } } }
+        },
+        "responses": { "200": { "description": "Consent revoked" }, "404": { "description": "Consent not found" } }
+      }
+    },
+    "/v1/consent": {
+      "get": { "tags": ["Consent"], "summary": "List all consents", "responses": { "200": { "description": "Array of consent records" } } }
+    },
+    "/v1/consent/{peer_key}": {
+      "get": { "tags": ["Consent"], "summary": "Get consent for a specific peer", "parameters": [{ "name": "peer_key", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Consent record" }, "404": { "description": "Not found" } } }
+    },
+    "/v1/messages/sign": {
+      "post": {
+        "tags": ["Messages"],
+        "summary": "Sign a message with your identity's private key",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["content"], "properties": { "content": { "type": "string" }, "peer_verify_key": { "type": "string" } } } } }
+        },
+        "responses": { "200": { "description": "Signed message with Ed25519 signature" } }
+      }
+    },
+    "/v1/messages/verify": {
+      "post": {
+        "tags": ["Messages"],
+        "summary": "Verify a peer's message signature",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["content", "signature", "peer_verify_key"], "properties": { "content": { "type": "string" }, "signature": { "type": "string" }, "peer_verify_key": { "type": "string" } } } } }
+        },
+        "responses": { "200": { "description": "Verification result with verified boolean" } }
+      }
+    },
+    "/v1/messages": {
+      "get": { "tags": ["Messages"], "summary": "List messages (last 100)", "responses": { "200": { "description": "Array of message records" } } }
+    },
+    "/v1/credentials/issue": {
+      "post": {
+        "tags": ["Credentials"],
+        "summary": "Issue a privacy-preserving credential (e.g. age_over_18, kyc_verified)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["claim", "user_token"], "properties": { "claim": { "type": "string", "example": "age_over_18", "maxLength": 64 }, "user_token": { "type": "string", "description": "Opaque blind identifier for the subject" }, "ttl_seconds": { "type": "integer", "description": "Credential TTL in seconds (default: 86400)" } } } } }
+        },
+        "responses": { "200": { "description": "Issued credential with Ed25519 signature" } }
+      }
+    },
+    "/v1/credentials/verify": {
+      "post": {
+        "tags": ["Credentials"],
+        "summary": "Verify a credential's signature, expiry, and revocation status",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["credential", "signature"], "properties": { "credential": { "type": "object" }, "signature": { "type": "string" } } } } }
+        },
+        "responses": { "200": { "description": "valid, expired, revoked booleans" } }
+      }
+    },
+    "/v1/credentials": {
+      "get": { "tags": ["Credentials"], "summary": "List issued credentials (last 100)", "responses": { "200": { "description": "Array of credential records" } } }
+    },
+    "/v1/credentials/{id}/revoke": {
+      "delete": { "tags": ["Credentials"], "summary": "Revoke a credential by ID", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Credential revoked" }, "404": { "description": "Not found" } } }
+    },
+    "/v1/keys": {
+      "get": { "tags": ["Keys"], "summary": "List all API keys for this tenant", "responses": { "200": { "description": "Array of key records (hashes only, not raw keys)" } } },
+      "post": {
+        "tags": ["Keys"],
+        "summary": "Create a new API key",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "agent_type": { "type": "string", "enum": ["human", "service", "ai_agent"] }, "expires_in_days": { "type": "integer", "description": "Optional TTL in days; omit for no expiry" } } } } }
+        },
+        "responses": { "200": { "description": "New key with raw value (shown once only)" } }
+      }
+    },
+    "/v1/keys/{id}": {
+      "delete": { "tags": ["Keys"], "summary": "Revoke an API key", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Key revoked" }, "404": { "description": "Key not found" } } }
+    },
+    "/v1/agents": {
+      "get": { "tags": ["Agents"], "summary": "List AI agent keys with live velocity stats", "responses": { "200": { "description": "Array of agent stats including request_count and anomaly_count" } } }
+    },
+    "/v1/audit": {
+      "get": {
+        "tags": ["Audit"],
+        "summary": "List audit log entries",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 500 } },
+          { "name": "action", "in": "query", "schema": { "type": "string", "description": "Filter by action substring (e.g. 'credential')" } }
+        ],
+        "responses": { "200": { "description": "Array of audit entries" } }
+      }
+    },
+    "/v1/tenant": {
+      "get": { "tags": ["Tenant"], "summary": "Get tenant info", "responses": { "200": { "description": "Tenant name and created_at" } } }
+    },
+    "/v1/tenant/erase": {
+      "post": {
+        "tags": ["Tenant"],
+        "summary": "GDPR right-to-erasure — permanently delete all tenant data",
+        "description": "Deletes all credentials, messages, consents, identities, audit entries, API keys, and the tenant record. Irreversible.",
+        "responses": {
+          "200": { "description": "Erasure complete", "content": { "application/json": { "example": { "erased": true, "tenant_id": "uuid", "timestamp": 1700000000000, "tables_cleared": ["credentials", "messages", "consents", "identities", "audit_entries", "api_keys", "tenants"] } } } }
+        }
+      }
+    }
+  }
+}
