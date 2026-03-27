@@ -1,15 +1,20 @@
-# HSIP Release Workflow
+# HSIP Build Workflow
 #
-# Builds a self-contained binary for Windows, macOS (Intel + Apple Silicon),
-# and Linux. Each binary embeds the React dashboard — users just download
-# and double-click (browser opens automatically at http://localhost:3000).
+# Builds a self-contained binary for Windows, macOS, and Linux.
+# Each binary embeds the React dashboard — users just download and run.
 #
-# Triggers automatically when a new GitHub Release is published.
-# To create a release:  GitHub UI → Releases → Draft new release → Publish
+# TWO triggers:
+#   1. Push to main → rebuilds the "latest" pre-release automatically.
+#      Download from: https://github.com/rewired89/HSIP-1PHASE/releases/tag/latest
+#
+#   2. A versioned release is published (e.g. v1.0.2) → attaches binaries
+#      to that release as the official stable download.
 
-name: Release binaries
+name: Build & release
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 
@@ -93,8 +98,24 @@ jobs:
         shell: pwsh
         run: Copy-Item "${{ matrix.binary }}" "${{ matrix.asset }}"
 
-      # ── Upload to the GitHub Release ──────────────────────────────────────────
-      - name: Upload release asset
+      # ── On push to main: update the rolling "latest" pre-release ─────────────
+      - name: Upload to rolling "latest" release (push to main)
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest build (auto-updated)"
+          prerelease: true
+          body: |
+            This release is **automatically rebuilt every time a fix is pushed to main**.
+            Always download from here to get the most recent version.
+
+            Last updated: ${{ github.sha }}
+          files: ${{ matrix.asset }}
+
+      # ── On versioned release: attach to that release ──────────────────────────
+      - name: Upload to versioned release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.asset }}
