@@ -243,7 +243,7 @@ impl Config {
         Ok(Config {
             server: ServerConfig {
                 host: "127.0.0.1".to_string(),
-                port: 3000,
+                port: 7474,
                 tls: None,
             },
             database: DatabaseConfig {
@@ -258,8 +258,8 @@ impl Config {
             },
             cors: CorsConfig {
                 allowed_origins: vec![
-                    "http://localhost:3000".to_string(),
-                    "http://127.0.0.1:3000".to_string(),
+                    "http://localhost:7474".to_string(),
+                    "http://127.0.0.1:7474".to_string(),
                 ],
             },
             metrics: MetricsConfig { token: None },
