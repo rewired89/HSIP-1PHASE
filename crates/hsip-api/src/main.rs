@@ -440,39 +440,35 @@ fn maybe_self_install() {
     if std::fs::create_dir_all(&install_dir).is_err() { return; }
     if std::fs::copy(&current_exe, &install_exe).is_err() { return; }
 
-    // ── Create Desktop + Start Menu shortcuts via PowerShell ──────────────
-    // Write a real .ps1 file so there are zero quoting/escaping issues with
-    // the -Command inline approach (which silently broke the old code).
-    // [Environment]::GetFolderPath() handles OneDrive-moved Desktop paths.
+    // ── Create Desktop + Start Menu shortcuts via VBScript ────────────────
+    // wscript.exe + VBScript has NO execution policy restrictions (unlike
+    // PowerShell), works on every Windows version, and WScript.Shell is
+    // the standard Win32 way to create .lnk files.
+    // SpecialFolders("Desktop") reads the same registry key as
+    // [Environment]::GetFolderPath, so it handles OneDrive-moved Desktops.
     let exe_path = install_exe.to_string_lossy();
+    let exe_vbs  = exe_path.replace('"', "\"\""); // VBScript: escape " by doubling
     let script = format!(
-        "$exe = \"{exe}\"\r\n\
-         $ws  = New-Object -COM WScript.Shell\r\n\
-         $d   = [Environment]::GetFolderPath('Desktop')\r\n\
-         $p   = [Environment]::GetFolderPath('Programs')\r\n\
-         $s = $ws.CreateShortcut(\"$d\\HSIP.lnk\")\r\n\
-         $s.TargetPath  = $exe\r\n\
-         $s.Description = 'Open HSIP'\r\n\
-         $s.Save()\r\n\
-         $s = $ws.CreateShortcut(\"$p\\HSIP.lnk\")\r\n\
-         $s.TargetPath  = $exe\r\n\
-         $s.Description = 'Open HSIP'\r\n\
-         $s.Save()\r\n",
-        exe = exe_path.replace('"', "`\""),
+        "Set ws = CreateObject(\"WScript.Shell\")\r\n\
+         exe = \"{exe}\"\r\n\
+         Set s = ws.CreateShortcut(ws.SpecialFolders(\"Desktop\") & \"\\HSIP.lnk\")\r\n\
+         s.TargetPath  = exe\r\n\
+         s.Description = \"Open HSIP\"\r\n\
+         s.Save\r\n\
+         Set s = ws.CreateShortcut(ws.SpecialFolders(\"Programs\") & \"\\HSIP.lnk\")\r\n\
+         s.TargetPath  = exe\r\n\
+         s.Description = \"Open HSIP\"\r\n\
+         s.Save\r\n",
+        exe = exe_vbs,
     );
-    let ps1_path = install_dir.join("_create_shortcuts.ps1");
-    let _ = std::fs::write(&ps1_path, script.as_bytes());
-
-    // Wait for shortcuts to finish before we exit
-    let _ = std::process::Command::new("powershell")
-        .args([
-            "-WindowStyle",    "Hidden",
-            "-NonInteractive",
-            "-ExecutionPolicy", "Bypass",
-            "-File",            &ps1_path.to_string_lossy(),
-        ])
-        .status();
-    let _ = std::fs::remove_file(&ps1_path);
+    let vbs_path = install_dir.join("_shortcuts.vbs");
+    if std::fs::write(&vbs_path, script.as_bytes()).is_ok() {
+        // //B = silent (no dialogs), //NoLogo = no banner; wait for it to finish
+        let _ = std::process::Command::new("wscript.exe")
+            .args(["//B", "//NoLogo", &vbs_path.to_string_lossy()])
+            .status();
+        let _ = std::fs::remove_file(&vbs_path);
+    }
 
     // ── Launch installed copy and exit ────────────────────────────────────
     let _ = std::process::Command::new(&install_exe).spawn();
