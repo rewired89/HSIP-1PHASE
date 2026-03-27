@@ -441,20 +441,16 @@ fn maybe_self_install() {
     if std::fs::copy(&current_exe, &install_exe).is_err() { return; }
 
     // ── Create Desktop + Start Menu shortcuts via PowerShell ──────────────
-    let exe = install_exe.to_string_lossy().replace('\'', "''");
-    let appdata      = std::env::var("APPDATA").unwrap_or_default();
-    let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
-
-    let desktop    = format!(r"{user_profile}\Desktop\HSIP.lnk");
-    let start_menu = format!(r"{appdata}\Microsoft\Windows\Start Menu\Programs\HSIP.lnk");
-
+    // Use [Environment]::GetFolderPath() so we get the correct Desktop path
+    // even when OneDrive has moved it (e.g. %USERPROFILE%\OneDrive\Desktop).
+    let exe = install_exe.to_string_lossy().replace('"', r#"`""#);
     let ps = format!(
-        "$ws=New-Object -COM WScript.Shell;\
-         $s=$ws.CreateShortcut('{desktop}');$s.TargetPath='{exe}';$s.Description='Open HSIP';$s.Save();\
-         $s=$ws.CreateShortcut('{start_menu}');$s.TargetPath='{exe}';$s.Description='Open HSIP';$s.Save()",
-        desktop    = desktop.replace('\'', "''"),
-        start_menu = start_menu.replace('\'', "''"),
-        exe        = exe,
+        r#"$exe="{exe}"; \
+$ws=New-Object -COM WScript.Shell; \
+$desk=[Environment]::GetFolderPath('Desktop'); \
+$prog=[Environment]::GetFolderPath('Programs'); \
+$s=$ws.CreateShortcut("$desk\HSIP.lnk"); $s.TargetPath=$exe; $s.Description='Open HSIP'; $s.Save(); \
+$s=$ws.CreateShortcut("$prog\HSIP.lnk"); $s.TargetPath=$exe; $s.Description='Open HSIP'; $s.Save()"#
     );
     // Wait for shortcuts to finish before we exit
     let _ = std::process::Command::new("powershell")
