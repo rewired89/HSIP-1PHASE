@@ -135,6 +135,7 @@ const DNS_OS_STEPS = {
 function DnsSection({ apiKey }) {
   const [status,    setStatus]    = useState(null);   // null = loading
   const [toggling,  setToggling]  = useState(false);
+  const [dnsError,  setDnsError]  = useState('');
   const [log,       setLog]       = useState([]);
   const [dnsOs,     setDnsOs]     = useState('windows');
   const [showSetup, setShowSetup] = useState(false);
@@ -159,6 +160,7 @@ function DnsSection({ apiKey }) {
   async function toggle() {
     if (!status) return;
     setToggling(true);
+    setDnsError('');
     try {
       if (status.running) {
         const s = await request('POST', '/v1/dns/disable', null, apiKey);
@@ -168,7 +170,7 @@ function DnsSection({ apiKey }) {
         const s = await request('POST', '/v1/dns/enable', { port: DNS_PORT }, apiKey);
         setStatus(s);
       }
-    } catch (e) { alert(e.message); }
+    } catch (e) { setDnsError(e.message); }
     setToggling(false);
   }
 
@@ -202,6 +204,12 @@ function DnsSection({ apiKey }) {
           {toggling ? '…' : status.running ? 'Turn Off' : 'Turn On'}
         </button>
       </div>
+
+      {dnsError && (
+        <div className="dns-error-banner">
+          ⚠️ {dnsError}
+        </div>
+      )}
 
       {status.running && (
         <div className="dns-stats-row">

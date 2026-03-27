@@ -101,9 +101,19 @@ pub async fn enable(
         h.shutdown();
     }
 
-    let handle = hsip_dns::start(port)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to start DNS resolver: {}", e)))?;
+    let handle = hsip_dns::start(port).await.map_err(|e| {
+        // Port already in use means another HSIP instance is running the DNS resolver.
+        let msg = e.to_string();
+        if msg.contains("10048") || msg.contains("already in use") || msg.contains("Address already in use") {
+            ApiError::Internal(
+                "DNS resolver is already active (started by another HSIP window). \
+                 Close all HSIP windows, then reopen HSIP and enable DNS from here."
+                    .to_string(),
+            )
+        } else {
+            ApiError::Internal(format!("Failed to start DNS resolver: {}", e))
+        }
+    })?;
 
     let resp = DnsStatusResponse {
         running:        true,

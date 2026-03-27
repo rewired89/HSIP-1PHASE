@@ -176,7 +176,7 @@ export default function App() {
             {tab === 'consent-wallet'    && <ConsentWallet    apiKey={apiKey} />}
             {tab === 'ai-watch'          && <AIWatch          apiKey={apiKey} />}
             {tab === 'tracker-inspector' && <TrackerInspector />}
-            {tab === 'protection'        && <ProtectionSetup  apiKey={apiKey} />
+            {tab === 'protection'        && <ProtectionSetup  apiKey={apiKey} />}
           </>
         ) : (
           <>
