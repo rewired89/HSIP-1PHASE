@@ -205,21 +205,55 @@ async fn run() -> Result<()> {
         tracing::info!("   Metrics: http://{}/metrics", addr);
         tracing::info!("   Health:  http://{}/health", addr);
 
+        // Desktop builds: if HSIP is already running on this port, open the
+        // existing session in the browser and exit cleanly instead of crashing.
+        #[cfg(feature = "embed-dashboard")]
+        {
+            use std::net::TcpStream;
+            if TcpStream::connect(&addr as &str).is_ok() {
+                tracing::info!("HSIP already running — opening browser to existing session");
+                let _ = webbrowser::open(&url);
+                return Ok(());
+            }
+        }
+
         // Auto-open the dashboard in the default browser (desktop/release builds)
         #[cfg(feature = "embed-dashboard")]
         {
             let open_url = url.clone();
             tokio::spawn(async move {
                 // Small delay so the server finishes binding before the browser hits it
-                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                 if let Err(e) = webbrowser::open(&open_url) {
                     tracing::warn!("Could not open browser automatically: {}", e);
-                    println!("\n  Open your browser at: {}\n", open_url);
                 }
             });
+
+            // First-run: create a desktop shortcut so the user can always find HSIP
+            #[cfg(windows)]
+            create_desktop_shortcut_once();
         }
 
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            // Race condition: something grabbed the port between check and bind.
+            // Open browser to existing instance and exit cleanly.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                #[cfg(feature = "embed-dashboard")]
+                {
+                    tracing::info!("Port taken — opening browser to existing HSIP session");
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    let _ = webbrowser::open(&url);
+                    return Ok(());
+                }
+                #[cfg(not(feature = "embed-dashboard"))]
+                return Err(anyhow::anyhow!(
+                    "Port {} is already in use. Stop the other process or change the port in config.toml.",
+                    config.server.port
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
         axum::serve(listener, app).await?;
     }
 
@@ -369,6 +403,34 @@ async fn docs_handler() -> impl IntoResponse {
 </body>
 </html>"#,
     )
+}
+
+/// Create a Windows desktop shortcut to this executable on first run.
+/// Uses PowerShell's WScript.Shell COM object — no extra dependencies.
+/// Safe to call every launch; skips silently if the shortcut already exists.
+#[cfg(all(windows, feature = "embed-dashboard"))]
+fn create_desktop_shortcut_once() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let exe_str = exe.to_string_lossy().replace('\'', "''");
+
+    let desktop = std::env::var("USERPROFILE")
+        .map(|p| format!(r"{p}\Desktop\HSIP.lnk"))
+        .unwrap_or_default();
+    if desktop.is_empty() { return; }
+
+    // Skip if shortcut already exists
+    if std::path::Path::new(&desktop).exists() { return; }
+
+    let script = format!(
+        "$s=(New-Object -COM WScript.Shell).CreateShortcut('{desktop}'); \
+         $s.TargetPath='{exe_str}'; \
+         $s.Description='Open HSIP'; \
+         $s.IconLocation='{exe_str},0'; \
+         $s.Save()"
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-WindowStyle", "Hidden", "-NonInteractive", "-Command", &script])
+        .spawn();
 }
 
 async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
