@@ -1,0 +1,70 @@
+name: Tracker Submission
+description: Submit a tracker domain that HSIP should block
+labels: ["tracker-blocklist"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us keep the blocklist current. Submit any tracker that HSIP isn't blocking yet.
+
+  - type: input
+    id: domain
+    attributes:
+      label: Domain
+      placeholder: "e.g. trackercompany.com"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Session Recording
+        - Ad Network
+        - Analytics
+        - Social
+        - Fingerprinting
+        - Data Broker
+        - Email Tracking
+        - Crash Reporting
+        - Microsoft Telemetry
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk level
+      options:
+        - Critical (records sessions, captures keystrokes)
+        - High (tracks across sites, profiles users)
+        - Medium (analytics, general tracking)
+        - Low (minor telemetry)
+    validations:
+      required: true
+
+  - type: input
+    id: vendor
+    attributes:
+      label: Vendor name
+      placeholder: "e.g. Hotjar, Google, Meta"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What does this tracker do?
+      description: Plain-language description of what this tracker collects and how it harms users.
+      placeholder: "e.g. Records full browser sessions including mouse movements, clicks, and form inputs..."
+    validations:
+      required: true
+
+  - type: input
+    id: source
+    attributes:
+      label: Source / evidence
+      description: Link to documentation, privacy policy, or research that confirms this is a tracker.
+      placeholder: "https://..."
