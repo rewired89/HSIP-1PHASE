@@ -1,83 +1,21 @@
-# HSIP Commercial License
+MIT License
 
-**Version 2.0 – February 2026**
+Copyright (c) 2025-2026 Dayana Sanchez
 
-Copyright © 2025-2026 Dayana Sanchez.
-All rights reserved.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
----
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-## Proprietary Software
-
-This software, HSIP (High Security Internet Protocol), and all associated source code,
-documentation, and materials are the exclusive proprietary property of Dayana Sanchez.
-
-**No rights are granted to any party without a separate written commercial license
-agreement signed by Dayana Sanchez.**
-
----
-
-## No Unauthorized Use
-
-Without a valid commercial license agreement, you may not:
-
-- Use this software or any part of it in any product, service, or system
-- Copy, modify, distribute, or sublicense this software
-- Reverse engineer, decompile, or disassemble this software
-- Use this software for evaluation without written permission
-
----
-
-## Commercial Licensing
-
-All use of HSIP requires a valid commercial license. We offer:
-
-- **Startup License** — For early-stage companies (fewer than 50 employees)
-- **Business License** — For established companies
-- **Enterprise License** — Volume pricing for large organizations
-- **OEM License** — Integration into commercial products for redistribution
-- **Government License** — For government and public sector deployments
-
-To obtain a license or request pricing:
-
-**Email**: sanchezleal1989@gmail.com  
-**Subject**: HSIP Commercial License Inquiry
-
----
-
-## Intellectual Property
-
-"HSIP", "High Security Internet Protocol", and associated logos and product names
-are trademarks of Dayana Sanchez. All intellectual property rights in this software
-and its documentation are owned exclusively by Dayana Sanchez.
-
----
-
-## Disclaimer of Warranties
-
-THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. DAYANA SANCHEZ
-DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
-
-IN NO EVENT SHALL DAYANA SANCHEZ BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES ARISING FROM THE USE OF THIS SOFTWARE,
-EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
-
----
-
-## Security & Vulnerability Disclosure
-
-HSIP is security-critical software. If you discover a vulnerability:
-
-1. **Do not** disclose publicly before coordinating with us
-2. Email: sanchezleal1989@gmail.com with full details
-3. We will respond within 48 hours
-4. Coordinated public disclosure after patch is released
-
----
-
-## Contact
-
-**Licensing**:  sanchezleal1989@gmail.com  
-**General**:    sanchezleal1989@gmail.com  
-**Security**:   sanchezleal1989@gmail.com  
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -2,7 +2,7 @@
 name = "hsip-reputation"
 version = "0.1.2"
 edition = "2021"
-license-file = "../LICENSE"
+license = "MIT"
 description = "HSIP reputation module: append-only, signed, hash-chained log + scoring"
 rust-version = "1.87"
 

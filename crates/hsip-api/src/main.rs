@@ -405,6 +405,45 @@ async fn docs_handler() -> impl IntoResponse {
     )
 }
 
+/// Write Desktop + Start Menu shortcuts pointing at `target_exe`.
+/// Uses the `mslnk` crate to write the .lnk binary directly — no PowerShell,
+/// no VBScript, no execution policy, no subprocess of any kind.
+#[cfg(all(windows, feature = "embed-dashboard"))]
+fn create_shortcuts(target_exe: &std::path::Path) {
+    use mslnk::ShellLink;
+
+    let target = target_exe.to_string_lossy();
+
+    let mut folders: Vec<std::path::PathBuf> = Vec::new();
+
+    // Desktop: dirs::desktop_dir() calls SHGetKnownFolderPath — the only
+    // correct way to get Desktop when OneDrive has moved it.
+    if let Some(d) = dirs::desktop_dir() {
+        folders.push(d);
+    } else if let Ok(p) = std::env::var("USERPROFILE") {
+        folders.push(std::path::PathBuf::from(p).join("Desktop"));
+    }
+
+    // Start Menu → Programs (this path is stable across all Windows versions)
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        folders.push(
+            std::path::PathBuf::from(appdata)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs"),
+        );
+    }
+
+    for folder in &folders {
+        let _ = std::fs::create_dir_all(folder);
+        let lnk = folder.join("HSIP.lnk");
+        if let Ok(sl) = ShellLink::new(&target) {
+            let _ = sl.create_lnk(lnk.to_string_lossy().as_ref());
+        }
+    }
+}
+
 /// Windows-only, embed-dashboard builds.
 ///
 /// If the binary is NOT already running from %LOCALAPPDATA%\HSIP\hsip.exe:
@@ -440,35 +479,10 @@ fn maybe_self_install() {
     if std::fs::create_dir_all(&install_dir).is_err() { return; }
     if std::fs::copy(&current_exe, &install_exe).is_err() { return; }
 
-    // ── Create Desktop + Start Menu shortcuts via VBScript ────────────────
-    // wscript.exe + VBScript has NO execution policy restrictions (unlike
-    // PowerShell), works on every Windows version, and WScript.Shell is
-    // the standard Win32 way to create .lnk files.
-    // SpecialFolders("Desktop") reads the same registry key as
-    // [Environment]::GetFolderPath, so it handles OneDrive-moved Desktops.
-    let exe_path = install_exe.to_string_lossy();
-    let exe_vbs  = exe_path.replace('"', "\"\""); // VBScript: escape " by doubling
-    let script = format!(
-        "Set ws = CreateObject(\"WScript.Shell\")\r\n\
-         exe = \"{exe}\"\r\n\
-         Set s = ws.CreateShortcut(ws.SpecialFolders(\"Desktop\") & \"\\HSIP.lnk\")\r\n\
-         s.TargetPath  = exe\r\n\
-         s.Description = \"Open HSIP\"\r\n\
-         s.Save\r\n\
-         Set s = ws.CreateShortcut(ws.SpecialFolders(\"Programs\") & \"\\HSIP.lnk\")\r\n\
-         s.TargetPath  = exe\r\n\
-         s.Description = \"Open HSIP\"\r\n\
-         s.Save\r\n",
-        exe = exe_vbs,
-    );
-    let vbs_path = install_dir.join("_shortcuts.vbs");
-    if std::fs::write(&vbs_path, script.as_bytes()).is_ok() {
-        // //B = silent (no dialogs), //NoLogo = no banner; wait for it to finish
-        let _ = std::process::Command::new("wscript.exe")
-            .args(["//B", "//NoLogo", &vbs_path.to_string_lossy()])
-            .status();
-        let _ = std::fs::remove_file(&vbs_path);
-    }
+    // ── Create Desktop + Start Menu shortcuts — pure Rust, no subprocess ──
+    // mslnk writes the .lnk binary directly; dirs resolves the Desktop path
+    // via SHGetKnownFolderPath (handles OneDrive-moved Desktops correctly).
+    create_shortcuts(&install_exe);
 
     // ── Launch installed copy and exit ────────────────────────────────────
     let _ = std::process::Command::new(&install_exe).spawn();

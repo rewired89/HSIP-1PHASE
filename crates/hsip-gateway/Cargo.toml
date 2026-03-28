@@ -2,7 +2,7 @@
 name = "hsip-gateway"
 version = "0.1.0"
 edition = "2021"
-license-file = "../LICENSE"
+license = "MIT"
 
 [dependencies]
 anyhow = "1"

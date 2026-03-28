@@ -2,7 +2,7 @@
 name = "hsip-core"
 version = "0.1.2"
 edition = "2021"
-license-file = "../LICENSE"
+license = "MIT"
 rust-version = "1.87"
 
 [features]

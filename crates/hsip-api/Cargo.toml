@@ -3,7 +3,7 @@ name = "hsip-api"
 version = "0.2.0"
 edition = "2021"
 description = "HSIP REST API - Multi-tenant identity, consent, and message verification service"
-license-file = "../LICENSE"
+license = "MIT"
 
 [[bin]]
 name = "hsip-api"
@@ -44,6 +44,11 @@ rust-embed       = { version = "8", optional = true }
 mime_guess       = { version = "2", optional = true }
 hsip-core        = { path = "../hsip-core" }
 hsip-dns         = { path = "../hsip-dns" }
+
+# Windows-only: shortcut creation during self-install (pure Rust, no subprocess)
+[target.'cfg(windows)'.dependencies]
+mslnk = "0.1"
+dirs  = "5"
 
 [dev-dependencies]
 tower            = { version = "0.4", features = ["util"] }

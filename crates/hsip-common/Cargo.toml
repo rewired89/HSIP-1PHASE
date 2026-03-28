@@ -2,7 +2,7 @@
 name = "hsip-common"
 version = "0.1.0"
 edition = "2021"
-license-file = "../LICENSE"
+license = "MIT"
 rust-version = "1.87"
 description = "HSIP common utilities and quantum-inspired privacy features"
 
