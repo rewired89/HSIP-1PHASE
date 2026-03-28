@@ -183,10 +183,22 @@ const ACTIONS = [
     desc:  'Prove you sent a message. Prove it wasn\'t tampered with. Useful in disputes, contracts, and court.',
   },
   {
+    tab:   'messages',
+    icon:  '💬',
+    title: 'Send a Signed Message',
+    desc:  'Send a message signed with your private key. The recipient can verify it came from you and was never changed.',
+  },
+  {
+    tab:   'ai-watch',
+    icon:  '🤖',
+    title: 'Connect Your AI Assistant',
+    desc:  'Let Siri, Claude, or any AI send signed messages on your behalf — even by voice command.',
+  },
+  {
     tab:   'protection',
     icon:  '🔒',
     title: 'Block All Trackers',
-    desc:  `Stop ${TRACKER_STATS.safeToBlock} tracking companies from following you. Takes 5 minutes, no software to install.`,
+    desc:  `Stop ${TRACKER_STATS.safeToBlock} tracking companies from following you. Takes 5 minutes, works on every app.`,
   },
   {
     tab:   'consent-wallet',
@@ -194,15 +206,32 @@ const ACTIONS = [
     title: 'Manage Who Has Access',
     desc:  'See who can reach you and remove their access instantly — no emails, no waiting, no excuses.',
   },
-  {
-    tab:   'ai-watch',
-    icon:  '🤖',
-    title: 'Check Your AI Connections',
-    desc:  'See which AI systems are connected to your account right now and what they\'ve been doing.',
-  },
 ];
 
 // ── Page ──────────────────────────────────────────────────────────────────────
+
+const WHAT_IS = [
+  {
+    icon: '🚫',
+    title: 'Block trackers everywhere',
+    body:  'One switch stops Google Analytics, Facebook Pixel, TikTok, and 200+ trackers — system-wide, every app, not just your browser.',
+  },
+  {
+    icon: '✍️',
+    title: 'Tamper-proof messages',
+    body:  'Every message you send is signed with your private key. The signature proves exactly what was said and when — useful in court, contracts, or any dispute.',
+  },
+  {
+    icon: '🎙️',
+    title: 'AI assistant integration',
+    body:  'Connect Siri, Claude, or any AI to HSIP. Say "Hey Siri, send HSIP message" and your words are signed and timestamped instantly.',
+  },
+  {
+    icon: '🔑',
+    title: 'Your key, your data',
+    body:  'HSIP runs entirely on your computer. Nothing leaves your machine. Your cryptographic identity key is generated locally and stays there.',
+  },
+];
 
 export default function HomeDashboard({ onNavigate }) {
   return (
@@ -212,8 +241,25 @@ export default function HomeDashboard({ onNavigate }) {
         <h2>Your Digital Bodyguard</h2>
         <p>
           Right now, dozens of companies are watching everything you do online.
-          HSIP shows you who they are — and helps you stop them.
+          HSIP shows you who they are, helps you stop them, and gives you
+          cryptographic proof of everything you say and do.
         </p>
+      </div>
+
+      {/* What is HSIP */}
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <h2>What is HSIP?</h2>
+        <div className="protection-grid">
+          {WHAT_IS.map((item, i) => (
+            <div key={i} className="protection-item">
+              <span>{item.icon}</span>
+              <div>
+                <strong>{item.title}</strong>
+                <p>{item.body}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <CreepMeter />
