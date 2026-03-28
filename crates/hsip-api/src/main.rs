@@ -477,15 +477,38 @@ fn maybe_self_install() {
 
     // ── Copy to install location ──────────────────────────────────────────
     if std::fs::create_dir_all(&install_dir).is_err() { return; }
-    if std::fs::copy(&current_exe, &install_exe).is_err() { return; }
+
+    // Write an install log — tells us exactly what happened (useful for debugging)
+    let log_path = install_dir.join("install.log");
+    let copied   = std::fs::copy(&current_exe, &install_exe).is_ok();
+    let log = format!(
+        "HSIP self-install\nfrom:   {}\nto:     {}\ncopy ok: {}\n",
+        current_exe.display(), install_exe.display(), copied
+    );
+    let _ = std::fs::write(&log_path, log.as_bytes());
+
+    // Whether or not the copy succeeded (the exe may be locked because
+    // HSIP was already running), create/refresh shortcuts as long as the
+    // installed exe is present.
+    if install_exe.exists() {
+        create_shortcuts(&install_exe);
+    } else {
+        // Nothing to point a shortcut at — bail out entirely.
+        return;
+    }
 
     // ── Create Desktop + Start Menu shortcuts — pure Rust, no subprocess ──
     // mslnk writes the .lnk binary directly; dirs resolves the Desktop path
     // via SHGetKnownFolderPath (handles OneDrive-moved Desktops correctly).
     create_shortcuts(&install_exe);
 
-    // ── Launch installed copy and exit ────────────────────────────────────
-    let _ = std::process::Command::new(&install_exe).spawn();
+    // ── Launch installed copy (only if we just freshly copied) and exit ──
+    // If copy failed the installed copy is already running — don't spawn a
+    // second server. Either way this process exits so the installed copy
+    // is always the one that serves requests.
+    if copied {
+        let _ = std::process::Command::new(&install_exe).spawn();
+    }
     std::process::exit(0);
 }
 
