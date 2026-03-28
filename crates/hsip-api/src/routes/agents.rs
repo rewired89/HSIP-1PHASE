@@ -5,6 +5,84 @@ use std::sync::atomic::Ordering;
 
 use crate::{auth::TenantId, errors::ApiResult, state::AppState};
 
+/// GET /v1/agent/capabilities
+/// Machine-readable description of everything an AI agent can do via HSIP.
+/// Inject this into an AI's system prompt so it knows the available tools.
+pub async fn capabilities(_tenant: TenantId) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "name": "HSIP",
+        "description": "Personal privacy and identity layer. Lets you send tamper-proof signed messages, record consent decisions, and manage your digital identity — all stored locally.",
+        "auth": {
+            "type": "Bearer",
+            "header": "Authorization",
+            "format": "Bearer <your_ai_agent_key>"
+        },
+        "base_url": "http://127.0.0.1:7777",
+        "actions": [
+            {
+                "id": "send_message",
+                "summary": "Send a signed message",
+                "description": "Signs the message with the user's private key and stores it with a cryptographic timestamp. Use this when the user asks you to send, record, or timestamp a message. The resulting signature is legally verifiable proof of exactly what was said and when.",
+                "method": "POST",
+                "path": "/v1/messages/sign",
+                "body": {
+                    "content": "(required) The message text to sign",
+                    "peer_verify_key": "(optional) Recipient's HSIP public key for directed messages"
+                },
+                "example_body": { "content": "I agree to the terms discussed on this date." },
+                "returns": { "id": "string", "content": "string", "signature": "base64", "timestamp": "unix_ms" }
+            },
+            {
+                "id": "verify_message",
+                "summary": "Verify a received message",
+                "description": "Checks that a message's signature is valid — proving it came from the claimed sender and was not altered.",
+                "method": "POST",
+                "path": "/v1/messages/verify",
+                "body": {
+                    "content": "The message text",
+                    "signature": "base64 signature string",
+                    "peer_verify_key": "Sender's base64 public key"
+                },
+                "returns": { "verified": "bool", "timestamp": "unix_ms" }
+            },
+            {
+                "id": "list_messages",
+                "summary": "Get message history",
+                "description": "Returns the last 100 messages (sent and received), most recent first.",
+                "method": "GET",
+                "path": "/v1/messages",
+                "returns": "Array of message records with id, direction, content, signature, timestamp, verified"
+            },
+            {
+                "id": "get_identity",
+                "summary": "Get the user's public identity key",
+                "description": "Returns the user's public Ed25519 key. Share this with others so they can verify messages you send.",
+                "method": "GET",
+                "path": "/v1/identity",
+                "returns": { "verify_key_b64": "base64 public key" }
+            },
+            {
+                "id": "log_consent",
+                "summary": "Record a consent decision",
+                "description": "Stores a timestamped record that the user grants or revokes consent for a given party.",
+                "method": "POST",
+                "path": "/v1/consent/grant",
+                "body": {
+                    "peer_verify_key": "The other party's HSIP public key",
+                    "scope": "What is being consented to (e.g. 'data_sharing', 'contact')",
+                    "note": "(optional) Human-readable description"
+                },
+                "returns": { "id": "string", "granted_at": "unix_ms" }
+            }
+        ],
+        "voice_command_examples": [
+            "Hey Siri, send HSIP message: I confirm we spoke today at 3pm",
+            "Send HSIP message saying I agree to proceed",
+            "Sign a message that says the package was delivered"
+        ]
+    }))
+}
+
 #[derive(Serialize)]
 pub struct AgentStats {
     pub key_id:          String,
