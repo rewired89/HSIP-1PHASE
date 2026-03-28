@@ -229,6 +229,44 @@ button.danger:hover { background: #63171b; }
 .aiwatch-empty strong { display: block; color: #e2e8f0; margin-bottom: 0.25rem; }
 
 .aiwatch-alert-card { border-color: #d69e2e !important; background: #1a1506 !important; }
+
+/* ── Connect AI dialog ──────────────────────────────────────────────── */
+.connect-dialog {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center; z-index: 200;
+}
+.connect-dialog-inner {
+  background: #1a1d27; border: 1px solid #2d3748; border-radius: 12px;
+  padding: 2rem; width: 100%; max-width: 460px;
+}
+.connect-dialog-inner h3 { margin-bottom: 0.5rem; }
+.connect-hint  { color: #718096; font-size: 0.875rem; margin-bottom: 1rem; line-height: 1.5; }
+.connect-warn  { color: #f6ad55; font-size: 0.875rem; margin-bottom: 1rem; }
+.connect-label { display: block; font-size: 0.8rem; color: #718096; margin-bottom: 0.35rem; }
+.connect-input { width: 100%; margin-bottom: 1rem; }
+.connect-actions { display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 0.5rem; }
+.connect-key-box {
+  display: flex; align-items: center; gap: 0.5rem;
+  background: #0f1117; border: 1px solid #2d3748; border-radius: 8px;
+  padding: 0.75rem; margin-bottom: 1rem; overflow: hidden;
+}
+.connect-key-box code {
+  flex: 1; font-size: 0.75rem; word-break: break-all; color: #90cdf4;
+}
+.connect-copy-btn {
+  flex-shrink: 0; padding: 0.4rem 0.75rem; background: #2d3748;
+  border: none; border-radius: 6px; color: #e2e8f0; cursor: pointer; font-size: 0.8rem;
+}
+.connect-copy-btn:hover { background: #4a5568; }
+.connect-success-icon { font-size: 2rem; text-align: center; margin-bottom: 0.5rem; }
+.integration-steps { margin-top: 0.5rem; }
+.integration-steps .setup-step { display: flex; gap: 1rem; margin-bottom: 1.25rem; }
+.integration-steps .setup-step-num { flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: #2d3748; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; color: #a0aec0; margin-top: 2px; }
+.integration-steps .setup-step-body { flex: 1; }
+.integration-steps .setup-step-body strong { display: block; color: #e2e8f0; margin-bottom: 0.35rem; font-size: 0.875rem; }
+.integration-steps .setup-step-body p { color: #718096; font-size: 0.8rem; margin: 0 0 0.35rem; line-height: 1.5; }
+.integration-steps .setup-code-block { background: #0f1117; border: 1px solid #2d3748; border-radius: 6px; padding: 0.75rem; margin-top: 0.35rem; }
+.integration-steps .setup-code-block pre { font-size: 0.72rem; color: #90cdf4; white-space: pre-wrap; word-break: break-all; margin: 0; }
 .aiwatch-alert-header { font-weight: 700; color: #f6e05e; font-size: 1rem; margin-bottom: 0.5rem; }
 .aiwatch-alert-body   { color: #fed7aa; font-size: 0.875rem; margin-bottom: 1rem; line-height: 1.5; }
 .aiwatch-normal-note  { color: #718096; font-size: 0.875rem; margin-bottom: 1rem; }
