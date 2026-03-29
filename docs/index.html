@@ -154,7 +154,7 @@
         <div class="step-num">3</div>
         <div>
           <h3>Your browser opens automatically</h3>
-          <p>HSIP opens right in your browser at <code style="color:var(--green);font-size:.85em;">localhost:7777</code>. Everything is right there, no separate app, no learning curve. <strong style="color:var(--muted2);">Next time:</strong> just double-click the Desktop shortcut HSIP created to start it again.</p>
+          <p>HSIP opens right in your browser at <code style="color:var(--green);font-size:.85em;">localhost:7474</code>. Everything is right there, no separate app, no learning curve. <strong style="color:var(--muted2);">Next time:</strong> use the <strong>HSIP shortcut on your Desktop</strong> to start it again. If Windows shows a blue "Windows protected your PC" screen, click <strong>More info → Run anyway</strong>.</p>
         </div>
       </div>
     </div>
@@ -298,9 +298,9 @@
     <h2 class="section-title">Free. Always.</h2>
     <p class="section-sub">No account. No email. No credit card. Just download and run.</p>
 
-    <div class="download-grid">
+    <div class="download-grid" style="max-width:420px;">
 
-      <div class="dl-card" data-os="windows">
+      <div class="dl-card recommended" data-os="windows">
         <div class="dl-os">
           <div class="dl-os-icon">🪟</div>
           <div>
@@ -308,58 +308,18 @@
             <div class="dl-desc">x64 · Windows 10 / 11</div>
           </div>
         </div>
-        <p class="dl-note">Double-click to install. Opens in your browser automatically. Creates a Desktop shortcut.</p>
-        <a class="btn-dl" href="https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-windows-x64.exe">
-          ⬇ Download .exe
+        <p class="dl-note">Double-click to install. Your browser opens automatically at <code style="color:var(--green)">localhost:7474</code>. A Desktop shortcut is created for next time.</p>
+        <p class="dl-note" style="color:var(--yellow);margin-top:.4rem;">⚠️ If Windows shows a blue "protected your PC" screen, click <strong>More info → Run anyway</strong>.</p>
+        <a class="btn-dl" href="https://github.com/rewired89/HSIP-1PHASE/releases/download/latest/hsip-windows-x64.exe">
+          ⬇ Download for Windows
         </a>
       </div>
 
-      <div class="dl-card" data-os="macos">
-        <div class="dl-os">
-          <div class="dl-os-icon">🍎</div>
-          <div>
-            <div class="dl-os-name">macOS</div>
-            <div class="dl-desc">Apple Silicon (M1–M4)</div>
-          </div>
-        </div>
-        <p class="dl-note">For M1, M2, M3, M4 Macs. Not sure? Apple menu → About This Mac → Chip.</p>
-        <a class="btn-dl" href="https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-macos-arm64">
-          ⬇ Apple Silicon
-        </a>
-        <a class="btn-dl secondary" href="https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-macos-x64" style="margin-top:.25rem;">
-          ⬇ Intel Mac
-        </a>
-      </div>
-
-      <div class="dl-card" data-os="linux">
-        <div class="dl-os">
-          <div class="dl-os-icon">🐧</div>
-          <div>
-            <div class="dl-os-name">Linux</div>
-            <div class="dl-desc">x64 · All distros</div>
-          </div>
-        </div>
-        <p class="dl-note">Or install with one command:</p>
-        <div style="font-family:monospace;font-size:.75rem;color:var(--green);background:var(--bg2);padding:.6rem .8rem;border-radius:6px;word-break:break-all;">
-          curl -sSf .../install.sh | sh
-        </div>
-        <a class="btn-dl" href="https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-linux-x64">
-          ⬇ Download Binary
-        </a>
-      </div>
-
-    </div>
-
-    <!-- Homebrew -->
-    <p style="font-size:.875rem;color:var(--muted2);margin-bottom:.6rem;font-weight:600;">Or install with Homebrew (Mac / Linux):</p>
-    <div class="cli-block" style="max-width:680px;">
-      <code id="cmd-brew">brew tap rewired89/hsip https://github.com/rewired89/HSIP-1PHASE &amp;&amp; brew install hsip</code>
-      <button class="cli-copy-btn" data-target="cmd-brew">Copy</button>
     </div>
 
     <p style="font-size:.8rem;color:var(--muted);margin-top:1.5rem;">
       All releases are open source and MIT licensed.
-      <a href="https://github.com/rewired89/HSIP-1PHASE/releases" target="_blank">View all releases →</a>
+      <a href="https://github.com/rewired89/HSIP-1PHASE/releases" target="_blank">View all releases and other platforms →</a>
     </p>
   </div>
 </section>
@@ -385,7 +345,7 @@
           Why does it open in my browser? Is it a website?
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div class="faq-a">It is not a website, it is a local app that happens to run inside your browser. The address <code>localhost:7777</code> means your own computer, not the internet. Your browser is just the window. Nothing leaves your machine.</div>
+        <div class="faq-a">It is not a website, it is a local app that happens to run inside your browser. The address <code>localhost:7474</code> means your own computer, not the internet. Your browser is just the window. Nothing leaves your machine.</div>
       </div>
 
       <div class="faq-item">
@@ -414,14 +374,13 @@
 
       <div class="faq-item">
         <button class="faq-q">
-          I get "Firefox can't connect to localhost:7777" — what do I do?
+          I get "Firefox can't connect to localhost:7474" — what do I do?
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         <div class="faq-a">
-          HSIP needs to be running on your computer for that address to work. It is not always running in the background — you need to start it first.<br><br>
-          <strong>Windows:</strong> Find the <strong>HSIP shortcut on your Desktop</strong> and double-click it. Your browser will open automatically.<br><br>
-          <strong>Mac:</strong> Open Terminal and run the binary again: <code>~/Downloads/hsip-macos-arm64</code> (or wherever you saved it).<br><br>
-          Once HSIP is running, <code>localhost:7777</code> will work instantly.
+          Two things to check:<br><br>
+          <strong>1. Windows SmartScreen may have blocked it.</strong> When you double-clicked the file, did Windows show a blue screen saying "Windows protected your PC"? If you clicked "Don't run", HSIP never started. Download it again, double-click, and this time click <strong>More info → Run anyway</strong>. HSIP is open source and safe — SmartScreen warns about any unsigned exe from the internet.<br><br>
+          <strong>2. HSIP is simply not running.</strong> It needs to be running for <code>localhost:7474</code> to load. Find the <strong>HSIP shortcut on your Desktop</strong> and double-click it to start. If the shortcut isn't there yet, run <code>hsip-windows-x64.exe</code> directly (clicking "Run anyway" on the SmartScreen prompt) and it will create the shortcut automatically.
         </div>
       </div>
 
@@ -430,7 +389,7 @@
           What happens if I close the browser tab?
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div class="faq-a">HSIP keeps running in the background, the DNS blocker stays on and AI agents stay monitored. You can reopen the dashboard anytime by going to <code>http://localhost:7777</code> in any browser, or clicking the Desktop shortcut on Windows.</div>
+        <div class="faq-a">HSIP keeps running in the background, the DNS blocker stays on and AI agents stay monitored. You can reopen the dashboard anytime by going to <code>http://localhost:7474</code> in any browser, or clicking the Desktop shortcut on Windows.</div>
       </div>
 
     </div>

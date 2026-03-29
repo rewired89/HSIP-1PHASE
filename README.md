@@ -149,42 +149,42 @@ Post-quantum support is built in today, not a future promise. Enable it with a c
 
 ## For Developers
 
-HSIP exposes a REST API at `http://127.0.0.1:7777`. SDKs available for Python, Node.js, and Go.
+HSIP exposes a REST API at `http://127.0.0.1:7474`. SDKs available for Python, Node.js, and Go.
 
 ```bash
 export KEY="hsip_your_key_here"
 
 # Sign a message — creates a cryptographic, timestamped proof
-curl -X POST http://127.0.0.1:7777/v1/messages/sign \
+curl -X POST http://127.0.0.1:7474/v1/messages/sign \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"content": "I authorize this transaction."}'
 
 # Get AI agent capability spec — inject into any AI system prompt
-curl http://127.0.0.1:7777/v1/agent/capabilities \
+curl http://127.0.0.1:7474/v1/agent/capabilities \
   -H "Authorization: Bearer $KEY"
 
 # Grant time-bounded consent to a peer
-curl -X POST http://127.0.0.1:7777/v1/consent/grant \
+curl -X POST http://127.0.0.1:7474/v1/consent/grant \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"peer_verify_key": "...", "scope": "contact", "expires_in_seconds": 86400}'
 
 # Enable DNS tracker blocker
-curl -X POST http://127.0.0.1:7777/v1/dns/enable \
+curl -X POST http://127.0.0.1:7474/v1/dns/enable \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{"port": 5300}'
 ```
 
-Full interactive API docs at `http://127.0.0.1:7777/docs` when HSIP is running (OpenAPI 3.0).
+Full interactive API docs at `http://127.0.0.1:7474/docs` when HSIP is running (OpenAPI 3.0).
 
 ### Python SDK
 
 ```python
 from hsip import HSIPClient
 
-client = HSIPClient(api_key="hsip_...", base_url="http://localhost:7777")
+client = HSIPClient(api_key="hsip_...", base_url="http://localhost:7474")
 identity = client.get_or_create_identity()
 signed = client.sign_message("I authorized this action.")
 client.grant_consent(peer_verify_key="...", scope="contact")
@@ -195,7 +195,7 @@ client.grant_consent(peer_verify_key="...", scope="contact")
 Point any AI at the capabilities endpoint and it knows exactly what HSIP can do:
 
 ```
-GET http://127.0.0.1:7777/v1/agent/capabilities
+GET http://127.0.0.1:7474/v1/agent/capabilities
 Authorization: Bearer hsip_...
 ```
 
@@ -251,13 +251,13 @@ cargo build --release -p hsip-api --features hsip-api/embed-dashboard
 
 # 3. Run
 ./target/release/hsip-api
-# Browser opens automatically at http://127.0.0.1:7777
+# Browser opens automatically at http://127.0.0.1:7474
 ```
 
 Development mode (dashboard hot-reloads):
 
 ```bash
-cargo run -p hsip-api          # API on :7777
+cargo run -p hsip-api          # API on :7474
 cd dashboard && npm run dev    # UI on :5173 with hot reload
 ```
 
