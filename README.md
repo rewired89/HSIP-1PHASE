@@ -5,7 +5,23 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Build](https://github.com/rewired89/HSIP-1PHASE/actions/workflows/release.yml/badge.svg)](https://github.com/rewired89/HSIP-1PHASE/actions)
 
+### [🌐 hsip.rewired89.github.io/HSIP-1PHASE](https://rewired89.github.io/HSIP-1PHASE/) — Landing page with one-click downloads
+
 > HSIP is open source because *closed-source privacy is an oxymoron.* Every key is yours. Every byte is auditable. [Read the threat model →](THREAT_MODEL.md)
+
+## Quick install
+
+**Windows** — [Download hsip-windows-x64.exe](https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-windows-x64.exe) → double-click → browser opens automatically.
+
+**macOS / Linux** — one command:
+```bash
+curl -sSf https://raw.githubusercontent.com/rewired89/HSIP-1PHASE/main/install.sh | sh
+```
+
+**Homebrew:**
+```bash
+brew tap rewired89/hsip https://github.com/rewired89/HSIP-1PHASE && brew install hsip
+```
 
 ---
 

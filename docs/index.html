@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HSIP — Your Digital Bodyguard</title>
+  <meta name="description" content="Block trackers, prove what you said, and control your AI agents — all on your own computer. No cloud, no subscription, no data leaving your machine.">
+  <meta property="og:title" content="HSIP — Your Digital Bodyguard">
+  <meta property="og:description" content="One binary. No cloud. No subscription. Your data never leaves your machine.">
+  <meta property="og:image" content="https://rewired89.github.io/HSIP-1PHASE/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2L4 7v9c0 9 6 17 12 19 6-2 12-10 12-19V7z' fill='%232563eb'/%3E%3Cpath d='M10 16l4 4 8-9' stroke='%2322c55e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<!-- ══ NAV ══════════════════════════════════════════════ -->
+<nav>
+  <a href="#" class="nav-logo">
+    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M16 2L4 7v9c0 9 6 17 12 19 6-2 12-10 12-19V7z" fill="#2563eb"/>
+      <path d="M10 16l4 4 8-9" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    HSIP
+  </a>
+  <div class="nav-links">
+    <a href="#features" class="hide-mobile">Features</a>
+    <a href="#proof"    class="hide-mobile">Proof of You</a>
+    <a href="#download" class="hide-mobile">Download</a>
+    <a href="https://github.com/rewired89/HSIP-1PHASE" target="_blank" class="hide-mobile">GitHub</a>
+    <a href="#download" class="btn-nav">⬇ Download Free</a>
+  </div>
+</nav>
+
+<!-- ══ HERO ═════════════════════════════════════════════ -->
+<section class="hero" id="top">
+  <div class="hero-badge"><span></span> Open Source — MIT License</div>
+
+  <div class="shield-wrap">
+    <svg width="90" height="104" viewBox="0 0 90 104" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="sg" cx="50%" cy="30%" r="70%">
+          <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.25"/>
+          <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <ellipse cx="45" cy="52" rx="44" ry="50" fill="url(#sg)"/>
+      <path d="M45 6L8 20v24c0 24 15.5 45.5 37 51 21.5-5.5 37-27 37-51V20z"
+            fill="#1e3a8a" stroke="#3b82f6" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M28 51l12 12 22-26" stroke="#22c55e" stroke-width="5"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+
+  <h1>Your <em>Digital Bodyguard</em><br>runs on your machine</h1>
+
+  <p id="hero-stat">No cloud. No subscription.</p>
+
+  <div class="hero-cta">
+    <a href="#" id="btn-download-primary" class="btn-primary">
+      ⬇ Download Free
+    </a>
+    <a href="https://github.com/rewired89/HSIP-1PHASE" target="_blank" class="btn-secondary">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.1.1 1.7 1.1 1.7 1.1 1 1.7 2.6 1.2 3.2.9.1-.7.4-1.2.7-1.5-2.5-.3-5.2-1.3-5.2-5.7 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.7.9 1.2 1.9 1.2 3.2 0 4.4-2.7 5.4-5.2 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6C20.2 21.4 23.5 17.1 23.5 12 23.5 5.7 18.3.5 12 .5z"/></svg>
+      View on GitHub
+    </a>
+  </div>
+
+  <p class="os-note" id="os-detect-note">Detecting your OS…</p>
+</section>
+
+<!-- ══ TRUST BAR ════════════════════════════════════════ -->
+<div class="trust-bar">
+  <div class="trust-item">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+    100% Local — nothing leaves your PC
+  </div>
+  <div class="trust-item">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+    Zero subscription fees
+  </div>
+  <div class="trust-item">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+    Open source — fully auditable
+  </div>
+  <div class="trust-item">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+    Works in your browser — no app to learn
+  </div>
+  <div class="trust-item">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+    238 security tests passing
+  </div>
+</div>
+
+<!-- ══ WHO IS THIS FOR ══════════════════════════════════ -->
+<section id="who">
+  <div class="container">
+    <div class="section-tag">Who is HSIP for?</div>
+    <h2 class="section-title">Pick your reason to care</h2>
+    <p class="section-sub">You don't need to be a tech person. If any of these sound familiar, HSIP is for you.</p>
+
+    <div class="audience-grid">
+
+      <div class="audience-card">
+        <div class="audience-icon icon-red" style="background:rgba(239,68,68,.12);">🛡️</div>
+        <h3>I'm tired of being tracked everywhere</h3>
+        <p>Every website you visit sends your data to Google, Facebook, TikTok, and 200+ other companies — even when you're not on those sites. HSIP cuts that off at the source, system-wide, before any of it reaches your computer.</p>
+      </div>
+
+      <div class="audience-card">
+        <div class="audience-icon icon-blue">📝</div>
+        <h3>I need proof of what I said (or didn't say)</h3>
+        <p>Contracts, disputes, business agreements, or anyone claiming "you never said that" — HSIP lets you send messages with a cryptographic stamp proving exactly what you wrote and when. Like a notary, but instant and free.</p>
+      </div>
+
+      <div class="audience-card">
+        <div class="audience-icon icon-green">🤖</div>
+        <h3>I want to control my AI assistants</h3>
+        <p>ChatGPT, Siri, Claude — they act in your name but leave no record of what they did. HSIP watches every AI connected to your account and shows you exactly what it did. Disconnect any of them in one click.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ══ HOW IT WORKS ═════════════════════════════════════ -->
+<section id="how" class="steps-bg">
+  <div class="container">
+    <div class="section-tag">Getting started</div>
+    <h2 class="section-title">Up and running in 3 steps</h2>
+    <p class="section-sub">Especially for Windows and Mac users — no command line required.</p>
+
+    <!-- Windows path -->
+    <p style="font-size:.85rem;font-weight:700;color:var(--blue);margin-bottom:1.5rem;letter-spacing:.05em;text-transform:uppercase;">
+      🪟 Windows
+    </p>
+    <div class="steps-grid" style="margin-bottom:3rem;">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <h3>Download the .exe</h3>
+          <p>One file. Click the Download button above, save the .exe anywhere — your Desktop is fine.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <h3>Double-click it</h3>
+          <p>HSIP installs itself, creates a Desktop shortcut, and starts automatically. No installation wizard, no "next next finish."</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <h3>Your browser opens</h3>
+          <p>HSIP opens right in your browser at <code style="color:var(--green);font-size:.85em;">localhost:7777</code>. Everything is right there — no separate app, no learning curve.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mac path -->
+    <p style="font-size:.85rem;font-weight:700;color:var(--blue);margin-bottom:1.5rem;letter-spacing:.05em;text-transform:uppercase;">
+      🍎 Mac
+    </p>
+    <div class="steps-grid" style="margin-bottom:3rem;">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <h3>Download the binary</h3>
+          <p>Pick Apple Silicon (M1/M2/M3/M4) or Intel depending on your Mac. Not sure? Click the Apple menu → About This Mac.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <h3>Run once in Terminal</h3>
+          <p>Open Terminal, type <code style="color:var(--green);font-size:.85em;">chmod +x ~/Downloads/hsip-macos-arm64 &amp;&amp; ~/Downloads/hsip-macos-arm64</code> and press Enter.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <h3>Your browser opens</h3>
+          <p>Same as Windows — HSIP opens in your browser automatically. Done.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- One-liner path -->
+    <p style="font-size:.85rem;font-weight:700;color:var(--blue);margin-bottom:1rem;letter-spacing:.05em;text-transform:uppercase;">
+      🐧 Linux / Mac Terminal one-liner
+    </p>
+    <div class="cli-block">
+      <code id="cmd-install">curl -sSf https://raw.githubusercontent.com/rewired89/HSIP-1PHASE/main/install.sh | sh</code>
+      <button class="cli-copy-btn" data-target="cmd-install">Copy</button>
+    </div>
+
+  </div>
+</section>
+
+<!-- ══ FEATURES ═════════════════════════════════════════ -->
+<section id="features">
+  <div class="container">
+    <div class="section-tag">Features</div>
+    <h2 class="section-title">Everything in one place</h2>
+    <p class="section-sub">All features run locally. No feature requires an internet connection to work.</p>
+
+    <div class="features-grid">
+
+      <div class="feature-card">
+        <span class="badge badge-red">Privacy</span>
+        <h3>🛡️ DNS Tracker Blocker</h3>
+        <p>Blocks Google Analytics, Facebook Pixel, Hotjar, TikTok, DoubleClick and 200+ more at the network level — every browser, every app, all at once. Not just one browser tab.</p>
+      </div>
+
+      <div class="feature-card">
+        <span class="badge badge-blue">Proof</span>
+        <h3>📝 Signed Messages &amp; Alibi</h3>
+        <p>Send any message with a cryptographic signature — mathematical proof of who wrote it and when. Use it for contracts, confirmations, or to fight "I never said that." Printable for court records.</p>
+      </div>
+
+      <div class="feature-card">
+        <span class="badge badge-green">AI Safety</span>
+        <h3>🤖 AI Watch</h3>
+        <p>See every AI system connected to your account — ChatGPT, Claude, Siri, or any custom agent. Disconnect any of them instantly. Real-time alerts if an AI makes unusual requests.</p>
+      </div>
+
+      <div class="feature-card">
+        <span class="badge badge-purple">Control</span>
+        <h3>🔐 Consent Wallet</h3>
+        <p>Track exactly who has permission to contact you or access your data. Set expiry times. Revoke access in one click — no emails, no waiting, no excuses.</p>
+      </div>
+
+      <div class="feature-card">
+        <span class="badge badge-yellow">Audit</span>
+        <h3>📋 Tamper-Proof Audit Trail</h3>
+        <p>Every action — message sent, consent granted, AI command given — is logged with a timestamp you cannot alter. Export it for legal proceedings or compliance audits.</p>
+      </div>
+
+      <div class="feature-card">
+        <span class="badge badge-red">Tracking</span>
+        <h3>🔍 Tracker Inspector</h3>
+        <p>Type any domain and find out exactly what it does to you. Session recording? Ad profiling? Browser fingerprinting? Know before you visit.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ══ PROOF OF YOU (ALIBI) ══════════════════════════════ -->
+<section id="proof" class="proof-section">
+  <div class="container">
+    <div class="section-tag">Proof of You</div>
+    <h2 class="section-title">Your word, with proof attached</h2>
+    <p class="section-sub">In a world of deepfakes and AI-generated content, a screenshot proves nothing. A signed HSIP message proves everything.</p>
+
+    <div class="proof-demo">
+      <div class="proof-demo-bar">
+        <div class="demo-dot" style="background:#ef4444"></div>
+        <div class="demo-dot" style="background:#f59e0b;margin-left:4px"></div>
+        <div class="demo-dot" style="background:#22c55e;margin-left:4px"></div>
+        <span style="margin-left:8px">HSIP · Signed Message Receipt</span>
+      </div>
+      <div class="proof-demo-body">
+        <div class="proof-line"><span class="proof-label">Message</span><span class="proof-value-white">"I confirm I agreed to the contract terms on this date."</span></div>
+        <div class="proof-line"><span class="proof-label">Timestamp</span><span class="proof-value">2026-03-29T14:32:07Z</span></div>
+        <div class="proof-line"><span class="proof-label">Algorithm</span><span class="proof-value">Ed25519</span></div>
+        <div class="proof-line"><span class="proof-label">Public Key</span><span class="proof-sig">hsip_pk_4a9f2c8e1d3b7a56f0e8c4d2b9a1f3e7d5c8b2a4f6e0d1c3b5a7f9e2d4c6b8a0</span></div>
+        <div class="proof-line"><span class="proof-label">Signature</span><span class="proof-sig">ed25519:8f3a1c9e5b2d7f4a0e6c8b3d1f9a7e2c5b8d4f6a1e3c7b9f2d5a8c4e0f7b3d6a9e...</span></div>
+        <div class="proof-line" style="margin-top:.75rem">
+          <span style="background:rgba(34,197,94,.15);color:#86efac;font-size:.78rem;font-weight:700;padding:3px 10px;border-radius:999px;">✓ VERIFIED — Cannot be faked or altered</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:2.5rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1.5rem;max-width:720px;">
+      <div>
+        <h4 style="color:var(--white);font-size:.95rem;margin-bottom:.4rem;">📄 Contracts</h4>
+        <p style="font-size:.875rem;color:var(--muted2);">Sign the moment of agreement. No notary needed. Verifiable by anyone with your public key.</p>
+      </div>
+      <div>
+        <h4 style="color:var(--white);font-size:.95rem;margin-bottom:.4rem;">⚖️ Disputes</h4>
+        <p style="font-size:.875rem;color:var(--muted2);">Someone claims you said something you didn't? Your signed history is your defense.</p>
+      </div>
+      <div>
+        <h4 style="color:var(--white);font-size:.95rem;margin-bottom:.4rem;">🎭 Deepfakes</h4>
+        <p style="font-size:.875rem;color:var(--muted2);">AI can fake your voice and face. It cannot fake your Ed25519 signature. That key is yours alone.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ DOWNLOAD ══════════════════════════════════════════ -->
+<section id="download" class="download-section">
+  <div class="container">
+    <div class="section-tag">Download</div>
+    <h2 class="section-title">Free. Always.</h2>
+    <p class="section-sub">No account. No email. No credit card. Just download and run.</p>
+
+    <div class="download-grid">
+
+      <div class="dl-card" data-os="windows">
+        <div class="dl-os">
+          <div class="dl-os-icon">🪟</div>
+          <div>
+            <div class="dl-os-name">Windows</div>
+            <div class="dl-desc">x64 · Windows 10 / 11</div>
+          </div>
+        </div>
+        <p class="dl-note">Double-click to install. Opens in your browser automatically. Creates a Desktop shortcut.</p>
+        <a class="btn-dl" href="https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-windows-x64.exe">
+          ⬇ Download .exe
+        </a>
+      </div>
+
+      <div class="dl-card" data-os="macos">
+        <div class="dl-os">
+          <div class="dl-os-icon">🍎</div>
+          <div>
+            <div class="dl-os-name">macOS</div>
+            <div class="dl-desc">Apple Silicon (M1–M4)</div>
+          </div>
+        </div>
+        <p class="dl-note">For M1, M2, M3, M4 Macs. Not sure? Apple menu → About This Mac → Chip.</p>
+        <a class="btn-dl" href="https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-macos-arm64">
+          ⬇ Apple Silicon
+        </a>
+        <a class="btn-dl secondary" href="https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-macos-x64" style="margin-top:.25rem;">
+          ⬇ Intel Mac
+        </a>
+      </div>
+
+      <div class="dl-card" data-os="linux">
+        <div class="dl-os">
+          <div class="dl-os-icon">🐧</div>
+          <div>
+            <div class="dl-os-name">Linux</div>
+            <div class="dl-desc">x64 · All distros</div>
+          </div>
+        </div>
+        <p class="dl-note">Or install with one command:</p>
+        <div style="font-family:monospace;font-size:.75rem;color:var(--green);background:var(--bg2);padding:.6rem .8rem;border-radius:6px;word-break:break-all;">
+          curl -sSf .../install.sh | sh
+        </div>
+        <a class="btn-dl" href="https://github.com/rewired89/HSIP-1PHASE/releases/latest/download/hsip-linux-x64">
+          ⬇ Download Binary
+        </a>
+      </div>
+
+    </div>
+
+    <!-- Homebrew -->
+    <p style="font-size:.875rem;color:var(--muted2);margin-bottom:.6rem;font-weight:600;">Or install with Homebrew (Mac / Linux):</p>
+    <div class="cli-block" style="max-width:680px;">
+      <code id="cmd-brew">brew tap rewired89/hsip https://github.com/rewired89/HSIP-1PHASE &amp;&amp; brew install hsip</code>
+      <button class="cli-copy-btn" data-target="cmd-brew">Copy</button>
+    </div>
+
+    <p style="font-size:.8rem;color:var(--muted);margin-top:1.5rem;">
+      All releases are open source and MIT licensed.
+      <a href="https://github.com/rewired89/HSIP-1PHASE/releases" target="_blank">View all releases →</a>
+    </p>
+  </div>
+</section>
+
+<!-- ══ FAQ ═══════════════════════════════════════════════ -->
+<section id="faq">
+  <div class="container">
+    <div class="section-tag">FAQ</div>
+    <h2 class="section-title">Common questions</h2>
+
+    <div class="faq-list">
+
+      <div class="faq-item">
+        <button class="faq-q">
+          Does HSIP send any data to a server?
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="faq-a">Never. HSIP runs entirely on your computer. There is no HSIP server, no account, no analytics, no phone-home. Your data — messages, keys, consent records — lives only on your machine.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q">
+          Why does it open in my browser? Is it a website?
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="faq-a">It is not a website — it is a local app that happens to run inside your browser. The address <code>localhost:7777</code> means your own computer, not the internet. Your browser is just the window. Nothing leaves your machine.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q">
+          What is a "signed message" and why would I use it?
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="faq-a">A signed message is like a wax seal on a letter — except mathematical and impossible to fake. When you sign a message with HSIP, you create proof that you wrote exactly those words at exactly that time. If someone later disputes it or claims you said something else, you have verifiable evidence. Useful for contracts, agreements, disputes, or any message that matters.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q">
+          Will it break any websites or apps?
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="faq-a">The DNS tracker blocker only blocks known tracking domains — it does not touch the sites you actually visit. If a site stops working, you can disable the blocker instantly from the dashboard and report it via GitHub Issues.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q">
+          Is it really free? What's the catch?
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="faq-a">Completely free, MIT licensed, open source. There is no freemium tier, no premium plan, no ads. You can read every line of code on GitHub. The philosophy: closed-source privacy is an oxymoron — you should be able to verify for yourself that your keys never leave your machine.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q">
+          What happens if I close the browser tab?
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="faq-a">HSIP keeps running in the background — the DNS blocker stays on, connected AI agents stay monitored. You can reopen the dashboard anytime by going to <code>http://localhost:7777</code> in any browser, or clicking the Desktop shortcut on Windows.</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ══ FOOTER ════════════════════════════════════════════ -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <div class="logo">
+        <svg width="22" height="22" viewBox="0 0 32 32" fill="none"><path d="M16 2L4 7v9c0 9 6 17 12 19 6-2 12-10 12-19V7z" fill="#2563eb"/><path d="M10 16l4 4 8-9" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        HSIP
+      </div>
+      <p>Your digital bodyguard. One binary, no cloud, no subscription. Your data stays on your machine — always.</p>
+    </div>
+
+    <div class="footer-col">
+      <h4>Product</h4>
+      <a href="#features">Features</a>
+      <a href="#proof">Proof of You</a>
+      <a href="#download">Download</a>
+      <a href="#faq">FAQ</a>
+    </div>
+
+    <div class="footer-col">
+      <h4>Developers</h4>
+      <a href="https://github.com/rewired89/HSIP-1PHASE" target="_blank">GitHub</a>
+      <a href="https://github.com/rewired89/HSIP-1PHASE/tree/main/docs/API_REFERENCE.md" target="_blank">API Reference</a>
+      <a href="https://github.com/rewired89/HSIP-1PHASE/tree/main/examples" target="_blank">Examples</a>
+      <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/CONTRIBUTING.md" target="_blank">Contributing</a>
+    </div>
+
+    <div class="footer-col">
+      <h4>Trust</h4>
+      <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/THREAT_MODEL.md" target="_blank">Threat Model</a>
+      <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/DEEPFAKE_DEFENSE.md" target="_blank">Deepfake Defense</a>
+      <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/LICENSE" target="_blank">MIT License</a>
+      <a href="https://github.com/rewired89/HSIP-1PHASE/issues/new/choose" target="_blank">Report a Bug</a>
+    </div>
+  </div>
+
+  <div class="footer-bottom">
+    <span>© 2025–2026 Dayana Sanchez — MIT License</span>
+    <span>Built with Rust + React · Zero telemetry · <a href="https://github.com/rewired89/HSIP-1PHASE" target="_blank">Source code →</a></span>
+  </div>
+</footer>
+
+<script src="assets/app.js"></script>
+</body>
+</html>
