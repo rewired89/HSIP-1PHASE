@@ -272,7 +272,7 @@ export const TRACKERS = [
   // ── Social Tracking ───────────────────────────────────────────────────
   {
     vendor: 'Facebook / Meta Pixel',
-    domain: '*.facebook.com',
+    domain: 'connect.facebook.net',
     plain: 'Facebook tracks you on every site that has a Like button',
     description:
       'The Meta Pixel is embedded on millions of websites. Even if you\'re not on Facebook, ' +
@@ -283,19 +283,20 @@ export const TRACKERS = [
     safeToBlock: true,
   },
   {
-    vendor: 'Meta / Instagram CDN',
-    domain: '*.fbcdn.net',
-    plain: 'Facebook\'s content delivery network tracking your activity',
+    vendor: 'Facebook App Events',
+    domain: 'graph.facebook.com',
+    plain: 'Facebook\'s tracking API used by apps and websites',
     description:
-      'fbcdn.net is Facebook\'s CDN but also serves tracking pixels. Requests to this domain ' +
-      'can reveal which Facebook-connected sites you are visiting.',
+      'graph.facebook.com is the endpoint apps and websites use to send your activity events ' +
+      'directly to Facebook — purchases, signups, page views. Blocking this stops that reporting ' +
+      'without affecting your ability to use Facebook itself.',
     category: 'Social',
     risk: 'high',
     safeToBlock: true,
   },
   {
     vendor: 'TikTok Analytics',
-    domain: '*.tiktok.com',
+    domain: 'analytics.tiktok.com',
     plain: 'TikTok monitors your activity across the web',
     description:
       'TikTok\'s analytics pixel tracks your activity on external websites, not just in the app. ' +
@@ -307,7 +308,7 @@ export const TRACKERS = [
   },
   {
     vendor: 'LinkedIn Insight Tag',
-    domain: '*.linkedin.com',
+    domain: 'snap.licdn.com',
     plain: 'LinkedIn tracks which websites you visit after seeing their ads',
     description:
       'The LinkedIn Insight Tag is embedded on business websites to track visitors and report ' +
@@ -319,7 +320,7 @@ export const TRACKERS = [
   },
   {
     vendor: 'Snapchat Pixel',
-    domain: '*.snapchat.com',
+    domain: 'tr.snapchat.com',
     plain: 'Snapchat tracks purchases and behavior on other websites',
     description:
       'The Snapchat Pixel lets advertisers see if you bought something after seeing a Snapchat ad. ' +
@@ -341,7 +342,7 @@ export const TRACKERS = [
   },
   {
     vendor: 'Pinterest Tag',
-    domain: '*.pinterest.com',
+    domain: 'ct.pinterest.com',
     plain: 'Pinterest tracks your purchases and page visits',
     description:
       'The Pinterest tag tracks what pages you visit and what you buy on websites that run it, ' +
