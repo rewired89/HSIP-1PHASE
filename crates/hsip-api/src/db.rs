@@ -149,6 +149,19 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .await?;
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS contacts (
+            id         TEXT PRIMARY KEY,
+            tenant_id  TEXT NOT NULL,
+            nickname   TEXT NOT NULL,
+            verify_key TEXT NOT NULL,
+            added_at   INTEGER NOT NULL,
+            UNIQUE(tenant_id, verify_key)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS credentials (
             id                TEXT PRIMARY KEY,
             tenant_id         TEXT NOT NULL,
@@ -166,6 +179,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
 
     // Indexes on tenant_id for all high-traffic tables (L4)
     let indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_contacts_tenant     ON contacts (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_api_keys_tenant    ON api_keys (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_consents_tenant    ON consents (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_messages_tenant    ON messages (tenant_id)",

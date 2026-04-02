@@ -12,13 +12,15 @@ import ConsentWallet   from './pages/ConsentWallet';
 import AIWatch         from './pages/AIWatch';
 import TrackerInspector from './pages/TrackerInspector';
 import ProtectionSetup  from './pages/ProtectionSetup';
+import NetworkMonitor   from './pages/NetworkMonitor';
 import Onboarding       from './pages/Onboarding';
 import './App.css';
 
 const SIMPLE_TABS = [
   { id: 'home',              label: '🏠 Home' },
-  { id: 'prove-it',          label: '✍️ Alibi' },
   { id: 'messages',          label: '💬 Messages' },
+  { id: 'network',           label: '🌐 Network' },
+  { id: 'prove-it',          label: '✍️ Alibi' },
   { id: 'consent-wallet',    label: '🛡️ My Consents' },
   { id: 'ai-watch',          label: '🤖 AI Watch' },
   { id: 'tracker-inspector', label: '🔍 Trackers' },
@@ -171,8 +173,9 @@ export default function App() {
         {mode === 'simple' ? (
           <>
             {tab === 'home'              && <HomeDashboard    onNavigate={setTab} />}
-            {tab === 'prove-it'          && <ProveIt          apiKey={apiKey} />}
             {tab === 'messages'          && <Messages         apiKey={apiKey} />}
+            {tab === 'network'           && <NetworkMonitor   apiKey={apiKey} />}
+            {tab === 'prove-it'          && <ProveIt          apiKey={apiKey} />}
             {tab === 'consent-wallet'    && <ConsentWallet    apiKey={apiKey} />}
             {tab === 'ai-watch'          && <AIWatch          apiKey={apiKey} />}
             {tab === 'tracker-inspector' && <TrackerInspector />}

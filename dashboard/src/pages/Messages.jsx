@@ -1,470 +1,473 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { request } from '../api';
 
-/** Full human-readable timestamp, e.g. "March 26, 2024 at 03:33:20 PM EST" */
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtTime(ms) {
+  if (!ms) return '';
+  const d = new Date(ms);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  if (isToday) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+    ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function fmtFull(ms) {
-  return new Date(ms).toLocaleString('en-US', {
+  return new Date(ms).toLocaleString([], {
     year: 'numeric', month: 'long', day: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    timeZoneName: 'short',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
   });
 }
 
-/** ISO 8601 for technical / legal export */
-function fmtISO(ms) {
-  return new Date(ms).toISOString();
-}
-
-/** Show first 10 chars + … + last 8 chars of a base64 key */
 function keyFp(b64) {
-  if (!b64 || b64.length < 20) return b64 || '—';
-  return b64.slice(0, 10) + '…' + b64.slice(-8);
+  if (!b64) return '';
+  return b64.slice(0, 8) + '…' + b64.slice(-6);
 }
 
-export default function Messages({ apiKey }) {
-  const [tab,      setTab]      = useState('send');
-  const [myKey,    setMyKey]    = useState('');
-  const [messages, setMessages] = useState([]);
+function makeShareText(proof) {
+  return `──── HSIP Signed Message ────
+${proof.content}
 
-  // ── Compose state ────────────────────────────────────────────────────────
-  const [content,      setContent]      = useState('');
-  const [proofPackage, setProofPackage] = useState(null);
-  const [copiedProof,  setCopiedProof]  = useState(false);
-  const [copiedKey,    setCopiedKey]    = useState(false);
-  const [signing,      setSigning]      = useState(false);
+From: ${keyFp(proof.sender_key)}
+Signed: ${fmtFull(proof.signed_at_ms)}
 
-  // ── Receive state ────────────────────────────────────────────────────────
-  const [pasted,       setPasted]       = useState('');
-  const [parsed,       setParsed]       = useState(null);
-  const [parseError,   setParseError]   = useState('');
-  const [verifyResult, setVerifyResult] = useState(null);
-  const [verifying,    setVerifying]    = useState(false);
+[Paste this entire block into HSIP → Messages to verify]
+HSIP_PROOF:${JSON.stringify({
+    hsip_proof:    1,
+    content:       proof.content,
+    signature:     proof.signature,
+    sender_key:    proof.sender_key,
+    signed_at_ms:  proof.signed_at_ms,
+    signed_at_iso: proof.signed_at_iso,
+  })}
+────────────────────────────`;
+}
 
-  // ── History state ────────────────────────────────────────────────────────
-  const [expandedId, setExpandedId] = useState(null);
+function parseProof(raw) {
+  const s = raw.trim();
+  const match = s.match(/HSIP_PROOF:(\{.+\})/s);
+  if (match) { try { return JSON.parse(match[1]); } catch {} }
+  try { const obj = JSON.parse(s); if (obj.hsip_proof) return obj; } catch {}
+  return null;
+}
+
+// ── Add Contact Dialog ────────────────────────────────────────────────────────
+
+function AddContactDialog({ apiKey, onAdded, onClose }) {
+  const [nickname, setNickname] = useState('');
+  const [key,      setKey]      = useState('');
+  const [busy,     setBusy]     = useState(false);
+  const [err,      setErr]      = useState('');
+
+  async function save() {
+    setErr('');
+    if (!nickname.trim()) { setErr('Enter a name for this contact.'); return; }
+    if (!key.trim())      { setErr('Paste their HSIP public key.'); return; }
+    setBusy(true);
+    try {
+      const c = await request('POST', '/v1/contacts',
+        { nickname: nickname.trim(), verify_key: key.trim() }, apiKey);
+      onAdded(c);
+      onClose();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <div className="connect-dialog">
+      <div className="connect-dialog-inner">
+        <h3>Add a contact</h3>
+        <p className="connect-hint">
+          Ask the other person to open HSIP → Messages and tap <strong>"Share my address"</strong>.
+          They copy their public key and send it to you — paste it below.
+        </p>
+        <label className="connect-label">Their name</label>
+        <input className="connect-input" placeholder="e.g. Maria" value={nickname}
+          onChange={e => setNickname(e.target.value)} autoFocus />
+        <label className="connect-label">Their HSIP public key</label>
+        <textarea className="connect-input" rows={3}
+          placeholder="Paste their HSIP public key here…"
+          value={key} onChange={e => setKey(e.target.value)}
+          style={{ fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical' }} />
+        {err && <p style={{ color: '#fc8181', fontSize: '0.8rem', marginBottom: '0.5rem' }}>{err}</p>}
+        <div className="connect-actions">
+          <button className="consumer-reset-btn" onClick={onClose}>Cancel</button>
+          <button className="primary" onClick={save} disabled={busy}>
+            {busy ? 'Adding…' : 'Add contact'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Receive dialog ────────────────────────────────────────────────────────────
+
+function ReceiveDialog({ apiKey, contacts, onClose }) {
+  const [raw,    setRaw]    = useState('');
+  const [proof,  setProof]  = useState(null);
+  const [result, setResult] = useState(null);
+  const [busy,   setBusy]   = useState(false);
+  const [err,    setErr]    = useState('');
+
+  function tryParse(text) {
+    setErr(''); setResult(null);
+    const p = parseProof(text);
+    if (p) setProof(p);
+    else { setProof(null); if (text.length > 20) setErr('Could not read proof — paste the whole message including the HSIP_PROOF line.'); }
+  }
+
+  async function verify() {
+    if (!proof) return;
+    setBusy(true);
+    try {
+      const res = await request('POST', '/v1/messages/verify', {
+        content:         proof.content,
+        signature:       proof.signature,
+        peer_verify_key: proof.sender_key,
+      }, apiKey);
+      setResult(res);
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  const senderContact = proof && contacts.find(c => c.verify_key === proof.sender_key);
+
+  return (
+    <div className="connect-dialog">
+      <div className="connect-dialog-inner" style={{ maxWidth: 520 }}>
+        <h3>Receive a message</h3>
+        <p className="connect-hint">Paste the full message you received from someone using HSIP.</p>
+        <textarea className="connect-input" rows={6}
+          placeholder="Paste the HSIP message here…"
+          value={raw} onChange={e => { setRaw(e.target.value); tryParse(e.target.value); }}
+          style={{ fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical' }} />
+        {err && <p style={{ color: '#fc8181', fontSize: '0.8rem' }}>{err}</p>}
+        {proof && !result && (
+          <div className="msg-preview-box">
+            <p className="msg-preview-content">"{proof.content}"</p>
+            <p className="msg-preview-meta">
+              From: {senderContact ? <strong>{senderContact.nickname}</strong> : keyFp(proof.sender_key)}
+              {proof.signed_at_ms && <> · {fmtFull(proof.signed_at_ms)}</>}
+            </p>
+          </div>
+        )}
+        {result && (
+          <div className={`msg-verify-result ${result.verified ? 'msg-verify-ok' : 'msg-verify-fail'}`}>
+            {result.verified
+              ? '✅ Authentic — this message was not altered and came from the claimed sender.'
+              : '❌ Verification failed — signature does not match.'}
+          </div>
+        )}
+        <div className="connect-actions">
+          <button className="consumer-reset-btn" onClick={onClose}>Close</button>
+          {proof && !result && (
+            <button className="primary" onClick={verify} disabled={busy}>
+              {busy ? 'Verifying…' : 'Verify'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Message bubble ────────────────────────────────────────────────────────────
+
+function Bubble({ msg, myKey, contacts }) {
+  const [open, setOpen] = useState(false);
+  const isOut  = msg.direction === 'outbound';
+  const proof  = {
+    hsip_proof:    1,
+    content:       msg.content,
+    signature:     msg.signature,
+    sender_key:    isOut ? myKey : msg.peer_verify_key,
+    signed_at_ms:  msg.timestamp,
+    signed_at_iso: new Date(msg.timestamp).toISOString(),
+  };
+
+  return (
+    <div className={`bubble-row ${isOut ? 'bubble-row--out' : 'bubble-row--in'}`}>
+      {!isOut && (
+        <div className="bubble-avatar">
+          {(contacts.find(c => c.verify_key === msg.peer_verify_key)?.nickname[0] || '?').toUpperCase()}
+        </div>
+      )}
+      <div className="bubble-col">
+        <div className={`bubble ${isOut ? 'bubble--out' : 'bubble--in'}`}
+             onClick={() => setOpen(v => !v)}>
+          <p className="bubble-text">{msg.content}</p>
+          <div className="bubble-footer">
+            <span className="bubble-time">{fmtTime(msg.timestamp)}</span>
+            {isOut && <span className="bubble-status">{msg.verified ? '✓' : '○'}</span>}
+          </div>
+        </div>
+        {open && (
+          <div className="bubble-proof">
+            <div className="bubble-proof-row">
+              <span className="bubble-proof-label">Signed</span>
+              <span>{fmtFull(msg.timestamp)}</span>
+            </div>
+            <div className="bubble-proof-row">
+              <span className="bubble-proof-label">
+                {isOut ? 'Your key' : 'Sender key'}
+              </span>
+              <code style={{ fontSize: '0.7rem' }}>
+                {keyFp(isOut ? myKey : msg.peer_verify_key)}
+              </code>
+            </div>
+            {!isOut && (
+              <div className="bubble-proof-row">
+                <span className="bubble-proof-label">Verified</span>
+                <span style={{ color: msg.verified ? '#68d391' : '#fc8181' }}>
+                  {msg.verified ? 'Yes ✓' : 'Failed ✗'}
+                </span>
+              </div>
+            )}
+            {isOut && (
+              <button className="setup-copy-btn" style={{ marginTop: '0.4rem' }}
+                onClick={() => navigator.clipboard.writeText(makeShareText(proof))}>
+                Copy to share
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Thread ────────────────────────────────────────────────────────────────────
+
+function Thread({ contact, messages, myKey, apiKey, contacts, onSent }) {
+  const [text,   setText]   = useState('');
+  const [busy,   setBusy]   = useState(false);
+  const [copied, setCopied] = useState(false);
+  const bottomRef = useRef(null);
+
+  const thread = messages
+    .filter(m => m.peer_verify_key === contact.verify_key)
+    .sort((a, b) => a.timestamp - b.timestamp);
 
   useEffect(() => {
-    loadIdentity();
-    loadMessages();
-  }, []);
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [thread.length]);
 
-  async function loadIdentity() {
+  async function send() {
+    if (!text.trim() || busy) return;
+    setBusy(true);
     try {
-      const r = await request('POST', '/v1/identity', null, apiKey);
-      setMyKey(r.verify_key);
-    } catch {}
-  }
-
-  async function loadMessages() {
-    try { setMessages(await request('GET', '/v1/messages', null, apiKey)); } catch {}
-  }
-
-  // ── Sign ─────────────────────────────────────────────────────────────────
-  async function handleSign() {
-    if (!content.trim()) return;
-    setSigning(true);
-    try {
-      const r = await request('POST', '/v1/messages/sign', { content: content.trim() }, apiKey);
-      setProofPackage({
-        hsip_proof:    1,
-        content:       r.content,
-        signature:     r.signature,
-        sender_key:    myKey,
-        signed_at_ms:  r.timestamp,
-        signed_at_iso: fmtISO(r.timestamp),
-        signed_at:     fmtFull(r.timestamp),
-      });
-      loadMessages();
-    } catch (e) {
-      alert('Could not sign the message. Please try again.\n\nDetail: ' + e.message);
-    }
-    setSigning(false);
-  }
-
-  function copyProof() {
-    navigator.clipboard.writeText(JSON.stringify(proofPackage, null, 2));
-    setCopiedProof(true);
-    setTimeout(() => setCopiedProof(false), 2500);
-  }
-
-  function copyKey() {
-    navigator.clipboard.writeText(myKey);
-    setCopiedKey(true);
-    setTimeout(() => setCopiedKey(false), 2500);
-  }
-
-  // ── Verify ───────────────────────────────────────────────────────────────
-  function handlePaste(text) {
-    setPasted(text);
-    setParseError('');
-    setParsed(null);
-    setVerifyResult(null);
-    if (!text.trim()) return;
-    try {
-      const obj = JSON.parse(text.trim());
-      if (obj.hsip_proof !== 1 || !obj.content || !obj.signature || !obj.sender_key) {
-        setParseError(
-          'This doesn\'t look like a complete HSIP proof package. ' +
-          'Make sure you copied the entire block — from the opening { to the closing }.'
-        );
-        return;
-      }
-      setParsed(obj);
-    } catch {
-      setParseError(
-        'Could not read this text. Make sure you copied the entire proof package your contact sent, ' +
-        'starting with { and ending with }.'
-      );
-    }
-  }
-
-  async function handleVerify() {
-    if (!parsed) return;
-    setVerifying(true);
-    try {
-      const r = await request('POST', '/v1/messages/verify', {
-        content:        parsed.content,
-        signature:      parsed.signature,
-        peer_verify_key: parsed.sender_key,
+      await request('POST', '/v1/messages/sign', {
+        content:         text.trim(),
+        peer_verify_key: contact.verify_key,
       }, apiKey);
-      setVerifyResult({ ...r, pkg: parsed });
-      loadMessages();
-    } catch (e) {
-      alert('Verification request failed. Please try again.\n\nDetail: ' + e.message);
-    }
-    setVerifying(false);
+      setText('');
+      onSent();
+    } catch (e) { alert(e.message); }
+    setBusy(false);
   }
 
-  function resetReceive() {
-    setPasted('');
-    setParsed(null);
-    setParseError('');
-    setVerifyResult(null);
+  const lastSent = [...thread].reverse().find(m => m.direction === 'outbound');
+  function shareLastSent() {
+    if (!lastSent) return;
+    navigator.clipboard.writeText(makeShareText({
+      content:       lastSent.content,
+      signature:     lastSent.signature,
+      sender_key:    myKey,
+      signed_at_ms:  lastSent.timestamp,
+      signed_at_iso: new Date(lastSent.timestamp).toISOString(),
+    }));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
-  // ── Print ────────────────────────────────────────────────────────────────
-  function handlePrint() {
-    window.print();
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div>
-      {/* ── Tab bar ──────────────────────────────────────────────────────── */}
-      <div className="msg-tabs">
-        <button className={tab === 'send'    ? 'active' : ''} onClick={() => setTab('send')}>
-          ✍️ Send a Message
-        </button>
-        <button className={tab === 'receive' ? 'active' : ''} onClick={() => setTab('receive')}>
-          📥 Receive &amp; Verify
-        </button>
-        <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>
-          📋 History
-          {messages.length > 0 && <span className="msg-count">{messages.length}</span>}
-        </button>
+    <div className="thread">
+      <div className="thread-header">
+        <div className="thread-avatar">{contact.nickname[0].toUpperCase()}</div>
+        <div>
+          <div className="thread-name">{contact.nickname}</div>
+          <div className="thread-key">{keyFp(contact.verify_key)}</div>
+        </div>
       </div>
 
-      {/* ══ SEND TAB ═══════════════════════════════════════════════════════ */}
-      {tab === 'send' && (
-        <div>
-          {/* My identity key */}
-          {myKey && (
-            <div className="card msg-identity-card">
-              <div className="msg-identity-label">
-                <span>🔑</span>
-                <div>
-                  <strong>Your Identity Key — share this with your contacts</strong>
-                  <p>
-                    Your contact needs this key so they can verify messages came from you.
-                    Share it once via text, email, or any method — you only need to do it once.
-                  </p>
-                </div>
-              </div>
-              <div className="key-display">{myKey}</div>
-              <button className="secondary" style={{ marginTop: '0.6rem' }} onClick={copyKey}>
-                {copiedKey ? '✓ Copied!' : 'Copy My Identity Key'}
-              </button>
-            </div>
-          )}
+      <div className="thread-messages">
+        {thread.length === 0 && (
+          <div className="thread-empty">
+            <p>No messages yet with {contact.nickname}.</p>
+            <p>Type below, sign it, then share the proof with them so they can verify it.</p>
+          </div>
+        )}
+        {thread.map(m => (
+          <Bubble key={m.id} msg={m} myKey={myKey} contacts={contacts} />
+        ))}
+        <div ref={bottomRef} />
+      </div>
 
-          {!proofPackage ? (
-            <div className="card">
-              <h2>Write &amp; Sign a Message</h2>
-              <p className="msg-subtitle">
-                Type your message below. HSIP will sign it with your private key, creating a
-                cryptographic proof that it came from you — and only you — at this exact time.
-                <br /><br />
-                After signing, you will get a <strong>Proof Package</strong> to send to your contact.
-                They paste it into HSIP to confirm it is real and unmodified.
-              </p>
-              <label className="msg-label">Your message</label>
-              <textarea
-                rows={6}
-                placeholder="Type your message here. Be as detailed as you like — include names, dates, and amounts if relevant."
-                value={content}
-                onChange={e => setContent(e.target.value)}
-              />
-              <button
-                className="primary"
-                onClick={handleSign}
-                disabled={signing || !content.trim()}
-              >
-                {signing ? 'Signing…' : '✍️ Sign & Create Proof Package'}
-              </button>
-            </div>
-          ) : (
-            <div className="card msg-proof-card">
-              <h2 style={{ color: '#68d391' }}>✅ Message Signed</h2>
-              <p className="msg-subtitle">
-                Copy the entire block below and send it to your contact however you like —
-                text message, email, WhatsApp, etc. They paste it into HSIP to confirm it
-                is genuinely from you and has not been changed.
-              </p>
-
-              <div className="msg-proof-meta">
-                <div><span>Signed at</span><strong>{proofPackage.signed_at}</strong></div>
-                <div><span>ISO timestamp</span><strong>{proofPackage.signed_at_iso}</strong></div>
-              </div>
-
-              <label className="msg-label" style={{ marginTop: '0.75rem' }}>Proof Package — copy and send this</label>
-              <textarea
-                className="msg-proof-textarea"
-                rows={12}
-                readOnly
-                value={JSON.stringify(proofPackage, null, 2)}
-              />
-
-              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-                <button className="primary" onClick={copyProof}>
-                  {copiedProof ? '✓ Copied!' : '📋 Copy Proof Package'}
-                </button>
-                <button className="secondary" onClick={() => { setProofPackage(null); setContent(''); }}>
-                  Write Another Message
-                </button>
-              </div>
-            </div>
-          )}
+      <div className="thread-compose">
+        {lastSent && (
+          <button className="share-btn" onClick={shareLastSent}>
+            {copied ? '✓ Copied!' : '📋 Copy last message to share'}
+          </button>
+        )}
+        <div className="compose-row">
+          <textarea className="compose-input"
+            placeholder={`Message ${contact.nickname}…`}
+            value={text} rows={2}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+          />
+          <button className="compose-send" onClick={send} disabled={busy || !text.trim()}>
+            {busy ? '…' : '✍️'}
+          </button>
         </div>
+        <p className="compose-hint">
+          Tap ✍️ to sign. Then <strong>Copy last message to share</strong> and send it to {contact.nickname} via any channel — they paste it into HSIP to verify.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── My address ────────────────────────────────────────────────────────────────
+
+function MyAddress({ myKey }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard.writeText(myKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+  return (
+    <div className="my-address">
+      <div className="my-address-label">Your HSIP address</div>
+      <div className="my-address-key">{keyFp(myKey)}</div>
+      <button className="my-address-copy" onClick={copy}>
+        {copied ? '✓ Copied!' : 'Share my address'}
+      </button>
+    </div>
+  );
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+export default function Messages({ apiKey }) {
+  const [myKey,       setMyKey]       = useState('');
+  const [contacts,    setContacts]    = useState([]);
+  const [messages,    setMessages]    = useState([]);
+  const [selected,    setSelected]    = useState(null);
+  const [showAdd,     setShowAdd]     = useState(false);
+  const [showReceive, setShowReceive] = useState(false);
+  const [loading,     setLoading]     = useState(true);
+
+  useEffect(() => { loadAll(); }, []);
+
+  async function loadAll() {
+    try {
+      const [identity, contactList, msgList] = await Promise.all([
+        request('GET', '/v1/identity', null, apiKey)
+          .catch(() => request('POST', '/v1/identity', null, apiKey)),
+        request('GET', '/v1/contacts', null, apiKey),
+        request('GET', '/v1/messages', null, apiKey),
+      ]);
+      setMyKey(identity.verify_key_b64 || '');
+      setContacts(Array.isArray(contactList) ? contactList : []);
+      setMessages(Array.isArray(msgList)     ? msgList     : []);
+    } catch {}
+    setLoading(false);
+  }
+
+  const selectedContact = contacts.find(c => c.id === selected);
+
+  if (loading) return <div className="card"><p className="empty">Loading…</p></div>;
+
+  return (
+    <div className="messages-shell">
+      {showAdd && (
+        <AddContactDialog
+          apiKey={apiKey}
+          onAdded={c => {
+            setContacts(prev => [...prev.filter(x => x.id !== c.id), c]
+              .sort((a, b) => a.nickname.localeCompare(b.nickname)));
+            setSelected(c.id);
+          }}
+          onClose={() => setShowAdd(false)}
+        />
+      )}
+      {showReceive && (
+        <ReceiveDialog apiKey={apiKey} contacts={contacts}
+          onClose={() => { setShowReceive(false); loadAll(); }} />
       )}
 
-      {/* ══ RECEIVE TAB ════════════════════════════════════════════════════ */}
-      {tab === 'receive' && (
-        <div>
-          {!verifyResult ? (
-            <div className="card">
-              <h2>Receive &amp; Verify a Message</h2>
-              <p className="msg-subtitle">
-                When your contact sends you a Proof Package, paste the entire thing below.
-                HSIP will check that the message is genuine, has not been changed, and was
-                really signed by their key.
-              </p>
-
-              <label className="msg-label">Paste the Proof Package here</label>
-              <textarea
-                className="msg-proof-textarea"
-                rows={10}
-                placeholder={'Paste the proof package your contact sent you.\n\nIt looks like this:\n{\n  "hsip_proof": 1,\n  "content": "...",\n  ...\n}'}
-                value={pasted}
-                onChange={e => handlePaste(e.target.value)}
-              />
-
-              {parseError && (
-                <p className="msg-error">{parseError}</p>
-              )}
-
-              {parsed && (
-                <div className="msg-preview">
-                  <p className="msg-preview-label">Preview — message from your contact:</p>
-                  <div className="msg-bubble">{parsed.content}</div>
-                  <div className="msg-preview-meta">
-                    <span>
-                      Signed at: <strong>
-                        {parsed.signed_at || (parsed.signed_at_ms ? fmtFull(parsed.signed_at_ms) : '(unknown)')}
-                      </strong>
-                    </span>
-                    <span>
-                      Sender key: <code>{keyFp(parsed.sender_key)}</code>
-                    </span>
+      {/* Sidebar */}
+      <div className="msg-sidebar">
+        {myKey && <MyAddress myKey={myKey} />}
+        <div className="sidebar-actions">
+          <button className="sidebar-btn sidebar-btn--primary" onClick={() => setShowAdd(true)}>
+            + Add contact
+          </button>
+          <button className="sidebar-btn" onClick={() => setShowReceive(true)}>
+            📥 Receive
+          </button>
+        </div>
+        <div className="contact-list">
+          {contacts.length === 0 && (
+            <p className="contact-empty">No contacts yet.<br />Add someone to start.</p>
+          )}
+          {contacts.map(c => {
+            const last = [...messages]
+              .filter(m => m.peer_verify_key === c.verify_key)
+              .sort((a, b) => b.timestamp - a.timestamp)[0];
+            return (
+              <button key={c.id}
+                className={`contact-item${selected === c.id ? ' contact-item--active' : ''}`}
+                onClick={() => setSelected(c.id)}>
+                <div className="contact-avatar">{c.nickname[0].toUpperCase()}</div>
+                <div className="contact-info">
+                  <div className="contact-name">{c.nickname}</div>
+                  <div className="contact-preview">
+                    {last
+                      ? last.content.slice(0, 38) + (last.content.length > 38 ? '…' : '')
+                      : 'No messages yet'}
                   </div>
                 </div>
-              )}
-
-              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-                <button
-                  className="primary"
-                  onClick={handleVerify}
-                  disabled={verifying || !parsed}
-                >
-                  {verifying ? 'Verifying…' : '🔍 Verify Message'}
-                </button>
-                {pasted && (
-                  <button className="secondary" onClick={resetReceive}>Clear</button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="card" style={{ borderColor: verifyResult.verified ? '#38a169' : '#fc8181' }}>
-              {verifyResult.verified ? (
-                <>
-                  <h2 style={{ color: '#68d391', textTransform: 'none', letterSpacing: 0 }}>
-                    ✅ Authentic — Signature Valid
-                  </h2>
-                  <p className="msg-subtitle">
-                    The cryptographic signature on this message is valid. It was signed by the
-                    key shown below and has not been altered since. This is safe to trust.
-                  </p>
-
-                  <div className="msg-verified-block">
-                    <div className="msg-verified-row">
-                      <span>Message</span>
-                      <div className="msg-bubble msg-bubble--verified">{verifyResult.pkg.content}</div>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>Signed at</span>
-                      <strong>
-                        {verifyResult.pkg.signed_at || fmtFull(verifyResult.pkg.signed_at_ms)}
-                      </strong>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>ISO timestamp</span>
-                      <code>{verifyResult.pkg.signed_at_iso || fmtISO(verifyResult.pkg.signed_at_ms)}</code>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>Sender key</span>
-                      <code className="msg-key-full">{verifyResult.pkg.sender_key}</code>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>Signature</span>
-                      <code className="msg-key-full">{verifyResult.pkg.signature}</code>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <h2 style={{ color: '#fc8181', textTransform: 'none', letterSpacing: 0 }}>
-                    ❌ Verification Failed — Do Not Trust This Message
-                  </h2>
-                  <p className="msg-subtitle">
-                    The signature does not match the content. Either the message was tampered with
-                    after it was signed, or it was not signed by the key it claims to be from.
-                    Do not act on this message.
-                  </p>
-                </>
-              )}
-              <button className="secondary" style={{ marginTop: '1rem' }} onClick={resetReceive}>
-                Verify Another Message
               </button>
-            </div>
-          )}
+            );
+          })}
         </div>
-      )}
+      </div>
 
-      {/* ══ HISTORY TAB ════════════════════════════════════════════════════ */}
-      {tab === 'history' && (
-        <div>
-          <div className="card no-print" style={{ marginBottom: '0.75rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h2 style={{ margin: 0 }}>Message History</h2>
-                <p className="msg-subtitle" style={{ marginTop: '0.3rem', marginBottom: 0 }}>
-                  Every message signed or verified on this device. Click any row to expand.
-                  Use <strong>Print / Export</strong> to save a clean record for your files or for court.
-                </p>
-              </div>
-              <button className="secondary" onClick={handlePrint} style={{ flexShrink: 0, marginLeft: '1rem' }}>
-                🖨️ Print / Export
+      {/* Main */}
+      <div className="msg-main">
+        {!selectedContact ? (
+          <div className="msg-empty-state">
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>💬</div>
+            <h3>Secure Messages</h3>
+            <p>
+              Every message is signed with your private key — mathematical proof
+              of exactly what was said and when. Useful in disputes, contracts, or court.
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button className="primary" onClick={() => setShowAdd(true)}>
+                + Add a contact
+              </button>
+              <button className="consumer-reset-btn" onClick={() => setShowReceive(true)}>
+                📥 Receive a message
               </button>
             </div>
           </div>
-
-          {/* Print header — only shows on paper */}
-          <div className="print-only msg-print-header">
-            <h1>HSIP Signed Message Record</h1>
-            <p>Exported: {fmtFull(Date.now())}</p>
-            <p>This document lists cryptographically signed messages. Each signature can be independently verified using the HSIP verify function and the sender's identity key.</p>
-            <hr />
-          </div>
-
-          {messages.length === 0 ? (
-            <div className="card">
-              <p className="empty">No messages yet. Sign or verify a message to see it here.</p>
-            </div>
-          ) : messages.map(m => (
-            <div
-              key={m.id}
-              className={'card msg-history-row' + (expandedId === m.id ? ' msg-history-row--open' : '')}
-              onClick={() => setExpandedId(expandedId === m.id ? null : m.id)}
-            >
-              <div className="msg-history-top">
-                <span className="msg-dir-icon">
-                  {m.direction === 'outbound' ? '📤' : '📥'}
-                </span>
-                <div className="msg-history-meta">
-                  <div className="msg-history-badges">
-                    <span className={'badge ' + (m.direction === 'outbound' ? 'granted' : 'verified')}>
-                      {m.direction === 'outbound' ? 'Sent' : 'Received'}
-                    </span>
-                    <span className={'badge ' + (m.verified ? 'verified' : 'failed')}>
-                      {m.verified ? '✓ Verified' : '✗ Unverified'}
-                    </span>
-                    <span className="msg-timestamp">{fmtFull(m.timestamp)}</span>
-                  </div>
-                  <p className={'msg-preview-text' + (expandedId === m.id ? ' msg-preview-text--expanded' : '')}>
-                    {m.content}
-                  </p>
-                </div>
-                <span className="msg-chevron">{expandedId === m.id ? '▲' : '▼'}</span>
-              </div>
-
-              {expandedId === m.id && (
-                <div className="msg-history-detail">
-                  <div className="msg-verified-block">
-                    <div className="msg-verified-row">
-                      <span>Full message</span>
-                      <div className="msg-bubble">{m.content}</div>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>Signed at (human)</span>
-                      <strong>{fmtFull(m.timestamp)}</strong>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>Signed at (ISO 8601)</span>
-                      <code>{fmtISO(m.timestamp)}</code>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>Unix timestamp (ms)</span>
-                      <code>{m.timestamp}</code>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>{m.direction === 'outbound' ? 'Recipient key' : 'Sender key'}</span>
-                      <code className="msg-key-full">{m.peer_verify_key || '(not set)'}</code>
-                    </div>
-                    <div className="msg-verified-row">
-                      <span>Signature</span>
-                      <code className="msg-key-full">{m.signature}</code>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Always visible on paper */}
-              <div className="print-only msg-print-row">
-                <table>
-                  <tbody>
-                    <tr><td><strong>Direction</strong></td><td>{m.direction} ({m.verified ? 'verified' : 'unverified'})</td></tr>
-                    <tr><td><strong>Timestamp</strong></td><td>{fmtFull(m.timestamp)}</td></tr>
-                    <tr><td><strong>ISO 8601</strong></td><td>{fmtISO(m.timestamp)}</td></tr>
-                    <tr><td><strong>Content</strong></td><td style={{ whiteSpace: 'pre-wrap' }}>{m.content}</td></tr>
-                    <tr><td><strong>Peer key</strong></td><td style={{ wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.75rem' }}>{m.peer_verify_key || '—'}</td></tr>
-                    <tr><td><strong>Signature</strong></td><td style={{ wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.75rem' }}>{m.signature}</td></tr>
-                  </tbody>
-                </table>
-                <hr />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+        ) : (
+          <Thread
+            contact={selectedContact}
+            messages={messages}
+            myKey={myKey}
+            apiKey={apiKey}
+            contacts={contacts}
+            onSent={loadAll}
+          />
+        )}
+      </div>
     </div>
   );
 }
