@@ -19,7 +19,7 @@ import './App.css';
 const SIMPLE_TABS = [
   { id: 'home',              label: '🏠 Home' },
   { id: 'messages',          label: '💬 Messages' },
-  { id: 'network',           label: '🌐 Network' },
+  { id: 'network',           label: '🌐 Traffic Monitor' },
   { id: 'prove-it',          label: '✍️ Alibi' },
   { id: 'consent-wallet',    label: '🛡️ My Consents' },
   { id: 'ai-watch',          label: '🤖 AI Watch' },
