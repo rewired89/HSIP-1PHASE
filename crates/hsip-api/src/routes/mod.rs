@@ -7,6 +7,7 @@ pub mod dns;
 pub mod identity;
 pub mod keys;
 pub mod messages;
+pub mod proxy;
 pub mod tenant;
 
 use axum::{
@@ -56,4 +57,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/dns/enable",              post(dns::enable))
         .route("/v1/dns/disable",             post(dns::disable))
         .route("/v1/dns/log",                 get(dns::log))
+        // HTTP/HTTPS Proxy traffic monitor
+        .route("/v1/proxy/status",            get(proxy::status))
+        .route("/v1/proxy/enable",            post(proxy::enable))
+        .route("/v1/proxy/disable",           post(proxy::disable))
+        .route("/v1/proxy/log",               get(proxy::log))
+        .route("/v1/proxy/setup",             get(proxy::setup))
 }
