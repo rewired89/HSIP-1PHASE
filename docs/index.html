@@ -25,6 +25,7 @@
   </a>
   <div class="nav-links">
     <a href="#features" class="hide-mobile">Features</a>
+    <a href="#traffic"  class="hide-mobile">Traffic Monitor</a>
     <a href="#proof"    class="hide-mobile">Proof of You</a>
     <a href="#download" class="hide-mobile">Download</a>
     <a href="https://github.com/rewired89/HSIP-1PHASE" target="_blank" class="hide-mobile">GitHub</a>
@@ -54,7 +55,7 @@
 
   <h1>Your <em>Digital Bodyguard</em><br>runs on your machine</h1>
 
-  <p id="hero-stat">No cloud. No subscription.</p>
+  <p id="hero-stat">See every tracker. Block them in real time. No cloud. No subscription.</p>
 
   <div class="hero-cta">
     <a href="#" id="btn-download-primary" class="btn-primary">
@@ -105,7 +106,7 @@
       <div class="audience-card">
         <div class="audience-icon icon-red" style="background:rgba(239,68,68,.12);">🛡️</div>
         <h3>I'm tired of being tracked everywhere</h3>
-        <p>Every website you visit sends your data to Google, Facebook, TikTok, and 200+ other companies, even when you're not on those sites. HSIP cuts that off at the source, system-wide, before any of it reaches your computer.</p>
+        <p>Every website you visit sends your data to Google, Facebook, TikTok, and 200+ other companies in the background — even when you're not on those sites. HSIP intercepts every single request in real time, shows you exactly who's watching, and blocks them before they load. Like Little Snitch on Mac, but for everyone, on any computer, for free.</p>
       </div>
 
       <div class="audience-card">
@@ -208,6 +209,12 @@
 
     <div class="features-grid">
 
+      <div class="feature-card" style="border-color:rgba(239,68,68,.35);background:linear-gradient(135deg,rgba(239,68,68,.05),transparent);">
+        <span class="badge badge-red">NEW · Traffic Monitor</span>
+        <h3>🌐 Real-Time Traffic Monitor</h3>
+        <p>HSIP sits between your browser and the internet and shows you a live feed of every single request — who your apps are calling, what data is leaving, and which trackers are trying to follow you. Advertising, analytics, fingerprinting, telemetry: each request is color-coded by type, blocked automatically, and logged. You see it. You control it.</p>
+      </div>
+
       <div class="feature-card">
         <span class="badge badge-red">Privacy</span>
         <h3>🛡️ DNS Tracker Blocker</h3>
@@ -216,8 +223,8 @@
 
       <div class="feature-card">
         <span class="badge badge-blue">Proof</span>
-        <h3>📝 Signed Messages &amp; Alibi</h3>
-        <p>Send any message with a cryptographic signature, mathematical proof of who wrote it and when. Use it for contracts, confirmations, or to fight "I never said that." Printable for court records.</p>
+        <h3>💬 Signed Messages</h3>
+        <p>Chat-style messaging where every message is signed with your private key — mathematical proof of exactly what was said and when. Add contacts by public key, send signed messages, share the proof over any channel (email, WhatsApp, SMS), and anyone can verify it. Useful in contracts, disputes, or court.</p>
       </div>
 
       <div class="feature-card">
@@ -286,6 +293,79 @@
       <div>
         <h4 style="color:var(--white);font-size:.95rem;margin-bottom:.4rem;">🎭 Deepfakes</h4>
         <p style="font-size:.875rem;color:var(--muted2);">AI can fake your voice and face. It cannot fake your Ed25519 signature. That key is yours alone.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ TRAFFIC MONITOR DEMO ══════════════════════════════ -->
+<section id="traffic" class="proof-section" style="padding-top:4rem;">
+  <div class="container">
+    <div class="section-tag">Traffic Monitor</div>
+    <h2 class="section-title">See exactly who's watching you</h2>
+    <p class="section-sub">This is what your browser is actually doing right now — sending your data to hundreds of companies in the background. HSIP shows it all and blocks it.</p>
+
+    <div class="proof-demo" style="max-width:680px;margin:0 auto;">
+      <div class="proof-demo-bar">
+        <div class="demo-dot" style="background:#ef4444"></div>
+        <div class="demo-dot" style="background:#f59e0b;margin-left:4px"></div>
+        <div class="demo-dot" style="background:#22c55e;margin-left:4px"></div>
+        <span style="margin-left:8px">HSIP · Traffic Monitor — Live Feed</span>
+      </div>
+      <div class="proof-demo-body" style="padding:0;font-family:monospace;font-size:.78rem;">
+        <div style="display:grid;grid-template-columns:110px 1fr 140px 60px;padding:.4rem 1rem;background:#0d1117;color:#4a5568;font-size:.68rem;font-weight:700;letter-spacing:.05em;border-bottom:1px solid #1a2030;">
+          <span>VERDICT</span><span>DOMAIN</span><span>CATEGORY</span><span>TIME</span>
+        </div>
+        <div style="display:grid;grid-template-columns:110px 1fr 140px 60px;padding:.5rem 1rem;background:#1a0d0d;border-bottom:1px solid #1a1d27;align-items:center;">
+          <span style="color:#fc8181;font-weight:700;font-size:.7rem;">🚫 BLOCKED</span>
+          <span style="color:#90cdf4;">doubleclick.net</span>
+          <span style="background:#2d1212;color:#fc8181;padding:.1em .5em;border-radius:999px;font-size:.68rem;font-weight:700;">📢 Advertising</span>
+          <span style="color:#718096;">14:32:07</span>
+        </div>
+        <div style="display:grid;grid-template-columns:110px 1fr 140px 60px;padding:.5rem 1rem;border-bottom:1px solid #1a1d27;align-items:center;">
+          <span style="color:#4a5568;font-size:.7rem;">✓ allowed</span>
+          <span style="color:#90cdf4;">cdn.example.com</span>
+          <span></span>
+          <span style="color:#718096;">14:32:07</span>
+        </div>
+        <div style="display:grid;grid-template-columns:110px 1fr 140px 60px;padding:.5rem 1rem;background:#1a0d0d;border-bottom:1px solid #1a1d27;align-items:center;">
+          <span style="color:#fc8181;font-weight:700;font-size:.7rem;">🚫 BLOCKED</span>
+          <span style="color:#90cdf4;">google-analytics.com</span>
+          <span style="background:#12192d;color:#90cdf4;padding:.1em .5em;border-radius:999px;font-size:.68rem;font-weight:700;">📊 Analytics</span>
+          <span style="color:#718096;">14:32:08</span>
+        </div>
+        <div style="display:grid;grid-template-columns:110px 1fr 140px 60px;padding:.5rem 1rem;background:#1a0d0d;border-bottom:1px solid #1a1d27;align-items:center;">
+          <span style="color:#fc8181;font-weight:700;font-size:.7rem;">🚫 BLOCKED</span>
+          <span style="color:#90cdf4;">hotjar.com</span>
+          <span style="background:#12192d;color:#90cdf4;padding:.1em .5em;border-radius:999px;font-size:.68rem;font-weight:700;">📊 Analytics</span>
+          <span style="color:#718096;">14:32:08</span>
+        </div>
+        <div style="display:grid;grid-template-columns:110px 1fr 140px 60px;padding:.5rem 1rem;background:#1a1228;border-bottom:1px solid #1a1d27;align-items:center;">
+          <span style="color:#fc8181;font-weight:700;font-size:.7rem;">🚫 BLOCKED</span>
+          <span style="color:#90cdf4;">connect.facebook.net</span>
+          <span style="background:#1a1228;color:#d6bcfa;padding:.1em .5em;border-radius:999px;font-size:.68rem;font-weight:700;">👁 Social</span>
+          <span style="color:#718096;">14:32:09</span>
+        </div>
+        <div style="padding:.6rem 1rem;background:#0d1117;display:flex;gap:1.5rem;">
+          <span style="font-size:.75rem;color:#fc8181;font-weight:700;">4 blocked</span>
+          <span style="font-size:.75rem;color:#68d391;">1 allowed</span>
+          <span style="font-size:.75rem;color:#718096;">80% tracker rate on this page</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:2.5rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1.5rem;max-width:720px;">
+      <div>
+        <h4 style="color:var(--white);font-size:.95rem;margin-bottom:.4rem;">🎯 90 trackers blocked by default</h4>
+        <p style="font-size:.875rem;color:var(--muted2);">Advertising, analytics, fingerprinting, social pixels, and telemetry — identified and blocked with zero config.</p>
+      </div>
+      <div>
+        <h4 style="color:var(--white);font-size:.95rem;margin-bottom:.4rem;">🔴 Live, not a report</h4>
+        <p style="font-size:.875rem;color:var(--muted2);">Not a monthly summary. A real-time feed updating every second showing every connection your browser makes.</p>
+      </div>
+      <div>
+        <h4 style="color:var(--white);font-size:.95rem;margin-bottom:.4rem;">🔒 Nothing leaves your machine</h4>
+        <p style="font-size:.875rem;color:var(--muted2);">The proxy runs locally. No logs sent anywhere. You're the only one who sees your traffic data.</p>
       </div>
     </div>
   </div>
@@ -385,6 +465,14 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         <div class="faq-a">A signed message is like a wax seal on a letter, except mathematical and impossible to fake. When you sign a message with HSIP, you create proof that you wrote exactly those words at exactly that time. If someone later disputes it or claims you said something else, you have verifiable evidence. Useful for contracts, agreements, disputes, or any message that matters.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q">
+          How does the Traffic Monitor work? Do I need to install anything?
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="faq-a">No installation needed beyond HSIP itself. Inside the app, go to <strong>🌐 Traffic Monitor</strong> and click Enable. HSIP starts a local proxy on port 8877. Then follow the 4-step guide inside the app to point your browser at it (takes about 60 seconds on Windows or Mac). After that, every request your browser makes passes through HSIP first — trackers are blocked automatically and everything appears in the live feed.</div>
       </div>
 
       <div class="faq-item">
