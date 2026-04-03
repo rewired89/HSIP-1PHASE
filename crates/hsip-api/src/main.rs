@@ -491,16 +491,13 @@ fn maybe_self_install() {
     // HSIP was already running), create/refresh shortcuts as long as the
     // installed exe is present.
     if install_exe.exists() {
+        // mslnk writes the .lnk binary directly; dirs resolves Desktop path
+        // via SHGetKnownFolderPath (handles OneDrive-moved Desktops correctly).
         create_shortcuts(&install_exe);
     } else {
         // Nothing to point a shortcut at — bail out entirely.
         return;
     }
-
-    // ── Create Desktop + Start Menu shortcuts — pure Rust, no subprocess ──
-    // mslnk writes the .lnk binary directly; dirs resolves the Desktop path
-    // via SHGetKnownFolderPath (handles OneDrive-moved Desktops correctly).
-    create_shortcuts(&install_exe);
 
     // ── Launch installed copy (only if we just freshly copied) and exit ──
     // If copy failed the installed copy is already running — don't spawn a
