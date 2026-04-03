@@ -116,39 +116,35 @@ jobs:
       - name: List files (sanity check)
         run: ls -lh
 
-      # ── Push to main → update rolling "latest" pre-release ───────────────
-      - name: Publish to "latest" pre-release (push to main)
-        if: github.event_name == 'push'
+      # ── Push to main OR manual trigger → update rolling "latest" pre-release
+      - name: Publish to "latest" pre-release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Write release notes to a file (avoids heredoc indentation issues)
           cat > release-notes.md << 'EOF'
-          This release rebuilds automatically on every push to main. Always download from here for the latest version.
+This release rebuilds automatically on every push to main. Always download from here for the latest version.
 
-          | Platform | Download |
-          |----------|----------|
-          | **Windows** | `hsip-windows-x64.exe` |
-          | macOS Apple Silicon | `hsip-macos-arm64` |
-          | macOS Intel | `hsip-macos-x64` |
-          | Linux | `hsip-linux-x64` |
+| Platform | Download |
+|----------|----------|
+| **Windows** | `hsip-windows-x64.exe` |
+| macOS Apple Silicon | `hsip-macos-arm64` |
+| macOS Intel | `hsip-macos-x64` |
+| Linux | `hsip-linux-x64` |
 
-          **Windows:** Download `hsip-windows-x64.exe` and double-click it. On first run it installs itself, creates a Desktop shortcut and Start Menu entry, then opens in your browser. Use the shortcut from then on.
-          EOF
+**Windows:** Download `hsip-windows-x64.exe` and double-click it. On first run it installs itself, creates a Desktop shortcut and Start Menu entry, then opens in your browser. Use the shortcut from then on.
+EOF
 
           echo "Last updated: ${{ github.sha }}" >> release-notes.md
 
-          # Create release if it doesn't exist yet
           gh release view latest --repo rewired89/HSIP-1PHASE > /dev/null 2>&1 \
             || gh release create latest --repo rewired89/HSIP-1PHASE \
                  --prerelease --title "Latest build (auto-updated)" --notes "init"
 
-          # Update title and notes
           gh release edit latest --repo rewired89/HSIP-1PHASE \
             --title "Latest build (auto-updated)" \
             --notes-file release-notes.md
 
-          # Upload all binaries, overwriting stale files
           gh release upload latest \
             hsip-windows-x64.exe \
             hsip-macos-arm64 \
