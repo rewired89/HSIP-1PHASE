@@ -23,15 +23,15 @@ pub mod hello;
 pub mod udp;
 
 // Security hardening modules
-pub mod rate_limiter;
-pub mod input_validator;
 pub mod connection_guard;
+pub mod input_validator;
+pub mod rate_limiter;
 pub mod tls_wrapper;
 
 // Network subsystem organization
 pub mod protocol {
-    pub use super::hello;
     pub use super::handshake_io;
+    pub use super::hello;
 }
 
 pub mod transport {
@@ -41,10 +41,10 @@ pub mod transport {
 
 pub mod security {
     //! Security enforcement layers
-    pub use super::guard;
-    pub use super::consent_cache;
-    pub use super::rate_limiter;
-    pub use super::input_validator;
     pub use super::connection_guard;
+    pub use super::consent_cache;
+    pub use super::guard;
+    pub use super::input_validator;
+    pub use super::rate_limiter;
     pub use super::tls_wrapper;
 }

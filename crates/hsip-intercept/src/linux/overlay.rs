@@ -46,11 +46,7 @@ impl LinuxOverlay {
     /// Show a desktop notification and wait for the user's action choice.
     ///
     /// Uses `notify-rust`'s action API on Linux (D-Bus / libnotify).
-    fn show_notification(
-        summary: &str,
-        body: &str,
-        timeout_secs: u32,
-    ) -> Result<UserChoice> {
+    fn show_notification(summary: &str, body: &str, timeout_secs: u32) -> Result<UserChoice> {
         use notify_rust::{Notification, Timeout};
 
         let timeout_ms = if timeout_secs == 0 {
@@ -86,7 +82,11 @@ impl LinuxOverlay {
 
 #[async_trait::async_trait]
 impl InterceptOverlay for LinuxOverlay {
-    async fn show(&mut self, event: &MessagingEvent, recipient: Option<&str>) -> Result<UserChoice> {
+    async fn show(
+        &mut self,
+        event: &MessagingEvent,
+        recipient: Option<&str>,
+    ) -> Result<UserChoice> {
         let content = OverlayContent::from_event(event, recipient);
 
         // Remember platform for DisableForApp
@@ -100,7 +100,10 @@ impl InterceptOverlay for LinuxOverlay {
         let timeout_secs = self.config.overlay.timeout_seconds;
         let current_platform = Arc::clone(&self.current_platform);
 
-        info!("Showing Linux overlay notification for {:?}", event.platform);
+        info!(
+            "Showing Linux overlay notification for {:?}",
+            event.platform
+        );
 
         // Run blocking D-Bus call on a dedicated thread
         let choice = tokio::task::spawn_blocking(move || {

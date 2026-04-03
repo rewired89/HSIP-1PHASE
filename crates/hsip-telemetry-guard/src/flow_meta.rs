@@ -272,7 +272,12 @@ impl FlowMeta {
         hasher.update(&source.port().to_le_bytes());
         hasher.update(&destination.ip().to_string().as_bytes());
         hasher.update(&destination.port().to_le_bytes());
-        hasher.update(&chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0).to_le_bytes());
+        hasher.update(
+            &chrono::Utc::now()
+                .timestamp_nanos_opt()
+                .unwrap_or(0)
+                .to_le_bytes(),
+        );
         flow_id.copy_from_slice(hasher.finalize().as_bytes());
 
         Self {
@@ -454,8 +459,8 @@ mod tests {
 
     #[test]
     fn test_intent_risk_mapping() {
-        let meta = FlowMeta::new(test_socket(), test_dest())
-            .with_intent(TelemetryIntent::Advertising);
+        let meta =
+            FlowMeta::new(test_socket(), test_dest()).with_intent(TelemetryIntent::Advertising);
 
         assert_eq!(meta.risk_level, RiskLevel::Critical);
         assert!(meta.inferred_intent.is_invasive());

@@ -34,8 +34,7 @@ pub async fn serve(uri: Uri) -> impl IntoResponse {
 
         match embedded::Assets::get(path) {
             Some(file) => {
-                let mime = mime_guess::from_path(path)
-                    .first_or_octet_stream();
+                let mime = mime_guess::from_path(path).first_or_octet_stream();
                 Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, mime.as_ref())

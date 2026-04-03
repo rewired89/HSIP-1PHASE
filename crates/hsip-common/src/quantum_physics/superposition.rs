@@ -157,7 +157,9 @@ impl SuperpositionState {
         commitment_secret: &[u8; 32],
     ) -> Result<MessageState, SuperpositionError> {
         if self.collapsed {
-            return self.revealed_state.ok_or(SuperpositionError::AlreadyCollapsed);
+            return self
+                .revealed_state
+                .ok_or(SuperpositionError::AlreadyCollapsed);
         }
 
         // Decrypt the state
@@ -271,13 +273,11 @@ impl SuperpositionManager {
     }
 
     /// Collapse a state to reveal it
-    pub fn collapse_state(
-        &self,
-        entity_id: &[u8; 32],
-    ) -> Result<MessageState, SuperpositionError> {
+    pub fn collapse_state(&self, entity_id: &[u8; 32]) -> Result<MessageState, SuperpositionError> {
         let mut states = self.states.write();
 
-        let state = states.get_mut(entity_id)
+        let state = states
+            .get_mut(entity_id)
             .ok_or_else(|| SuperpositionError::StateNotFound(hex::encode(entity_id)))?;
 
         state.collapse(&self.encryption_key, &self.commitment_secret)
@@ -290,7 +290,10 @@ impl SuperpositionManager {
 
     /// Get commitment without revealing state
     pub fn get_commitment(&self, entity_id: &[u8; 32]) -> Option<StateCommitment> {
-        self.states.read().get(entity_id).map(|s| s.commitment.clone())
+        self.states
+            .read()
+            .get(entity_id)
+            .map(|s| s.commitment.clone())
     }
 
     /// Remove a state entry
@@ -357,11 +360,7 @@ impl QuantumSealedEnvelope {
     }
 
     /// Create cover traffic envelope (indistinguishable from real)
-    pub fn seal_cover(
-        max_size: usize,
-        batch_timestamp: DateTime<Utc>,
-        secret: &[u8; 32],
-    ) -> Self {
+    pub fn seal_cover(max_size: usize, batch_timestamp: DateTime<Utc>, secret: &[u8; 32]) -> Self {
         let mut envelope_id = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut envelope_id);
 
@@ -438,12 +437,8 @@ mod tests {
         let (enc_key, com_secret) = test_keys();
         let entity_id = [1u8; 32];
 
-        let mut state = SuperpositionState::new(
-            entity_id,
-            MessageState::Delivered,
-            &enc_key,
-            &com_secret,
-        );
+        let mut state =
+            SuperpositionState::new(entity_id, MessageState::Delivered, &enc_key, &com_secret);
 
         assert!(state.is_superposed());
         assert!(state.revealed_state().is_none());
@@ -466,7 +461,9 @@ mod tests {
         assert_eq!(manager.is_collapsed(&entity_id), Some(false));
 
         // Transition state
-        manager.transition_state(entity_id, MessageState::Delivered).unwrap();
+        manager
+            .transition_state(entity_id, MessageState::Delivered)
+            .unwrap();
 
         // Collapse
         let revealed = manager.collapse_state(&entity_id).unwrap();

@@ -17,10 +17,10 @@ struct KeyPairStorage {
 fn keystore_file_location() -> PathBuf {
     let base_config_dir = config_dir().unwrap_or_else(|| PathBuf::from("."));
     let hsip_dir = base_config_dir.join("HSIP");
-    
+
     // Ensure directory exists
     let _ = fs::create_dir_all(&hsip_dir);
-    
+
     hsip_dir.join("keystore.json")
 }
 
@@ -28,17 +28,13 @@ fn keystore_file_location() -> PathBuf {
 // # Errors
 // Returns error if JSON serialization fails, file cannot be created,
 // permissions cannot be set (Unix only), or disk write fails
-pub fn save_keypair(
-    signing_key: &SigningKey,
-    verifying_key: &VerifyingKey,
-) -> Result<(), String> {
+pub fn save_keypair(signing_key: &SigningKey, verifying_key: &VerifyingKey) -> Result<(), String> {
     let storage_object = KeyPairStorage {
         pub_hex: hex::encode(verifying_key.as_bytes()),
         priv_hex: hex::encode(signing_key.to_bytes()),
     };
 
-    let json_content = serde_json::to_string_pretty(&storage_object)
-        .map_err(|e| e.to_string())?;
+    let json_content = serde_json::to_string_pretty(&storage_object).map_err(|e| e.to_string())?;
 
     let file_path = keystore_file_location();
     let mut file_handle = fs::File::create(&file_path).map_err(|e| e.to_string())?;
@@ -55,7 +51,7 @@ pub fn save_keypair(
 #[cfg(unix)]
 fn apply_unix_file_permissions(path: &PathBuf) {
     use std::os::unix::fs::PermissionsExt;
-    
+
     if let Ok(mut file) = fs::File::open(path) {
         if let Ok(metadata) = file.metadata() {
             let mut permissions = metadata.permissions();
@@ -72,16 +68,15 @@ fn apply_unix_file_permissions(path: &PathBuf) {
 // or reconstructed public key doesn't match stored value
 pub fn load_keypair() -> Result<(SigningKey, VerifyingKey), String> {
     let file_path = keystore_file_location();
-    let mut file_handle = fs::File::open(&file_path)
-        .map_err(|e| format!("Failed to open keystore: {e}"))?;
+    let mut file_handle =
+        fs::File::open(&file_path).map_err(|e| format!("Failed to open keystore: {e}"))?;
 
     let mut file_content = String::new();
     file_handle
         .read_to_string(&mut file_content)
         .map_err(|e| e.to_string())?;
 
-    let storage: KeyPairStorage = serde_json::from_str(&file_content)
-        .map_err(|e| e.to_string())?;
+    let storage: KeyPairStorage = serde_json::from_str(&file_content).map_err(|e| e.to_string())?;
 
     let private_key_bytes = hex::decode(storage.priv_hex).map_err(|e| e.to_string())?;
     let private_key_array: [u8; 32] = private_key_bytes

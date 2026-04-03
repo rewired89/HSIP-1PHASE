@@ -16,13 +16,13 @@
 //! or launch the binary with elevated privileges and set port to 53.
 
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, RwLock};
-use std::collections::VecDeque;
 
 // ── Tracker blocklist ─────────────────────────────────────────────────────────
 //
@@ -33,45 +33,49 @@ use std::collections::VecDeque;
 static TRACKER_DOMAINS: &[(&str, &str, &str)] = &[
     // (domain_suffix, vendor, category)
     // --- Google ---
-    ("google-analytics.com",      "Google Analytics",       "Analytics"),
-    ("googletagmanager.com",      "Google Tag Manager",     "Analytics"),
-    ("doubleclick.net",           "Google Ads",             "Advertising"),
-    ("googlesyndication.com",     "Google AdSense",         "Advertising"),
+    ("google-analytics.com", "Google Analytics", "Analytics"),
+    ("googletagmanager.com", "Google Tag Manager", "Analytics"),
+    ("doubleclick.net", "Google Ads", "Advertising"),
+    ("googlesyndication.com", "Google AdSense", "Advertising"),
     // --- Meta ---
-    ("connect.facebook.net",      "Facebook Pixel",         "Advertising"),
-    ("graph.facebook.com",        "Facebook App Events",    "Advertising"),
+    ("connect.facebook.net", "Facebook Pixel", "Advertising"),
+    ("graph.facebook.com", "Facebook App Events", "Advertising"),
     // --- Session Recording ---
-    ("hotjar.com",                "Hotjar",                 "Session Recording"),
-    ("fullstory.com",             "FullStory",              "Session Recording"),
-    ("clarity.ms",                "Microsoft Clarity",      "Session Recording"),
-    ("logrocket.com",             "LogRocket",              "Session Recording"),
-    ("mouseflow.com",             "Mouseflow",              "Session Recording"),
-    ("crazyegg.com",              "Crazy Egg",              "Session Recording"),
+    ("hotjar.com", "Hotjar", "Session Recording"),
+    ("fullstory.com", "FullStory", "Session Recording"),
+    ("clarity.ms", "Microsoft Clarity", "Session Recording"),
+    ("logrocket.com", "LogRocket", "Session Recording"),
+    ("mouseflow.com", "Mouseflow", "Session Recording"),
+    ("crazyegg.com", "Crazy Egg", "Session Recording"),
     // --- Analytics ---
-    ("mixpanel.com",              "Mixpanel",               "Analytics"),
-    ("amplitude.com",             "Amplitude",              "Analytics"),
-    ("api.segment.io",            "Segment",                "Analytics"),
-    ("cdn.segment.com",           "Segment",                "Analytics"),
-    ("heap.io",                   "Heap Analytics",         "Analytics"),
-    ("tealiumiq.com",             "Tealium",                "Analytics"),
-    ("optimizely.com",            "Optimizely",             "A/B Testing"),
+    ("mixpanel.com", "Mixpanel", "Analytics"),
+    ("amplitude.com", "Amplitude", "Analytics"),
+    ("api.segment.io", "Segment", "Analytics"),
+    ("cdn.segment.com", "Segment", "Analytics"),
+    ("heap.io", "Heap Analytics", "Analytics"),
+    ("tealiumiq.com", "Tealium", "Analytics"),
+    ("optimizely.com", "Optimizely", "A/B Testing"),
     // --- Ad Networks ---
-    ("criteo.com",                "Criteo",                 "Advertising"),
-    ("taboola.com",               "Taboola",                "Advertising"),
-    ("outbrain.com",              "Outbrain",               "Advertising"),
-    ("adsrvr.org",                "The Trade Desk",         "Advertising"),
-    ("adnxs.com",                 "Xandr/AppNexus",         "Advertising"),
-    ("rubiconproject.com",        "Magnite/Rubicon",        "Advertising"),
-    ("pubmatic.com",              "PubMatic",               "Advertising"),
-    ("scorecardresearch.com",     "Scorecard Research",     "Advertising"),
-    ("quantserve.com",            "QuantCast",              "Advertising"),
+    ("criteo.com", "Criteo", "Advertising"),
+    ("taboola.com", "Taboola", "Advertising"),
+    ("outbrain.com", "Outbrain", "Advertising"),
+    ("adsrvr.org", "The Trade Desk", "Advertising"),
+    ("adnxs.com", "Xandr/AppNexus", "Advertising"),
+    ("rubiconproject.com", "Magnite/Rubicon", "Advertising"),
+    ("pubmatic.com", "PubMatic", "Advertising"),
+    ("scorecardresearch.com", "Scorecard Research", "Advertising"),
+    ("quantserve.com", "QuantCast", "Advertising"),
     // --- Microsoft telemetry ---
-    ("vortex.data.microsoft.com", "Windows Telemetry",      "Telemetry"),
-    ("bat.bing.com",              "Microsoft Ads",          "Advertising"),
-    ("applicationinsights.io",    "Azure App Insights",     "Analytics"),
+    (
+        "vortex.data.microsoft.com",
+        "Windows Telemetry",
+        "Telemetry",
+    ),
+    ("bat.bing.com", "Microsoft Ads", "Advertising"),
+    ("applicationinsights.io", "Azure App Insights", "Analytics"),
     // --- Apple ---
-    ("xp.apple.com",              "Apple Analytics",        "Analytics"),
-    ("iadsdk.apple.com",          "Apple Search Ads",       "Advertising"),
+    ("xp.apple.com", "Apple Analytics", "Analytics"),
+    ("iadsdk.apple.com", "Apple Search Ads", "Advertising"),
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -102,28 +106,40 @@ fn parse_qname(buf: &[u8], mut pos: usize) -> Option<(String, usize)> {
     let mut visited: HashSet<usize> = HashSet::new();
 
     loop {
-        if pos >= buf.len() { return None; }
-        if !visited.insert(pos) { return None; } // compression loop guard
+        if pos >= buf.len() {
+            return None;
+        }
+        if !visited.insert(pos) {
+            return None;
+        } // compression loop guard
 
         let b = buf[pos] as usize;
 
         if b & 0xC0 == 0xC0 {
             // Compression pointer — two bytes encoding a back-reference
-            if pos + 1 >= buf.len() { return None; }
-            if final_pos.is_none() { final_pos = Some(pos + 2); }
+            if pos + 1 >= buf.len() {
+                return None;
+            }
+            if final_pos.is_none() {
+                final_pos = Some(pos + 2);
+            }
             pos = ((b & 0x3F) << 8) | buf[pos + 1] as usize;
             continue;
         }
 
         if b == 0 {
             // End of QNAME
-            if final_pos.is_none() { final_pos = Some(pos + 1); }
+            if final_pos.is_none() {
+                final_pos = Some(pos + 1);
+            }
             break;
         }
 
         let len = b;
         pos += 1;
-        if pos + len > buf.len() { return None; }
+        if pos + len > buf.len() {
+            return None;
+        }
         let label = std::str::from_utf8(&buf[pos..pos + len]).ok()?;
         labels.push(label.to_owned());
         pos += len;
@@ -131,22 +147,26 @@ fn parse_qname(buf: &[u8], mut pos: usize) -> Option<(String, usize)> {
 
     let end = final_pos?;
     // Must have room for QTYPE (2) + QCLASS (2)
-    if end + 4 > buf.len() { return None; }
+    if end + 4 > buf.len() {
+        return None;
+    }
 
     Some((labels.join("."), end + 4))
 }
 
 /// Build a minimal NXDOMAIN response from the original query bytes.
 fn build_nxdomain(query: &[u8]) -> Vec<u8> {
-    if query.len() < 12 { return vec![]; }
+    if query.len() < 12 {
+        return vec![];
+    }
     let mut resp = Vec::with_capacity(query.len());
     // Transaction ID — copy from query
     resp.push(query[0]);
     resp.push(query[1]);
     // Flags: QR=1, OPCODE=0, AA=0, TC=0, RD=copy, RA=1, RCODE=3 (NXDOMAIN)
     resp.push(0x80 | (query[2] & 0x01)); // preserve RD bit
-    resp.push(0x83);                      // RA=1, RCODE=3
-    // QDCOUNT same as query
+    resp.push(0x83); // RA=1, RCODE=3
+                     // QDCOUNT same as query
     resp.push(query[4]);
     resp.push(query[5]);
     // ANCOUNT = NSCOUNT = ARCOUNT = 0
@@ -169,10 +189,10 @@ pub struct DnsStats {
 /// One entry in the recent-activity log.
 #[derive(Clone, serde::Serialize)]
 pub struct DnsLogEntry {
-    pub domain:       String,
-    pub blocked:      bool,
-    pub vendor:       Option<String>,
-    pub category:     Option<String>,
+    pub domain: String,
+    pub blocked: bool,
+    pub vendor: Option<String>,
+    pub category: Option<String>,
     pub timestamp_ms: i64,
 }
 
@@ -183,12 +203,16 @@ pub struct DnsLog {
 
 impl DnsLog {
     fn new() -> Self {
-        Self { entries: RwLock::new(VecDeque::with_capacity(200)) }
+        Self {
+            entries: RwLock::new(VecDeque::with_capacity(200)),
+        }
     }
 
     async fn push(&self, entry: DnsLogEntry) {
         let mut q = self.entries.write().await;
-        if q.len() >= 200 { q.pop_front(); }
+        if q.len() >= 200 {
+            q.pop_front();
+        }
         q.push_back(entry);
     }
 }
@@ -197,10 +221,10 @@ impl DnsLog {
 /// to stop the resolver.
 #[derive(Clone)]
 pub struct DnsHandle {
-    pub stats:    Arc<DnsStats>,
-    pub log:      Arc<DnsLog>,
-    pub port:     u16,
-    shutdown_tx:  broadcast::Sender<()>,
+    pub stats: Arc<DnsStats>,
+    pub log: Arc<DnsLog>,
+    pub port: u16,
+    shutdown_tx: broadcast::Sender<()>,
 }
 
 impl DnsHandle {
@@ -236,8 +260,8 @@ pub async fn start(port: u16) -> std::io::Result<DnsHandle> {
     let (shutdown_tx, _) = broadcast::channel::<()>(4);
 
     let handle = DnsHandle {
-        stats:       Arc::clone(&stats),
-        log:         Arc::clone(&log),
+        stats: Arc::clone(&stats),
+        log: Arc::clone(&log),
         port,
         shutdown_tx: shutdown_tx.clone(),
     };
@@ -250,9 +274,9 @@ pub async fn start(port: u16) -> std::io::Result<DnsHandle> {
 // ── Resolver loop ─────────────────────────────────────────────────────────────
 
 async fn resolver_loop(
-    socket:   Arc<UdpSocket>,
-    stats:    Arc<DnsStats>,
-    log:      Arc<DnsLog>,
+    socket: Arc<UdpSocket>,
+    stats: Arc<DnsStats>,
+    log: Arc<DnsLog>,
     mut stop: broadcast::Receiver<()>,
 ) {
     let upstream: SocketAddr = "1.1.1.1:53".parse().unwrap();
@@ -286,11 +310,11 @@ async fn resolver_loop(
 }
 
 async fn handle_query(
-    socket:   Arc<UdpSocket>,
-    stats:    Arc<DnsStats>,
-    log:      Arc<DnsLog>,
-    query:    Vec<u8>,
-    client:   SocketAddr,
+    socket: Arc<UdpSocket>,
+    stats: Arc<DnsStats>,
+    log: Arc<DnsLog>,
+    query: Vec<u8>,
+    client: SocketAddr,
     upstream: SocketAddr,
 ) {
     stats.queries_total.fetch_add(1, Ordering::Relaxed);
@@ -307,12 +331,13 @@ async fn handle_query(
         if let Some((vendor, category)) = lookup_block(h) {
             stats.blocked_total.fetch_add(1, Ordering::Relaxed);
             log.push(DnsLogEntry {
-                domain:       h.clone(),
-                blocked:      true,
-                vendor:       Some(vendor.to_owned()),
-                category:     Some(category.to_owned()),
+                domain: h.clone(),
+                blocked: true,
+                vendor: Some(vendor.to_owned()),
+                category: Some(category.to_owned()),
                 timestamp_ms: now_ms(),
-            }).await;
+            })
+            .await;
             tracing::debug!("DNS BLOCKED  {} ({})", h, vendor);
             let resp = build_nxdomain(&query);
             if !resp.is_empty() {
@@ -324,7 +349,7 @@ async fn handle_query(
 
     // Forward to upstream DNS
     let fwd = match UdpSocket::bind("0.0.0.0:0").await {
-        Ok(s)  => s,
+        Ok(s) => s,
         Err(e) => {
             tracing::warn!("DNS forward bind error: {}", e);
             return;
@@ -339,7 +364,9 @@ async fn handle_query(
     match tokio::time::timeout(
         std::time::Duration::from_secs(3),
         fwd.recv_from(&mut resp_buf),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok((n, _))) => {
             let _ = socket.send_to(&resp_buf[..n], client).await;
         }
@@ -380,24 +407,24 @@ mod tests {
         // Minimal valid DNS query for "a.b" (11 bytes qname + 4 header bytes in question)
         // Header (12) + QNAME (5: \x01a\x01b\x00) + QTYPE (2) + QCLASS (2)
         let mut query = vec![
-            0xAB, 0xCD,             // ID
-            0x01, 0x00,             // Flags: standard query with RD=1
-            0x00, 0x01,             // QDCOUNT = 1
-            0x00, 0x00,             // ANCOUNT = 0
-            0x00, 0x00,             // NSCOUNT = 0
-            0x00, 0x00,             // ARCOUNT = 0
-            0x01, b'a',             // label "a"
-            0x01, b'b',             // label "b"
-            0x00,                   // root label
-            0x00, 0x01,             // QTYPE = A
-            0x00, 0x01,             // QCLASS = IN
+            0xAB, 0xCD, // ID
+            0x01, 0x00, // Flags: standard query with RD=1
+            0x00, 0x01, // QDCOUNT = 1
+            0x00, 0x00, // ANCOUNT = 0
+            0x00, 0x00, // NSCOUNT = 0
+            0x00, 0x00, // ARCOUNT = 0
+            0x01, b'a', // label "a"
+            0x01, b'b', // label "b"
+            0x00, // root label
+            0x00, 0x01, // QTYPE = A
+            0x00, 0x01, // QCLASS = IN
         ];
         let resp = build_nxdomain(&query);
         assert_eq!(resp[0], 0xAB); // ID preserved
         assert_eq!(resp[1], 0xCD);
         assert_eq!(resp[2] & 0x80, 0x80); // QR = 1
-        assert_eq!(resp[3] & 0x0F, 3);    // RCODE = NXDOMAIN
-        // ANCOUNT should be 0
+        assert_eq!(resp[3] & 0x0F, 3); // RCODE = NXDOMAIN
+                                       // ANCOUNT should be 0
         assert_eq!(resp[6], 0);
         assert_eq!(resp[7], 0);
         let _ = query; // suppress unused warning
@@ -410,7 +437,7 @@ mod tests {
         // \x06hotjar\x03com\x00
         pkt.extend_from_slice(&[6, b'h', b'o', b't', b'j', b'a', b'r']);
         pkt.extend_from_slice(&[3, b'c', b'o', b'm']);
-        pkt.push(0x00);           // root label
+        pkt.push(0x00); // root label
         pkt.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // QTYPE=A, QCLASS=IN
         let result = parse_qname(&pkt, 12);
         assert!(result.is_some());

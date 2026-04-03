@@ -26,7 +26,8 @@ pub trait InterceptOverlay: Send + Sync {
     ///
     /// # Returns
     /// The user's choice (send privately, continue normally, or disable)
-    async fn show(&mut self, event: &MessagingEvent, recipient: Option<&str>) -> Result<UserChoice>;
+    async fn show(&mut self, event: &MessagingEvent, recipient: Option<&str>)
+        -> Result<UserChoice>;
 
     /// Hide the overlay.
     async fn hide(&mut self) -> Result<()>;
@@ -85,7 +86,7 @@ impl OverlayContent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PlatformType, EventType};
+    use crate::{EventType, PlatformType};
 
     #[test]
     fn test_overlay_content() {

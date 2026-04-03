@@ -6,10 +6,10 @@ use crate::{auth::TenantId, db::now_ms, errors::ApiResult, metrics, state::AppSt
 
 #[derive(Serialize)]
 pub struct EraseResponse {
-    pub erased:          bool,
-    pub tenant_id:       String,
-    pub timestamp:       i64,
-    pub tables_cleared:  Vec<String>,
+    pub erased: bool,
+    pub tenant_id: String,
+    pub timestamp: i64,
+    pub tables_cleared: Vec<String>,
 }
 
 /// POST /v1/tenant/erase
@@ -23,13 +23,34 @@ pub async fn erase(
     let tid = &tenant.0;
 
     // Delete in dependency order
-    sqlx::query("DELETE FROM credentials    WHERE tenant_id = ?").bind(tid).execute(&state.db).await?;
-    sqlx::query("DELETE FROM messages       WHERE tenant_id = ?").bind(tid).execute(&state.db).await?;
-    sqlx::query("DELETE FROM consents       WHERE tenant_id = ?").bind(tid).execute(&state.db).await?;
-    sqlx::query("DELETE FROM identities     WHERE tenant_id = ?").bind(tid).execute(&state.db).await?;
-    sqlx::query("DELETE FROM audit_entries  WHERE tenant_id = ?").bind(tid).execute(&state.db).await?;
-    sqlx::query("DELETE FROM api_keys       WHERE tenant_id = ?").bind(tid).execute(&state.db).await?;
-    sqlx::query("DELETE FROM tenants        WHERE id        = ?").bind(tid).execute(&state.db).await?;
+    sqlx::query("DELETE FROM credentials    WHERE tenant_id = ?")
+        .bind(tid)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM messages       WHERE tenant_id = ?")
+        .bind(tid)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM consents       WHERE tenant_id = ?")
+        .bind(tid)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM identities     WHERE tenant_id = ?")
+        .bind(tid)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM audit_entries  WHERE tenant_id = ?")
+        .bind(tid)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM api_keys       WHERE tenant_id = ?")
+        .bind(tid)
+        .execute(&state.db)
+        .await?;
+    sqlx::query("DELETE FROM tenants        WHERE id        = ?")
+        .bind(tid)
+        .execute(&state.db)
+        .await?;
 
     // Remove in-memory state
     state.agent_tracker.retain(|_, _| false);
@@ -40,9 +61,9 @@ pub async fn erase(
     tracing::info!(tenant_id=%tid, "GDPR erasure completed");
 
     Ok(Json(EraseResponse {
-        erased:     true,
-        tenant_id:  tenant.0.clone(),
-        timestamp:  now,
+        erased: true,
+        tenant_id: tenant.0.clone(),
+        timestamp: now,
         tables_cleared: vec![
             "credentials".into(),
             "messages".into(),

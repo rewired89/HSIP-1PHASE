@@ -1,21 +1,23 @@
 // On Windows release builds, suppress the console window so the app
 // runs silently in the background (browser opens automatically).
-#![cfg_attr(all(windows, feature = "embed-dashboard"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(windows, feature = "embed-dashboard"),
+    windows_subsystem = "windows"
+)]
 
+use anyhow::{Context, Result};
+use axum::http::header::HeaderName;
 use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Router,
-    Json,
     routing::get,
+    Json, Router,
 };
-use tower_http::cors::{CorsLayer, AllowOrigin};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer, PropagateRequestIdLayer};
-use axum::http::header::HeaderName;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
-use anyhow::{Context, Result};
 
 mod auth;
 mod config;
@@ -62,7 +64,11 @@ async fn main() {
 fn write_error_log(msg: &str) {
     use std::io::Write;
     let log_path = config::hsip_data_dir().join("hsip.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -79,15 +85,20 @@ async fn run() -> Result<()> {
     #[cfg(feature = "embed-dashboard")]
     let (config, config_source) = {
         if let Ok(path) = std::env::var("HSIP_CONFIG") {
-            let cfg = Config::load(&path).unwrap_or_else(|e| {
-                fatal(&format!("❌ Configuration error ({}): {}", path, e))
-            });
+            let cfg = Config::load(&path)
+                .unwrap_or_else(|e| fatal(&format!("❌ Configuration error ({}): {}", path, e)));
             (cfg, path)
         } else {
             let cfg = config::Config::desktop_defaults().unwrap_or_else(|e| {
-                fatal(&format!("❌ Failed to initialise HSIP data directory: {}", e))
+                fatal(&format!(
+                    "❌ Failed to initialise HSIP data directory: {}",
+                    e
+                ))
             });
-            (cfg, format!("desktop defaults ({})", config::hsip_data_dir().display()))
+            (
+                cfg,
+                format!("desktop defaults ({})", config::hsip_data_dir().display()),
+            )
         }
     };
 
@@ -95,16 +106,22 @@ async fn run() -> Result<()> {
     // to desktop defaults if no file is found.
     #[cfg(not(feature = "embed-dashboard"))]
     let (config, config_source) = {
-        let config_path = std::env::var("HSIP_CONFIG")
-            .unwrap_or_else(|_| "config.toml".to_string());
+        let config_path =
+            std::env::var("HSIP_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
 
         match Config::load(&config_path) {
             Ok(cfg) => (cfg, config_path),
             Err(_) if config_path == "config.toml" => {
                 let cfg = config::Config::desktop_defaults().unwrap_or_else(|e| {
-                    fatal(&format!("❌ Failed to initialise HSIP data directory: {}", e))
+                    fatal(&format!(
+                        "❌ Failed to initialise HSIP data directory: {}",
+                        e
+                    ))
                 });
-                (cfg, format!("desktop defaults ({})", config::hsip_data_dir().display()))
+                (
+                    cfg,
+                    format!("desktop defaults ({})", config::hsip_data_dir().display()),
+                )
             }
             Err(e) => {
                 fatal(&format!(
@@ -138,9 +155,13 @@ async fn run() -> Result<()> {
 
     // Initialize database
     let db = db::init_with_config(&config.database).await?;
-    tracing::info!("✓ Database initialized: {}",
-        if config.database.url.contains("postgres") { "PostgreSQL" }
-        else { "SQLite" }
+    tracing::info!(
+        "✓ Database initialized: {}",
+        if config.database.url.contains("postgres") {
+            "PostgreSQL"
+        } else {
+            "SQLite"
+        }
     );
 
     // Bootstrap admin tenant and key
@@ -157,9 +178,9 @@ async fn run() -> Result<()> {
     let mut app = Router::new()
         .merge(routes::router())
         .route("/metrics", get(metrics_handler))
-        .route("/health",  get(health_handler))
+        .route("/health", get(health_handler))
         .route("/openapi.json", get(openapi_handler))
-        .route("/docs",    get(docs_handler));
+        .route("/docs", get(docs_handler));
 
     // Serve the embedded React dashboard on all non-API paths (release builds only)
     #[cfg(feature = "embed-dashboard")]
@@ -170,7 +191,10 @@ async fn run() -> Result<()> {
     let app = app
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
-        .layer(SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid))
+        .layer(SetRequestIdLayer::new(
+            x_request_id.clone(),
+            MakeRequestUuid,
+        ))
         .layer(PropagateRequestIdLayer::new(x_request_id))
         .with_state(state);
 
@@ -231,7 +255,6 @@ async fn run() -> Result<()> {
                     tracing::warn!("Could not open browser automatically: {}", e);
                 }
             });
-
         }
 
         let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -264,24 +287,23 @@ fn init_logging(config: &Config) {
     use tracing_subscriber::fmt::format::FmtSpan;
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            tracing_subscriber::EnvFilter::new(&config.logging.level)
-        });
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.logging.level));
 
     match config.logging.format {
         config::LogFormat::Json => {
             tracing_subscriber::registry()
                 .with(env_filter)
-                .with(tracing_subscriber::fmt::layer()
-                    .json()
-                    .with_span_events(FmtSpan::CLOSE))
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .json()
+                        .with_span_events(FmtSpan::CLOSE),
+                )
                 .init();
         }
         config::LogFormat::Pretty => {
             tracing_subscriber::registry()
                 .with(env_filter)
-                .with(tracing_subscriber::fmt::layer()
-                    .with_span_events(FmtSpan::CLOSE))
+                .with(tracing_subscriber::fmt::layer().with_span_events(FmtSpan::CLOSE))
                 .init();
         }
     }
@@ -293,11 +315,13 @@ fn load_master_key(path: &str) -> Result<Vec<u8>> {
 
     let key_hex = key_hex.trim();
 
-    let key_bytes = hex::decode(key_hex)
-        .context("Master key must be valid hexadecimal")?;
+    let key_bytes = hex::decode(key_hex).context("Master key must be valid hexadecimal")?;
 
     if key_bytes.len() != 32 {
-        anyhow::bail!("Master key must be exactly 32 bytes (64 hex characters), got {} bytes", key_bytes.len());
+        anyhow::bail!(
+            "Master key must be exactly 32 bytes (64 hex characters), got {} bytes",
+            key_bytes.len()
+        );
     }
 
     tracing::debug!("Master key loaded from: {}", path);
@@ -310,7 +334,8 @@ fn build_cors_layer(cors_config: &config::CorsConfig) -> CorsLayer {
         return CorsLayer::new();
     }
 
-    let origins: Vec<axum::http::HeaderValue> = cors_config.allowed_origins
+    let origins: Vec<axum::http::HeaderValue> = cors_config
+        .allowed_origins
         .iter()
         .filter_map(|o| o.parse().ok())
         .collect();
@@ -329,7 +354,10 @@ fn build_cors_layer(cors_config: &config::CorsConfig) -> CorsLayer {
             axum::http::Method::POST,
             axum::http::Method::DELETE,
         ])
-        .allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ])
 }
 
 async fn metrics_handler(headers: HeaderMap) -> impl IntoResponse {
@@ -351,9 +379,13 @@ async fn metrics_handler(headers: HeaderMap) -> impl IntoResponse {
     }
 
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
         metrics::render(),
-    ).into_response()
+    )
+        .into_response()
 }
 
 async fn health_handler() -> impl IntoResponse {
@@ -438,7 +470,7 @@ fn create_shortcuts(target_exe: &std::path::Path) {
     for folder in &folders {
         let _ = std::fs::create_dir_all(folder);
         let lnk = folder.join("HSIP.lnk");
-        if let Ok(sl) = ShellLink::new(&target) {
+        if let Ok(sl) = ShellLink::new(&*target) {
             let _ = sl.create_lnk(lnk.to_string_lossy().as_ref());
         }
     }
@@ -469,21 +501,32 @@ fn maybe_self_install() {
 
     // Already running from the installed location — nothing to do
     let current_exe = match std::env::current_exe() {
-        Ok(p) => match p.canonicalize() { Ok(c) => c, Err(_) => p },
+        Ok(p) => match p.canonicalize() {
+            Ok(c) => c,
+            Err(_) => p,
+        },
         Err(_) => return,
     };
-    let install_canon = install_exe.canonicalize().unwrap_or_else(|_| install_exe.clone());
-    if current_exe == install_canon { return; }
+    let install_canon = install_exe
+        .canonicalize()
+        .unwrap_or_else(|_| install_exe.clone());
+    if current_exe == install_canon {
+        return;
+    }
 
     // ── Copy to install location ──────────────────────────────────────────
-    if std::fs::create_dir_all(&install_dir).is_err() { return; }
+    if std::fs::create_dir_all(&install_dir).is_err() {
+        return;
+    }
 
     // Write an install log — tells us exactly what happened (useful for debugging)
     let log_path = install_dir.join("install.log");
-    let copied   = std::fs::copy(&current_exe, &install_exe).is_ok();
+    let copied = std::fs::copy(&current_exe, &install_exe).is_ok();
     let log = format!(
         "HSIP self-install\nfrom:   {}\nto:     {}\ncopy ok: {}\n",
-        current_exe.display(), install_exe.display(), copied
+        current_exe.display(),
+        install_exe.display(),
+        copied
     );
     let _ = std::fs::write(&log_path, log.as_bytes());
 
@@ -491,16 +534,13 @@ fn maybe_self_install() {
     // HSIP was already running), create/refresh shortcuts as long as the
     // installed exe is present.
     if install_exe.exists() {
+        // mslnk writes the .lnk binary directly; dirs resolves Desktop path
+        // via SHGetKnownFolderPath (handles OneDrive-moved Desktops correctly).
         create_shortcuts(&install_exe);
     } else {
         // Nothing to point a shortcut at — bail out entirely.
         return;
     }
-
-    // ── Create Desktop + Start Menu shortcuts — pure Rust, no subprocess ──
-    // mslnk writes the .lnk binary directly; dirs resolves the Desktop path
-    // via SHGetKnownFolderPath (handles OneDrive-moved Desktops correctly).
-    create_shortcuts(&install_exe);
 
     // ── Launch installed copy (only if we just freshly copied) and exit ──
     // If copy failed the installed copy is already running — don't spawn a
@@ -532,7 +572,7 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
     tracing::info!("🔧 First-time setup: creating admin tenant and API key");
 
     let tenant_id = Uuid::new_v4().to_string();
-    let now       = now_ms();
+    let now = now_ms();
 
     sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'default', ?)")
         .bind(&tenant_id)
@@ -542,9 +582,9 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
 
     let mut raw_bytes = [0u8; 32];
     OsRng.fill_bytes(&mut raw_bytes);
-    let raw_key  = format!("hsip_{}", hex::encode(&raw_bytes));
+    let raw_key = format!("hsip_{}", hex::encode(&raw_bytes));
     let key_hash = hash_key(&raw_key);
-    let key_id   = Uuid::new_v4().to_string();
+    let key_id = Uuid::new_v4().to_string();
 
     sqlx::query(
         "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
@@ -578,10 +618,7 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            admin_key_path,
-            std::fs::Permissions::from_mode(0o600),
-        )?;
+        std::fs::set_permissions(admin_key_path, std::fs::Permissions::from_mode(0o600))?;
     }
 
     tracing::info!("✓ Admin tenant and key created");

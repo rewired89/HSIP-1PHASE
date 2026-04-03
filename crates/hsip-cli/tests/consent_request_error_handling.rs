@@ -23,7 +23,10 @@ fn test_missing_request_file_no_panic() {
         .expect("failed to execute CLI");
 
     // Should exit with error code (not 0)
-    assert!(!output.status.success(), "should fail with non-zero exit code");
+    assert!(
+        !output.status.success(),
+        "should fail with non-zero exit code"
+    );
 
     // Should NOT panic (panic would show "panicked at" in stderr)
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -69,7 +72,10 @@ fn test_invalid_json_request_file_no_panic() {
     let _ = fs::remove_file(&temp_path);
 
     // Should exit with error code
-    assert!(!output.status.success(), "should fail with non-zero exit code");
+    assert!(
+        !output.status.success(),
+        "should fail with non-zero exit code"
+    );
 
     // Should NOT panic
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -112,7 +118,10 @@ fn test_empty_request_file_no_panic() {
     let _ = fs::remove_file(&temp_path);
 
     // Should exit with error code
-    assert!(!output.status.success(), "should fail with non-zero exit code");
+    assert!(
+        !output.status.success(),
+        "should fail with non-zero exit code"
+    );
 
     // Should NOT panic
     let stderr = String::from_utf8_lossy(&output.stderr);

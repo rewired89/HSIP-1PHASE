@@ -76,10 +76,10 @@ pub fn verify_signature_ct(
     message: &[u8],
     signature: &[u8; 64],
 ) -> Result<(), SignatureError> {
-    use ed25519_dalek::{Signature, VerifyingKey, Verifier};
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
-    let public = VerifyingKey::from_bytes(public_key)
-        .map_err(|_| SignatureError::InvalidPublicKey)?;
+    let public =
+        VerifyingKey::from_bytes(public_key).map_err(|_| SignatureError::InvalidPublicKey)?;
 
     let sig = Signature::from_bytes(signature);
 

@@ -106,11 +106,11 @@ pub mod http {
         routing::{get, post},
         Json, Router,
     };
-    use std::net::SocketAddr;
-    use tokio::net::TcpListener;
+    use hex;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
-    use hex;
+    use std::net::SocketAddr;
+    use tokio::net::TcpListener;
 
     type HmacSha256 = Hmac<Sha256>;
 
@@ -129,8 +129,7 @@ pub mod http {
     /// Generate HMAC-SHA256 signature for response data
     fn sign_response<T: Serialize>(data: &T) -> Result<String, String> {
         let json_bytes = serde_json::to_vec(data).map_err(|e| e.to_string())?;
-        let mut mac = HmacSha256::new_from_slice(RESPONSE_HMAC_KEY)
-            .map_err(|e| e.to_string())?;
+        let mut mac = HmacSha256::new_from_slice(RESPONSE_HMAC_KEY).map_err(|e| e.to_string())?;
         mac.update(&json_bytes);
         let signature = mac.finalize().into_bytes();
         Ok(hex::encode(signature))
@@ -139,17 +138,17 @@ pub mod http {
     /// Create a signed response with HMAC integrity protection
     fn create_signed_response<T: Serialize>(data: T) -> axum::response::Response {
         match sign_response(&data) {
-            Ok(signature) => {
-                Json(SignedResponse {
-                    data,
-                    signature,
-                    signature_algorithm: "HMAC-SHA256".to_string(),
-                }).into_response()
-            }
-            Err(_) => {
-                (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                 Json(serde_json::json!({"error": "signature_failed"}))).into_response()
-            }
+            Ok(signature) => Json(SignedResponse {
+                data,
+                signature,
+                signature_algorithm: "HMAC-SHA256".to_string(),
+            })
+            .into_response(),
+            Err(_) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "signature_failed"})),
+            )
+                .into_response(),
         }
     }
 
@@ -224,9 +223,7 @@ pub mod http {
         create_signed_response(sessions)
     }
 
-    async fn post_consent_grant(
-        Json(req): Json<GrantRequest>,
-    ) -> impl IntoResponse {
+    async fn post_consent_grant(Json(req): Json<GrantRequest>) -> impl IntoResponse {
         // TODO: call your real token issuer; stubbed token:
         let token = format!(
             "cap::{}/{}::{}",
@@ -236,17 +233,13 @@ pub mod http {
         create_signed_response(response)
     }
 
-    async fn post_consent_revoke(
-        Json(req): Json<RevokeRequest>,
-    ) -> impl IntoResponse {
+    async fn post_consent_revoke(Json(req): Json<RevokeRequest>) -> impl IntoResponse {
         // TODO: kill session(s) by req.peer_id via your session manager
         let response = serde_json::json!({"ok": true, "revoked_for": req.peer_id});
         create_signed_response(response)
     }
 
-    async fn get_reputation(
-        Path(peer_id): Path<String>,
-    ) -> impl IntoResponse {
+    async fn get_reputation(Path(peer_id): Path<String>) -> impl IntoResponse {
         // TODO: query real reputation
         let response = ReputationResponse {
             peer_id,
@@ -273,7 +266,7 @@ pub mod http {
                 (
                     axum::http::StatusCode::OK,
                     [("Content-Type", "text/plain; charset=utf-8")],
-                    pub_key
+                    pub_key,
                 )
             }
             Err(_) => {
@@ -294,7 +287,7 @@ pub mod http {
                 (
                     axum::http::StatusCode::OK,
                     [("Content-Type", "text/plain; charset=utf-8")],
-                    placeholder.to_string()
+                    placeholder.to_string(),
                 )
             }
         }

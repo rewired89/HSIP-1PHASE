@@ -24,7 +24,9 @@ use zeroize::Zeroize;
 
 // ML-KEM (formerly Kyber) imports - NIST FIPS 203
 use pqcrypto_kyber::kyber768;
-use pqcrypto_traits::kem::{Ciphertext as KemCiphertext, PublicKey as KemPublicKey, SharedSecret as KemSharedSecret};
+use pqcrypto_traits::kem::{
+    Ciphertext as KemCiphertext, PublicKey as KemPublicKey, SharedSecret as KemSharedSecret,
+};
 
 // ML-DSA (formerly Dilithium) imports - NIST FIPS 204
 use pqcrypto_dilithium::dilithium3;
@@ -199,7 +201,10 @@ impl HybridCiphertext {
 
         let kyber_ct = bytes[32..32 + MLKEM768_CT_SIZE].to_vec();
 
-        Ok(Self { x25519_ct, kyber_ct })
+        Ok(Self {
+            x25519_ct,
+            kyber_ct,
+        })
     }
 }
 
@@ -226,16 +231,13 @@ pub fn hybrid_encapsulate(
     let x_shared = x_eph.diffie_hellman(&peer_x_pub);
 
     // Kyber encapsulation
-    let kyber_pk = kyber768::PublicKey::from_bytes(peer_kyber_pk)
-        .map_err(|_| PqcError::InvalidKey)?;
+    let kyber_pk =
+        kyber768::PublicKey::from_bytes(peer_kyber_pk).map_err(|_| PqcError::InvalidKey)?;
     let (kyber_ss, kyber_ct): (kyber768::SharedSecret, kyber768::Ciphertext) =
         kyber768::encapsulate(&kyber_pk);
 
     // Combine shared secrets via HKDF
-    let combined_secret = combine_shared_secrets(
-        x_shared.as_bytes(),
-        kyber_ss.as_bytes(),
-    )?;
+    let combined_secret = combine_shared_secrets(x_shared.as_bytes(), kyber_ss.as_bytes())?;
 
     let ct = HybridCiphertext {
         x25519_ct: x_pub.to_bytes(),
@@ -254,7 +256,9 @@ pub fn hybrid_decapsulate(
     ciphertext: &HybridCiphertext,
 ) -> Result<[u8; 32], PqcError> {
     // X25519 decapsulation (consume our ephemeral secret)
-    let x_secret = our_keypair.x25519_secret.take()
+    let x_secret = our_keypair
+        .x25519_secret
+        .take()
         .ok_or(PqcError::SecretConsumed)?;
     let peer_x_pub = X25519PublicKey::from(ciphertext.x25519_ct);
     let x_shared = x_secret.diffie_hellman(&peer_x_pub);
@@ -262,8 +266,7 @@ pub fn hybrid_decapsulate(
     // Kyber decapsulation
     let kyber_ct = kyber768::Ciphertext::from_bytes(&ciphertext.kyber_ct)
         .map_err(|_| PqcError::InvalidCiphertext)?;
-    let kyber_ss: kyber768::SharedSecret =
-        kyber768::decapsulate(&kyber_ct, &our_keypair.kyber_sk);
+    let kyber_ss: kyber768::SharedSecret = kyber768::decapsulate(&kyber_ct, &our_keypair.kyber_sk);
 
     // Combine shared secrets
     combine_shared_secrets(x_shared.as_bytes(), kyber_ss.as_bytes())
@@ -324,7 +327,10 @@ impl HybridSignature {
         ed25519_sig.copy_from_slice(&bytes[..64]);
         let dilithium_sig = bytes[64..64 + MLDSA65_SIG_SIZE].to_vec();
 
-        Ok(Self { ed25519_sig, dilithium_sig })
+        Ok(Self {
+            ed25519_sig,
+            dilithium_sig,
+        })
     }
 }
 
@@ -416,14 +422,17 @@ impl HybridVerifyingKey {
             return Err(PqcError::InvalidKey);
         }
 
-        let ed25519_vk = VerifyingKey::from_bytes(
-            bytes[..32].try_into().map_err(|_| PqcError::InvalidKey)?
-        ).map_err(|_| PqcError::InvalidKey)?;
+        let ed25519_vk =
+            VerifyingKey::from_bytes(bytes[..32].try_into().map_err(|_| PqcError::InvalidKey)?)
+                .map_err(|_| PqcError::InvalidKey)?;
 
         let dilithium_pk = dilithium3::PublicKey::from_bytes(&bytes[32..32 + MLDSA65_PK_SIZE])
             .map_err(|_| PqcError::InvalidKey)?;
 
-        Ok(Self { ed25519_vk, dilithium_pk })
+        Ok(Self {
+            ed25519_vk,
+            dilithium_pk,
+        })
     }
 
     /// Serialize to bytes
@@ -444,7 +453,8 @@ impl HybridVerifyingKey {
     pub fn verify(&self, message: &[u8], signature: &HybridSignature) -> Result<(), PqcError> {
         // Verify Ed25519 signature
         let ed_sig = Ed25519Signature::from_bytes(&signature.ed25519_sig);
-        self.ed25519_vk.verify(message, &ed_sig)
+        self.ed25519_vk
+            .verify(message, &ed_sig)
             .map_err(|_| PqcError::VerifyFailed)?;
 
         // Verify Dilithium3 signature

@@ -73,20 +73,15 @@ impl GeoLocator {
             .map_err(|e| format!("GeoIP decode failed: {}", e))?
             .ok_or_else(|| format!("No GeoIP data found for {}", ip))?;
 
-        let country = city.country.names.english
-            .map(|s: &str| s.to_string());
+        let country = city.country.names.english.map(|s: &str| s.to_string());
 
-        let country_code = city.country.iso_code
-            .map(|s: &str| s.to_string());
+        let country_code = city.country.iso_code.map(|s: &str| s.to_string());
 
-        let city_name = city.city.names.english
-            .map(|s: &str| s.to_string());
+        let city_name = city.city.names.english.map(|s: &str| s.to_string());
 
-        let timezone = city.location.time_zone
-            .map(|s: &str| s.to_string());
+        let timezone = city.location.time_zone.map(|s: &str| s.to_string());
 
-        let continent = city.continent.names.english
-            .map(|s: &str| s.to_string());
+        let continent = city.continent.names.english.map(|s: &str| s.to_string());
 
         Ok(GeoLocation {
             country,
@@ -101,9 +96,7 @@ impl GeoLocator {
 
     /// Batch lookup for multiple IPs
     pub fn lookup_batch(&self, ips: &[IpAddr]) -> Vec<(IpAddr, Option<GeoLocation>)> {
-        ips.iter()
-            .map(|ip| (*ip, self.lookup(*ip).ok()))
-            .collect()
+        ips.iter().map(|ip| (*ip, self.lookup(*ip).ok())).collect()
     }
 }
 

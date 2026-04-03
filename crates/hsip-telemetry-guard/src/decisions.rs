@@ -2,8 +2,8 @@
 //!
 //! Defines the possible decisions and their associated metadata.
 
-use crate::{FlowMeta, TelemetryIntent, RiskLevel};
-use chrono::{DateTime, Utc, Duration};
+use crate::{FlowMeta, RiskLevel, TelemetryIntent};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 /// The decision outcome for a telemetry flow
@@ -313,7 +313,11 @@ impl DecisionStats {
 
     /// Get top blocked vendors
     pub fn top_blocked_vendors(&self, limit: usize) -> Vec<(String, u64)> {
-        let mut vendors: Vec<_> = self.by_vendor.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let mut vendors: Vec<_> = self
+            .by_vendor
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         vendors.sort_by(|a, b| b.1.cmp(&a.1));
         vendors.truncate(limit);
         vendors
@@ -339,7 +343,13 @@ mod tests {
     fn test_decision_creation() {
         let flow = test_flow();
 
-        let allow = Decision::allow(&flow, DecisionReason::UserConsent { consent_id: [0u8; 32] }, None);
+        let allow = Decision::allow(
+            &flow,
+            DecisionReason::UserConsent {
+                consent_id: [0u8; 32],
+            },
+            None,
+        );
         assert!(allow.allows_traffic());
         assert_eq!(allow.decision_type, DecisionType::Allow);
 
@@ -353,7 +363,9 @@ mod tests {
 
         let short_ttl = Decision::allow(
             &flow,
-            DecisionReason::UserConsent { consent_id: [0u8; 32] },
+            DecisionReason::UserConsent {
+                consent_id: [0u8; 32],
+            },
             Some(Duration::seconds(-1)), // Already expired
         );
         assert!(!short_ttl.is_valid());
@@ -365,7 +377,13 @@ mod tests {
         let flow = test_flow();
         let mut stats = DecisionStats::default();
 
-        let allow = Decision::allow(&flow, DecisionReason::UserConsent { consent_id: [0u8; 32] }, None);
+        let allow = Decision::allow(
+            &flow,
+            DecisionReason::UserConsent {
+                consent_id: [0u8; 32],
+            },
+            None,
+        );
         let block = Decision::block(&flow, DecisionReason::NoConsent);
 
         stats.record(&allow, Some("Google"));
@@ -385,7 +403,12 @@ mod tests {
     #[test]
     fn test_decision_display() {
         let flow = test_flow();
-        let block = Decision::block(&flow, DecisionReason::KnownTracker { vendor: "Google".to_string() });
+        let block = Decision::block(
+            &flow,
+            DecisionReason::KnownTracker {
+                vendor: "Google".to_string(),
+            },
+        );
 
         let display = block.display();
         assert!(display.contains("BLOCK"));

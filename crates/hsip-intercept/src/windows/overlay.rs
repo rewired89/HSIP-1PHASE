@@ -1,18 +1,15 @@
 //! Windows overlay UI using layered windows.
 
 use crate::{
-    InterceptOverlay, UserChoice, MessagingEvent, InterceptConfig, Result, InterceptError,
-    overlay::OverlayContent,
-};
-use tracing::{info, debug};
-use windows::{
-    core::*,
-    Win32::Foundation::*,
-    Win32::Graphics::Gdi::*,
-    Win32::System::LibraryLoader::GetModuleHandleW,
-    Win32::UI::WindowsAndMessaging::*,
+    overlay::OverlayContent, InterceptConfig, InterceptError, InterceptOverlay, MessagingEvent,
+    Result, UserChoice,
 };
 use std::sync::{Arc, Mutex};
+use tracing::{debug, info};
+use windows::{
+    core::*, Win32::Foundation::*, Win32::Graphics::Gdi::*,
+    Win32::System::LibraryLoader::GetModuleHandleW, Win32::UI::WindowsAndMessaging::*,
+};
 
 /// Wrapper for HWND to mark it as Send+Sync.
 /// SAFETY: HWND is a raw pointer but Windows handles are thread-safe when used correctly.
@@ -79,8 +76,9 @@ impl WindowsOverlay {
             .map_err(|e| InterceptError::Overlay(format!("CreateWindow failed: {}", e)))?;
 
             // Set window transparency
-            SetLayeredWindowAttributes(hwnd, COLORREF(0), 240, LWA_ALPHA)
-                .map_err(|e| InterceptError::Overlay(format!("SetLayeredWindowAttributes failed: {}", e)))?;
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), 240, LWA_ALPHA).map_err(|e| {
+                InterceptError::Overlay(format!("SetLayeredWindowAttributes failed: {}", e))
+            })?;
 
             // Show window
             ShowWindow(hwnd, SW_SHOW);
@@ -101,18 +99,12 @@ impl WindowsOverlay {
             let height = 200;
 
             let (x, y) = match self.config.overlay.position {
-                crate::config::OverlayPosition::TopRight => {
-                    (screen_width - width - 20, 20)
-                }
-                crate::config::OverlayPosition::TopLeft => {
-                    (20, 20)
-                }
+                crate::config::OverlayPosition::TopRight => (screen_width - width - 20, 20),
+                crate::config::OverlayPosition::TopLeft => (20, 20),
                 crate::config::OverlayPosition::BottomRight => {
                     (screen_width - width - 20, screen_height - height - 20)
                 }
-                crate::config::OverlayPosition::BottomLeft => {
-                    (20, screen_height - height - 20)
-                }
+                crate::config::OverlayPosition::BottomLeft => (20, screen_height - height - 20),
                 crate::config::OverlayPosition::Center => {
                     ((screen_width - width) / 2, (screen_height - height) / 2)
                 }
@@ -239,7 +231,11 @@ impl WindowsOverlay {
 
 #[async_trait::async_trait]
 impl InterceptOverlay for WindowsOverlay {
-    async fn show(&mut self, event: &MessagingEvent, recipient: Option<&str>) -> Result<UserChoice> {
+    async fn show(
+        &mut self,
+        event: &MessagingEvent,
+        recipient: Option<&str>,
+    ) -> Result<UserChoice> {
         info!("Showing Windows overlay");
 
         let content = OverlayContent::from_event(event, recipient);

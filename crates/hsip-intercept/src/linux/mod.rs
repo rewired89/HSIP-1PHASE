@@ -17,7 +17,9 @@ pub use overlay::LinuxOverlay;
 ///
 /// Reads window title metadata set by the event monitor and attempts to
 /// parse a recipient name from patterns like "Chat with Alice — Telegram".
-pub fn extract_recipient_from_window(event: &crate::event::MessagingEvent) -> crate::Result<String> {
+pub fn extract_recipient_from_window(
+    event: &crate::event::MessagingEvent,
+) -> crate::Result<String> {
     if let Some(title) = &event.window_title {
         // Common patterns: "Chat with <name>", "Direct: <name>", "<name> – Telegram"
         for prefix in &["Chat with ", "Direct: ", "DM: "] {
@@ -36,5 +38,7 @@ pub fn extract_recipient_from_window(event: &crate::event::MessagingEvent) -> cr
             }
         }
     }
-    Err(crate::InterceptError::EventMonitor("Cannot extract recipient".to_string()))
+    Err(crate::InterceptError::EventMonitor(
+        "Cannot extract recipient".to_string(),
+    ))
 }

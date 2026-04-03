@@ -96,9 +96,9 @@ pub struct TrafficShapingConfig {
 impl Default for TrafficShapingConfig {
     fn default() -> Self {
         Self {
-            enable_padding: true, // Enabled by default for privacy
-            enable_timing_jitter: true, // Enabled by default
-            enable_cover_traffic: false, // Opt-in (bandwidth overhead)
+            enable_padding: true,            // Enabled by default for privacy
+            enable_timing_jitter: true,      // Enabled by default
+            enable_cover_traffic: false,     // Opt-in (bandwidth overhead)
             cover_traffic_interval_ms: 5000, // 5 seconds
         }
     }
@@ -127,9 +127,30 @@ impl TrafficShapingConfig {
     /// Print configuration banner
     pub fn print_banner(&self) {
         println!("[traffic-shaping] Configuration:");
-        println!("  Padding: {}", if self.enable_padding { "ENABLED" } else { "DISABLED" });
-        println!("  Timing jitter: {}", if self.enable_timing_jitter { "ENABLED" } else { "DISABLED" });
-        println!("  Cover traffic: {}", if self.enable_cover_traffic { "ENABLED" } else { "DISABLED" });
+        println!(
+            "  Padding: {}",
+            if self.enable_padding {
+                "ENABLED"
+            } else {
+                "DISABLED"
+            }
+        );
+        println!(
+            "  Timing jitter: {}",
+            if self.enable_timing_jitter {
+                "ENABLED"
+            } else {
+                "DISABLED"
+            }
+        );
+        println!(
+            "  Cover traffic: {}",
+            if self.enable_cover_traffic {
+                "ENABLED"
+            } else {
+                "DISABLED"
+            }
+        );
         if self.enable_cover_traffic {
             println!("    Interval: {}ms", self.cover_traffic_interval_ms);
         }

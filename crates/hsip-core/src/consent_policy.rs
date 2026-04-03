@@ -4,7 +4,6 @@
 /// - Auto-deny based on protocol-level observable behavior
 /// - Queueing for user review
 /// - Auto-accept for previously granted consent
-
 use crate::consent::ConsentRequestMetadata;
 use serde::{Deserialize, Serialize};
 
@@ -75,15 +74,15 @@ impl ConsentPolicy {
     pub fn evaluate(&self, metadata: &ConsentRequestMetadata) -> (PolicyDecision, PolicyReason) {
         // Check for suspicious or malformed requests (silent reject)
         if metadata.flags.suspicious {
-            return (PolicyDecision::SilentReject, PolicyReason::SuspiciousRequest);
+            return (
+                PolicyDecision::SilentReject,
+                PolicyReason::SuspiciousRequest,
+            );
         }
 
         // Check rate limiting (auto-deny)
         if metadata.flags.rate_limited {
-            return (
-                PolicyDecision::AutoDeny,
-                PolicyReason::RateLimitExceeded,
-            );
+            return (PolicyDecision::AutoDeny, PolicyReason::RateLimitExceeded);
         }
 
         // Check attempt count (possible harassment)
@@ -98,10 +97,7 @@ impl ConsentPolicy {
 
         // Check previous denial policy
         if self.deny_previously_denied && metadata.flags.denied_before {
-            return (
-                PolicyDecision::AutoDeny,
-                PolicyReason::PreviouslyDenied,
-            );
+            return (PolicyDecision::AutoDeny, PolicyReason::PreviouslyDenied);
         }
 
         // Check unknown peer policy

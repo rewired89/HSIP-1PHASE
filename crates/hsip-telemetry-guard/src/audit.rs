@@ -151,9 +151,7 @@ impl AuditLog {
         let mut entries = self.entries.write();
 
         // Get previous hash
-        let prev_hash = entries.back()
-            .map(|e| e.entry_hash)
-            .unwrap_or([0u8; 32]);
+        let prev_hash = entries.back().map(|e| e.entry_hash).unwrap_or([0u8; 32]);
 
         // Create entry
         let entry = AuditEntry::from_decision(decision, prev_hash);
@@ -377,7 +375,7 @@ pub type SharedAuditLog = Arc<AuditLog>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DecisionReason, DecisionFlowSummary, RiskLevel};
+    use crate::{DecisionFlowSummary, DecisionReason, RiskLevel};
 
     fn test_decision(dest: &str, decision_type: DecisionType) -> Decision {
         Decision {
@@ -420,10 +418,7 @@ mod tests {
 
         // Log multiple decisions
         for i in 0..10 {
-            let decision = test_decision(
-                &format!("tracker{}.example.com", i),
-                DecisionType::Block,
-            );
+            let decision = test_decision(&format!("tracker{}.example.com", i), DecisionType::Block);
             log.log(&decision);
         }
 

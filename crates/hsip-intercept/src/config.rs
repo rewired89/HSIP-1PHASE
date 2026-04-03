@@ -1,6 +1,6 @@
 //! Configuration for the intercept system.
 
-use crate::{PlatformType, Result, InterceptError};
+use crate::{InterceptError, PlatformType, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -106,7 +106,7 @@ pub struct MessengerConfig {
 impl Default for InterceptConfig {
     fn default() -> Self {
         Self {
-            enabled: false, // Opt-in by default
+            enabled: false,       // Opt-in by default
             min_confidence: 0.80, // 80% confidence threshold
             enabled_platforms: HashSet::from([
                 PlatformType::Instagram,

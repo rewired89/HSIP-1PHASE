@@ -6,13 +6,10 @@
 //! - Mutual consent verification (Entanglement)
 //! - Privacy-level integration (Uncertainty)
 
-use crate::{Decision, DecisionReason, FlowMeta, TelemetryGuardError, TelemetryIntent, Result};
+use crate::{Decision, DecisionReason, FlowMeta, Result, TelemetryGuardError, TelemetryIntent};
 use blake3::Hasher;
 use chrono::{DateTime, Duration, Utc};
-use hsip_common::quantum_physics::{
-    no_cloning::AntiReplayGuard,
-    uncertainty::PrivacyLevel,
-};
+use hsip_common::quantum_physics::{no_cloning::AntiReplayGuard, uncertainty::PrivacyLevel};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -54,14 +51,15 @@ impl ConsentScope {
                     hostname == pattern.to_lowercase()
                 }
             }
-            ConsentScope::Vendor(v) => vendor.map(|vn| vn.to_lowercase() == v.to_lowercase()).unwrap_or(false),
+            ConsentScope::Vendor(v) => vendor
+                .map(|vn| vn.to_lowercase() == v.to_lowercase())
+                .unwrap_or(false),
             ConsentScope::Intent(intent) => flow.inferred_intent == *intent,
-            ConsentScope::Application(app) => {
-                flow.process_name
-                    .as_ref()
-                    .map(|p| p.to_lowercase().contains(&app.to_lowercase()))
-                    .unwrap_or(false)
-            }
+            ConsentScope::Application(app) => flow
+                .process_name
+                .as_ref()
+                .map(|p| p.to_lowercase().contains(&app.to_lowercase()))
+                .unwrap_or(false),
             ConsentScope::Global => true,
         }
     }
@@ -164,7 +162,13 @@ impl TelemetryConsent {
 
     /// Create a 90-day consent (default)
     pub fn standard(scope: ConsentScope, grantor: [u8; 32], signing_key: &[u8; 32]) -> Self {
-        Self::new(scope, grantor, Duration::days(DEFAULT_CONSENT_DAYS), false, signing_key)
+        Self::new(
+            scope,
+            grantor,
+            Duration::days(DEFAULT_CONSENT_DAYS),
+            false,
+            signing_key,
+        )
     }
 
     /// Create a single-use consent
@@ -197,8 +201,7 @@ impl TelemetryConsent {
         sig_hasher.update(&self.expires_at.timestamp_millis().to_le_bytes());
         let expected = sig_hasher.finalize();
 
-        sig_bytes[..32] == expected.as_bytes()[..32]
-            && sig_bytes[32..] == self.consent_id
+        sig_bytes[..32] == expected.as_bytes()[..32] && sig_bytes[32..] == self.consent_id
     }
 
     /// Get remaining lifetime
@@ -381,14 +384,20 @@ impl ConsentGate {
                 self.consume(&consent.consent_id);
                 return Decision::allow_once(
                     flow,
-                    DecisionReason::UserConsent { consent_id: consent.consent_id },
+                    DecisionReason::UserConsent {
+                        consent_id: consent.consent_id,
+                    },
                 );
             }
 
-            let ttl = consent.remaining().map(|d| chrono::Duration::seconds(d.num_seconds()));
+            let ttl = consent
+                .remaining()
+                .map(|d| chrono::Duration::seconds(d.num_seconds()));
             return Decision::allow(
                 flow,
-                DecisionReason::UserConsent { consent_id: consent.consent_id },
+                DecisionReason::UserConsent {
+                    consent_id: consent.consent_id,
+                },
                 ttl,
             );
         }
@@ -409,7 +418,11 @@ impl ConsentGate {
 
     /// Get consent count
     pub fn consent_count(&self) -> usize {
-        self.consents.read().values().filter(|c| c.is_valid()).count()
+        self.consents
+            .read()
+            .values()
+            .filter(|c| c.is_valid())
+            .count()
     }
 
     /// Clean up expired consents

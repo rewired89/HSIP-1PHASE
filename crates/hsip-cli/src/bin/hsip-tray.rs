@@ -98,7 +98,8 @@ fn main() -> Result<()> {
             Err(_) => {
                 // RED: Daemon offline
                 tray.set_icon(Some(red.clone())).ok();
-                tray.set_tooltip(Some("HSIP ✗ OFFLINE - Daemon not running")).ok();
+                tray.set_tooltip(Some("HSIP ✗ OFFLINE - Daemon not running"))
+                    .ok();
             }
         }
 

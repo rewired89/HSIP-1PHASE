@@ -11,11 +11,11 @@
 //! This module remains for potential future use or alternative rate limiting strategies.
 //! See `guard.rs` for the **active** rate limiting implementation.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use parking_lot::RwLock;
 
 /// Rate limiter configuration
 #[derive(Debug, Clone)]
@@ -97,8 +97,10 @@ impl TokenBucket {
             // Ban after 3 violations
             if self.violations >= 3 {
                 self.banned_until = Some(Instant::now() + config.ban_duration);
-                eprintln!("[RATE_LIMIT] IP banned for {} seconds due to violations",
-                         config.ban_duration.as_secs());
+                eprintln!(
+                    "[RATE_LIMIT] IP banned for {} seconds due to violations",
+                    config.ban_duration.as_secs()
+                );
             }
 
             false
@@ -179,8 +181,7 @@ impl RateLimiter {
         let mut buckets = self.buckets.write();
         buckets.retain(|_, bucket| {
             // Keep if recently used or banned
-            now.duration_since(bucket.last_refill) < Duration::from_secs(300)
-                || bucket.is_banned()
+            now.duration_since(bucket.last_refill) < Duration::from_secs(300) || bucket.is_banned()
         });
 
         // Clean up zero connections

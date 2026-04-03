@@ -3,7 +3,7 @@
 //! Captures telemetry that would have been sent for offline analysis.
 //! Perfect for OWASP testing and security audits.
 
-use crate::{FlowMeta, TelemetryIntent, RiskLevel, TelemetryGuardError, Result};
+use crate::{FlowMeta, Result, RiskLevel, TelemetryGuardError, TelemetryIntent};
 use blake3::Hasher;
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
@@ -573,9 +573,15 @@ mod tests {
         let storage = QuarantineStorage::new(test_key());
         let flow = test_flow();
 
-        let id1 = storage.quarantine(&flow, b"1", QuarantineReason::UserRequest).unwrap();
-        let id2 = storage.quarantine(&flow, b"2", QuarantineReason::UserRequest).unwrap();
-        storage.quarantine(&flow, b"3", QuarantineReason::UserRequest).unwrap();
+        let id1 = storage
+            .quarantine(&flow, b"1", QuarantineReason::UserRequest)
+            .unwrap();
+        let id2 = storage
+            .quarantine(&flow, b"2", QuarantineReason::UserRequest)
+            .unwrap();
+        storage
+            .quarantine(&flow, b"3", QuarantineReason::UserRequest)
+            .unwrap();
 
         storage.set_status(&id1, ReviewStatus::Approved);
         storage.set_status(&id2, ReviewStatus::Approved);
@@ -592,8 +598,12 @@ mod tests {
         let storage = QuarantineStorage::new(test_key());
         let flow = test_flow();
 
-        storage.quarantine(&flow, b"data1", QuarantineReason::UserRequest).unwrap();
-        storage.quarantine(&flow, b"data2", QuarantineReason::UserRequest).unwrap();
+        storage
+            .quarantine(&flow, b"data1", QuarantineReason::UserRequest)
+            .unwrap();
+        storage
+            .quarantine(&flow, b"data2", QuarantineReason::UserRequest)
+            .unwrap();
 
         let stats = storage.stats();
         assert_eq!(stats.total_entries, 2);
@@ -606,7 +616,9 @@ mod tests {
         let storage = QuarantineStorage::new(test_key());
         let flow = test_flow();
 
-        let entry_id = storage.quarantine(&flow, b"data", QuarantineReason::UserRequest).unwrap();
+        let entry_id = storage
+            .quarantine(&flow, b"data", QuarantineReason::UserRequest)
+            .unwrap();
 
         storage.add_tag(&entry_id, "suspicious".to_string());
         storage.add_tag(&entry_id, "google".to_string());

@@ -46,13 +46,13 @@
 //! - **Linux**: xdotool/X11 + /proc polling + libnotify overlay (production-ready)
 //! - **macOS**: osascript/NSWorkspace polling + Notification Center overlay (production-ready)
 
+pub mod config;
 pub mod error;
 pub mod event;
 pub mod overlay;
 pub mod patterns;
-pub mod router;
-pub mod config;
 pub mod privacy;
+pub mod router;
 
 #[cfg(target_os = "windows")]
 pub mod windows;
@@ -67,15 +67,15 @@ pub mod linux;
 pub mod macos;
 
 // Re-exports
+pub use config::InterceptConfig;
 pub use error::{InterceptError, Result};
-pub use event::{EventMonitor, MessagingEvent, PlatformType, EventType};
+pub use event::{EventMonitor, EventType, MessagingEvent, PlatformType};
 pub use overlay::{InterceptOverlay, UserChoice};
 pub use patterns::{PatternMatcher, TriggerPattern};
 pub use router::HSIPRouter;
-pub use config::InterceptConfig;
 
 use tokio::sync::mpsc;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Main coordinator for the Private DM Intercept system.
 ///
@@ -116,9 +116,10 @@ impl InterceptCoordinator {
             target_os = "macos",
         )))]
         let event_monitor: Box<dyn EventMonitor> = {
-            return Err(InterceptError::UnsupportedPlatform(
-                format!("Platform '{}' is not supported by hsip-intercept", std::env::consts::OS)
-            ));
+            return Err(InterceptError::UnsupportedPlatform(format!(
+                "Platform '{}' is not supported by hsip-intercept",
+                std::env::consts::OS
+            )));
         };
 
         // Initialize pattern matcher
@@ -199,7 +200,8 @@ impl InterceptCoordinator {
 
             // Only intercept if confidence threshold met
             if matched_pattern.confidence >= self.config.min_confidence {
-                self.show_intercept_overlay(&event, &matched_pattern).await?;
+                self.show_intercept_overlay(&event, &matched_pattern)
+                    .await?;
             } else {
                 warn!(
                     "Skipping intercept (low confidence): {}",

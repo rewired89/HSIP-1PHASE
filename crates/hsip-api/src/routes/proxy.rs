@@ -12,12 +12,7 @@
 //! GET  /v1/proxy/log     → Vec<ProxyEvent>
 //! GET  /v1/proxy/setup   → SetupInstructions  (platform-specific)
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -48,104 +43,104 @@ fn tracker_category(host: &str) -> Option<&'static str> {
 /// (domain, category) — embedded, no config file needed.
 static TRACKERS: &[(&str, &str)] = &[
     // Advertising
-    ("doubleclick.net",                 "advertising"),
-    ("googlesyndication.com",           "advertising"),
-    ("googleadservices.com",            "advertising"),
-    ("ads.google.com",                  "advertising"),
-    ("adservice.google.com",            "advertising"),
-    ("pagead2.googlesyndication.com",   "advertising"),
-    ("amazon-adsystem.com",             "advertising"),
-    ("adsrvr.org",                      "advertising"),
-    ("rubiconproject.com",              "advertising"),
-    ("pubmatic.com",                    "advertising"),
-    ("openx.net",                       "advertising"),
-    ("outbrain.com",                    "advertising"),
-    ("taboola.com",                     "advertising"),
-    ("criteo.com",                      "advertising"),
-    ("criteo.net",                      "advertising"),
-    ("adnxs.com",                       "advertising"),
-    ("advertising.com",                 "advertising"),
-    ("adsafeprotected.com",             "advertising"),
-    ("moatads.com",                     "advertising"),
-    ("scorecardresearch.com",           "advertising"),
-    ("casalemedia.com",                 "advertising"),
-    ("33across.com",                    "advertising"),
-    ("smartadserver.com",               "advertising"),
-    ("serving-sys.com",                 "advertising"),
-    ("yieldmo.com",                     "advertising"),
-    ("sharethrough.com",                "advertising"),
-    ("spotxchange.com",                 "advertising"),
-    ("appnexus.com",                    "advertising"),
-    ("lijit.com",                       "advertising"),
-    ("revcontent.com",                  "advertising"),
+    ("doubleclick.net", "advertising"),
+    ("googlesyndication.com", "advertising"),
+    ("googleadservices.com", "advertising"),
+    ("ads.google.com", "advertising"),
+    ("adservice.google.com", "advertising"),
+    ("pagead2.googlesyndication.com", "advertising"),
+    ("amazon-adsystem.com", "advertising"),
+    ("adsrvr.org", "advertising"),
+    ("rubiconproject.com", "advertising"),
+    ("pubmatic.com", "advertising"),
+    ("openx.net", "advertising"),
+    ("outbrain.com", "advertising"),
+    ("taboola.com", "advertising"),
+    ("criteo.com", "advertising"),
+    ("criteo.net", "advertising"),
+    ("adnxs.com", "advertising"),
+    ("advertising.com", "advertising"),
+    ("adsafeprotected.com", "advertising"),
+    ("moatads.com", "advertising"),
+    ("scorecardresearch.com", "advertising"),
+    ("casalemedia.com", "advertising"),
+    ("33across.com", "advertising"),
+    ("smartadserver.com", "advertising"),
+    ("serving-sys.com", "advertising"),
+    ("yieldmo.com", "advertising"),
+    ("sharethrough.com", "advertising"),
+    ("spotxchange.com", "advertising"),
+    ("appnexus.com", "advertising"),
+    ("lijit.com", "advertising"),
+    ("revcontent.com", "advertising"),
     // Analytics
-    ("google-analytics.com",            "analytics"),
-    ("analytics.google.com",            "analytics"),
-    ("googletagmanager.com",            "analytics"),
-    ("googletagservices.com",           "analytics"),
-    ("mixpanel.com",                    "analytics"),
-    ("segment.io",                      "analytics"),
-    ("segment.com",                     "analytics"),
-    ("amplitude.com",                   "analytics"),
-    ("hotjar.com",                      "analytics"),
-    ("mouseflow.com",                   "analytics"),
-    ("fullstory.com",                   "analytics"),
-    ("heap.io",                         "analytics"),
-    ("intercom.io",                     "analytics"),
-    ("intercom.com",                    "analytics"),
-    ("kissmetrics.com",                 "analytics"),
-    ("loggly.com",                      "analytics"),
-    ("newrelic.com",                    "analytics"),
-    ("nr-data.net",                     "analytics"),
-    ("datadog-browser-agent.com",       "analytics"),
-    ("browser-intake-datadoghq.com",    "analytics"),
-    ("bugsnag.com",                     "analytics"),
-    ("sentry.io",                       "analytics"),
-    ("rollbar.com",                     "analytics"),
-    ("logrocket.com",                   "analytics"),
-    ("clarity.ms",                      "analytics"),
-    ("crazyegg.com",                    "analytics"),
-    ("optimizely.com",                  "analytics"),
-    ("statsig.com",                     "analytics"),
-    ("launchdarkly.com",                "analytics"),
+    ("google-analytics.com", "analytics"),
+    ("analytics.google.com", "analytics"),
+    ("googletagmanager.com", "analytics"),
+    ("googletagservices.com", "analytics"),
+    ("mixpanel.com", "analytics"),
+    ("segment.io", "analytics"),
+    ("segment.com", "analytics"),
+    ("amplitude.com", "analytics"),
+    ("hotjar.com", "analytics"),
+    ("mouseflow.com", "analytics"),
+    ("fullstory.com", "analytics"),
+    ("heap.io", "analytics"),
+    ("intercom.io", "analytics"),
+    ("intercom.com", "analytics"),
+    ("kissmetrics.com", "analytics"),
+    ("loggly.com", "analytics"),
+    ("newrelic.com", "analytics"),
+    ("nr-data.net", "analytics"),
+    ("datadog-browser-agent.com", "analytics"),
+    ("browser-intake-datadoghq.com", "analytics"),
+    ("bugsnag.com", "analytics"),
+    ("sentry.io", "analytics"),
+    ("rollbar.com", "analytics"),
+    ("logrocket.com", "analytics"),
+    ("clarity.ms", "analytics"),
+    ("crazyegg.com", "analytics"),
+    ("optimizely.com", "analytics"),
+    ("statsig.com", "analytics"),
+    ("launchdarkly.com", "analytics"),
     // Social / tracking pixels
-    ("facebook.com",                    "social"),
-    ("connect.facebook.net",            "social"),
-    ("graph.facebook.com",             "social"),
-    ("pixel.facebook.com",              "social"),
-    ("twitter.com",                     "social"),
-    ("t.co",                            "social"),
-    ("analytics.twitter.com",           "social"),
-    ("linkedin.com",                    "social"),
-    ("snap.licdn.com",                  "social"),
-    ("tiktok.com",                      "social"),
-    ("ads.tiktok.com",                  "social"),
-    ("pinterest.com",                   "social"),
-    ("ct.pinterest.com",                "social"),
-    ("reddit.com",                      "social"),
-    ("alb.reddit.com",                  "social"),
+    ("facebook.com", "social"),
+    ("connect.facebook.net", "social"),
+    ("graph.facebook.com", "social"),
+    ("pixel.facebook.com", "social"),
+    ("twitter.com", "social"),
+    ("t.co", "social"),
+    ("analytics.twitter.com", "social"),
+    ("linkedin.com", "social"),
+    ("snap.licdn.com", "social"),
+    ("tiktok.com", "social"),
+    ("ads.tiktok.com", "social"),
+    ("pinterest.com", "social"),
+    ("ct.pinterest.com", "social"),
+    ("reddit.com", "social"),
+    ("alb.reddit.com", "social"),
     // Fingerprinting / data brokers
-    ("fingerprintjs.com",               "fingerprinting"),
-    ("iovation.com",                    "fingerprinting"),
-    ("threatmetrix.com",                "fingerprinting"),
-    ("forter.com",                      "fingerprinting"),
-    ("bidswitch.net",                   "fingerprinting"),
-    ("quantserve.com",                  "fingerprinting"),
-    ("agkn.com",                        "fingerprinting"),
-    ("bluekai.com",                     "fingerprinting"),
-    ("demdex.net",                      "fingerprinting"),
-    ("adobedc.net",                     "fingerprinting"),
+    ("fingerprintjs.com", "fingerprinting"),
+    ("iovation.com", "fingerprinting"),
+    ("threatmetrix.com", "fingerprinting"),
+    ("forter.com", "fingerprinting"),
+    ("bidswitch.net", "fingerprinting"),
+    ("quantserve.com", "fingerprinting"),
+    ("agkn.com", "fingerprinting"),
+    ("bluekai.com", "fingerprinting"),
+    ("demdex.net", "fingerprinting"),
+    ("adobedc.net", "fingerprinting"),
     // Telemetry / crash reporting
-    ("crashlytics.com",                 "telemetry"),
-    ("firebase.com",                    "telemetry"),
-    ("firebaseio.com",                  "telemetry"),
-    ("app-measurement.com",             "telemetry"),
-    ("appsflyer.com",                   "telemetry"),
-    ("branch.io",                       "telemetry"),
-    ("adjust.com",                      "telemetry"),
-    ("kochava.com",                     "telemetry"),
-    ("singular.net",                    "telemetry"),
-    ("mparticle.com",                   "telemetry"),
+    ("crashlytics.com", "telemetry"),
+    ("firebase.com", "telemetry"),
+    ("firebaseio.com", "telemetry"),
+    ("app-measurement.com", "telemetry"),
+    ("appsflyer.com", "telemetry"),
+    ("branch.io", "telemetry"),
+    ("adjust.com", "telemetry"),
+    ("kochava.com", "telemetry"),
+    ("singular.net", "telemetry"),
+    ("mparticle.com", "telemetry"),
 ];
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -153,29 +148,40 @@ static TRACKERS: &[(&str, &str)] = &[
 #[derive(Serialize)]
 pub struct ProxyStatus {
     pub enabled: bool,
-    pub port:    u16,
-    pub stats:   ProxyStats,
+    pub port: u16,
+    pub stats: ProxyStats,
 }
 
 #[derive(Serialize)]
 pub struct ProxyStats {
-    pub total:   usize,
+    pub total: usize,
     pub blocked: usize,
     pub allowed: usize,
 }
 
 pub async fn status(State(s): State<AppState>) -> impl IntoResponse {
     let enabled = s.proxy.enabled.load(Ordering::Relaxed);
-    let port    = s.proxy.port.load(Ordering::Relaxed) as u16;
-    let stats   = compute_stats(&s);
-    Json(ProxyStatus { enabled, port, stats })
+    let port = s.proxy.port.load(Ordering::Relaxed) as u16;
+    let stats = compute_stats(&s);
+    Json(ProxyStatus {
+        enabled,
+        port,
+        stats,
+    })
 }
 
 pub async fn enable(State(s): State<AppState>) -> impl IntoResponse {
     if s.proxy.enabled.load(Ordering::Relaxed) {
-        let port  = s.proxy.port.load(Ordering::Relaxed) as u16;
+        let port = s.proxy.port.load(Ordering::Relaxed) as u16;
         let stats = compute_stats(&s);
-        return (StatusCode::OK, Json(ProxyStatus { enabled: true, port, stats }));
+        return (
+            StatusCode::OK,
+            Json(ProxyStatus {
+                enabled: true,
+                port,
+                stats,
+            }),
+        );
     }
 
     let port = s.proxy.port.load(Ordering::Relaxed) as u16;
@@ -191,7 +197,14 @@ pub async fn enable(State(s): State<AppState>) -> impl IntoResponse {
     });
 
     let stats = compute_stats(&s);
-    (StatusCode::OK, Json(ProxyStatus { enabled: true, port, stats }))
+    (
+        StatusCode::OK,
+        Json(ProxyStatus {
+            enabled: true,
+            port,
+            stats,
+        }),
+    )
 }
 
 pub async fn disable(State(s): State<AppState>) -> impl IntoResponse {
@@ -204,19 +217,18 @@ pub async fn disable(State(s): State<AppState>) -> impl IntoResponse {
 }
 
 pub async fn log(State(s): State<AppState>) -> impl IntoResponse {
-    let events: Vec<ProxyEvent> = s.proxy.events.lock().unwrap()
-        .iter().cloned().collect();
+    let events: Vec<ProxyEvent> = s.proxy.events.lock().unwrap().iter().cloned().collect();
     Json(events)
 }
 
 #[derive(Serialize)]
 pub struct SetupInstructions {
-    pub proxy_host:    String,
-    pub proxy_port:    u16,
+    pub proxy_host: String,
+    pub proxy_port: u16,
     pub steps_windows: Vec<String>,
-    pub steps_mac:     Vec<String>,
+    pub steps_mac: Vec<String>,
     pub steps_browser: Vec<String>,
-    pub pac_url:       String,
+    pub pac_url: String,
 }
 
 pub async fn setup(State(s): State<AppState>) -> impl IntoResponse {
@@ -312,8 +324,12 @@ fn handle_connection(
     _peer: SocketAddr,
     shared: std::sync::Arc<crate::state::ProxyShared>,
 ) {
-    client.set_read_timeout(Some(Duration::from_millis(3000))).ok();
-    client.set_write_timeout(Some(Duration::from_millis(3000))).ok();
+    client
+        .set_read_timeout(Some(Duration::from_millis(3000)))
+        .ok();
+    client
+        .set_write_timeout(Some(Duration::from_millis(3000)))
+        .ok();
 
     // Read request headers
     let mut req = Vec::new();
@@ -323,17 +339,25 @@ fn handle_connection(
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 req.extend_from_slice(&buf[..n]);
-                if req.windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                if req.len() > 64 * 1024 { return; }
+                if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+                if req.len() > 64 * 1024 {
+                    return;
+                }
             }
         }
     }
-    if req.is_empty() { return; }
+    if req.is_empty() {
+        return;
+    }
 
     let req_str = String::from_utf8_lossy(&req);
-    let first   = req_str.lines().next().unwrap_or("");
+    let first = req_str.lines().next().unwrap_or("");
     let parts: Vec<&str> = first.splitn(3, ' ').collect();
-    if parts.len() < 2 { return; }
+    if parts.len() < 2 {
+        return;
+    }
 
     let method = parts[0].to_string();
     let target = parts[1].to_string();
@@ -342,7 +366,8 @@ fn handle_connection(
     let host = if method.eq_ignore_ascii_case("CONNECT") {
         target.split(':').next().unwrap_or(&target).to_string()
     } else {
-        req_str.lines()
+        req_str
+            .lines()
             .find(|l| l.to_ascii_lowercase().starts_with("host:"))
             .and_then(|l| l.splitn(2, ':').nth(1))
             .map(|h| h.trim().split(':').next().unwrap_or("").to_string())
@@ -352,23 +377,27 @@ fn handle_connection(
     let path = if method.eq_ignore_ascii_case("CONNECT") {
         String::new()
     } else {
-        let url = target.trim_start_matches("http://").trim_start_matches("https://");
-        url.find('/').map(|i| url[i..].to_string()).unwrap_or_else(|| "/".to_string())
+        let url = target
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        url.find('/')
+            .map(|i| url[i..].to_string())
+            .unwrap_or_else(|| "/".to_string())
     };
 
     // Classify
     let category = tracker_category(&host).map(|s| s.to_string());
-    let blocked   = category.is_some();
+    let blocked = category.is_some();
 
     let ev = ProxyEvent {
-        id:       Uuid::new_v4().to_string(),
-        ts_ms:    now_ms(),
-        host:     host.clone(),
-        method:   method.clone(),
-        path:     path.clone(),
-        verdict:  if blocked { "blocked" } else { "allowed" }.to_string(),
+        id: Uuid::new_v4().to_string(),
+        ts_ms: now_ms(),
+        host: host.clone(),
+        method: method.clone(),
+        path: path.clone(),
+        verdict: if blocked { "blocked" } else { "allowed" }.to_string(),
         category: category.clone(),
-        reason:   category.as_ref().map(|c| format!("tracker:{}", c)),
+        reason: category.as_ref().map(|c| format!("tracker:{}", c)),
     };
     push_event(&shared, ev);
 
@@ -384,7 +413,8 @@ fn handle_connection(
         let resp = format!(
             "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(), body
+            body.len(),
+            body
         );
         let _ = client.write_all(resp.as_bytes());
         return;
@@ -411,7 +441,9 @@ fn tunnel_connect(target: String, mut client: TcpStream) {
     let _ = client.flush();
     let mut s2 = server.try_clone().unwrap();
     let mut c2 = client.try_clone().unwrap();
-    std::thread::spawn(move || { let _ = std::io::copy(&mut c2, &mut s2); });
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut c2, &mut s2);
+    });
     let _ = std::io::copy(&mut server, &mut client);
 }
 
@@ -429,20 +461,27 @@ fn relay_http(host: String, req: Vec<u8>, mut client: TcpStream) {
 }
 
 fn resolve(target: &str) -> std::io::Result<SocketAddr> {
-    target.to_socket_addrs()?.next().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "no address")
-    })
+    target
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no address"))
 }
 
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn compute_stats(s: &AppState) -> ProxyStats {
     let ring = s.proxy.events.lock().unwrap();
-    let total   = ring.len();
+    let total = ring.len();
     let blocked = ring.iter().filter(|e| e.verdict == "blocked").count();
-    ProxyStats { total, blocked, allowed: total - blocked }
+    ProxyStats {
+        total,
+        blocked,
+        allowed: total - blocked,
+    }
 }

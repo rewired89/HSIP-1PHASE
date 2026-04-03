@@ -232,12 +232,12 @@ mod tests {
         let peer_id = PeerId([1u8; 32]);
         let caps = HelloCapabilities::default_local();
 
-        let ticket = issue_resumption_ticket(&key, &policy, peer_id, caps, test_timestamp(), 30_000)
-            .expect("Ticket should be created successfully");
+        let ticket =
+            issue_resumption_ticket(&key, &policy, peer_id, caps, test_timestamp(), 30_000)
+                .expect("Ticket should be created successfully");
 
-        let payload =
-            validate_resumption_ticket(&key, &policy, &ticket, test_timestamp() + 10_000)
-                .expect("Ticket should validate successfully");
+        let payload = validate_resumption_ticket(&key, &policy, &ticket, test_timestamp() + 10_000)
+            .expect("Ticket should validate successfully");
 
         assert_eq!(payload.peer_id.0, peer_id.0);
         assert!(payload.caps.supports(crate::hello::CAP_CONSENT_LAYER));
@@ -251,8 +251,9 @@ mod tests {
         let peer_id = PeerId([2u8; 32]);
         let caps = HelloCapabilities::default_local();
 
-        let ticket = issue_resumption_ticket(&key, &policy, peer_id, caps, test_timestamp(), 10_000)
-            .expect("Ticket should be created");
+        let ticket =
+            issue_resumption_ticket(&key, &policy, peer_id, caps, test_timestamp(), 10_000)
+                .expect("Ticket should be created");
 
         let result = validate_resumption_ticket(&key, &policy, &ticket, test_timestamp() + 11_000);
 

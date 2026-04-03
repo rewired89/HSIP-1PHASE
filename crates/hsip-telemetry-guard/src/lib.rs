@@ -52,14 +52,14 @@
 //! - **Known Endpoints**: Built-in database of 500+ telemetry domains
 //! - **Quarantine Mode**: Capture without sending for security analysis
 
-pub mod flow_meta;
-pub mod known_endpoints;
-pub mod policy;
+pub mod audit;
 pub mod consent_gate;
 pub mod decisions;
-pub mod quarantine;
-pub mod audit;
+pub mod flow_meta;
 pub mod guard;
+pub mod known_endpoints;
+pub mod policy;
+pub mod quarantine;
 
 #[cfg(feature = "postgres")]
 pub mod audit_postgres;
@@ -70,14 +70,14 @@ pub mod ntp_sync;
 #[cfg(feature = "geolocation")]
 pub mod geolocation;
 
-pub use flow_meta::*;
-pub use known_endpoints::*;
-pub use policy::*;
+pub use audit::*;
 pub use consent_gate::*;
 pub use decisions::*;
-pub use quarantine::*;
-pub use audit::*;
+pub use flow_meta::*;
 pub use guard::*;
+pub use known_endpoints::*;
+pub use policy::*;
+pub use quarantine::*;
 
 #[cfg(feature = "postgres")]
 pub use audit_postgres::*;

@@ -162,11 +162,11 @@ pub fn create_signed_request(
 pub fn validate_request(request: &ConsentRequest) -> Result<(), String> {
     let public_key_bytes = hex::decode(&request.requester_pub_key_hex)
         .map_err(|e| format!("Invalid public key hex encoding: {e}"))?;
-    
+
     let key_array: [u8; 32] = public_key_bytes
         .try_into()
         .map_err(|_| "Public key must be exactly 32 bytes")?;
-    
+
     let verifying_key = VerifyingKey::from_bytes(&key_array)
         .map_err(|e| format!("Failed to construct verifying key: {e}"))?;
 
@@ -178,13 +178,14 @@ pub fn validate_request(request: &ConsentRequest) -> Result<(), String> {
     let serialized = serialize_request_for_signature(request);
     let sig_bytes = hex::decode(&request.sig_hex)
         .map_err(|e| format!("Invalid signature hex encoding: {e}"))?;
-    
+
     let sig_array: [u8; 64] = sig_bytes
         .try_into()
         .map_err(|_| "Signature must be exactly 64 bytes")?;
-    
+
     let signature = Signature::from_bytes(&sig_array);
-    verifying_key.verify_strict(serialized.as_bytes(), &signature)
+    verifying_key
+        .verify_strict(serialized.as_bytes(), &signature)
         .map_err(|e: SignatureError| format!("Signature verification failed: {e}"))?;
 
     Ok(())
@@ -229,21 +230,24 @@ pub fn create_signed_response(
 ///
 /// # Errors
 /// Returns error for hash mismatch, invalid keys, inconsistent decision/TTL, or signature failure
-pub fn validate_response(response: &ConsentResponse, original_request: &ConsentRequest) -> Result<(), String> {
+pub fn validate_response(
+    response: &ConsentResponse,
+    original_request: &ConsentRequest,
+) -> Result<(), String> {
     let request_serialized = serialize_request_for_signature(original_request);
     let expected_hash = hex::encode(blake3::hash(request_serialized.as_bytes()).as_bytes());
-    
+
     if expected_hash != response.request_hash_hex {
         return Err("Response hash does not match request binding".into());
     }
 
     let public_key_bytes = hex::decode(&response.responder_pub_key_hex)
         .map_err(|e| format!("Invalid responder public key hex: {e}"))?;
-    
+
     let key_array: [u8; 32] = public_key_bytes
         .try_into()
         .map_err(|_| "Responder public key must be 32 bytes")?;
-    
+
     let verifying_key = VerifyingKey::from_bytes(&key_array)
         .map_err(|e| format!("Failed to construct responder verifying key: {e}"))?;
 
@@ -255,7 +259,7 @@ pub fn validate_response(response: &ConsentResponse, original_request: &ConsentR
     if response.decision != "allow" && response.decision != "deny" {
         return Err("Decision must be either 'allow' or 'deny'".into());
     }
-    
+
     if response.decision == "deny" && response.ttl_ms != 0 {
         return Err("Denial responses must have zero TTL".into());
     }
@@ -263,13 +267,14 @@ pub fn validate_response(response: &ConsentResponse, original_request: &ConsentR
     let serialized = serialize_response_for_signature(response);
     let sig_bytes = hex::decode(&response.sig_hex)
         .map_err(|e| format!("Invalid response signature hex: {e}"))?;
-    
+
     let sig_array: [u8; 64] = sig_bytes
         .try_into()
         .map_err(|_| "Response signature must be 64 bytes")?;
-    
+
     let signature = Signature::from_bytes(&sig_array);
-    verifying_key.verify_strict(serialized.as_bytes(), &signature)
+    verifying_key
+        .verify_strict(serialized.as_bytes(), &signature)
         .map_err(|e: SignatureError| format!("Response signature verification failed: {e}"))?;
 
     Ok(())

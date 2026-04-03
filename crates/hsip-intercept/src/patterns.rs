@@ -1,6 +1,6 @@
 //! Pattern matching for messaging action detection.
 
-use crate::{MessagingEvent, PlatformType, InterceptConfig, Result, InterceptError};
+use crate::{InterceptConfig, InterceptError, MessagingEvent, PlatformType, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -73,8 +73,9 @@ impl PatternMatcher {
 
     /// Load pattern database from JSON file.
     fn load_database(path: &std::path::Path) -> Result<PatternDatabase> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| InterceptError::PatternMatch(format!("Failed to read pattern DB: {}", e)))?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            InterceptError::PatternMatch(format!("Failed to read pattern DB: {}", e))
+        })?;
 
         let db: PatternDatabase = serde_json::from_str(&content)?;
         Ok(db)
@@ -148,14 +149,12 @@ impl PatternMatcher {
                 // WhatsApp patterns
                 PlatformPattern {
                     platform: PlatformType::WhatsApp,
-                    triggers: vec![
-                        TriggerPattern {
-                            platform: PlatformType::WhatsApp,
-                            trigger_type: TriggerType::AccessibilityId,
-                            value: "chat_input_field".to_string(),
-                            confidence: 0.90,
-                        },
-                    ],
+                    triggers: vec![TriggerPattern {
+                        platform: PlatformType::WhatsApp,
+                        trigger_type: TriggerType::AccessibilityId,
+                        value: "chat_input_field".to_string(),
+                        confidence: 0.90,
+                    }],
                 },
             ],
         }
@@ -180,7 +179,10 @@ impl PatternMatcher {
         }
 
         // Find patterns for this platform
-        let platform_patterns = self.database.patterns.iter()
+        let platform_patterns = self
+            .database
+            .patterns
+            .iter()
             .filter(|p| p.platform == event.platform)
             .flat_map(|p| &p.triggers);
 
@@ -205,36 +207,34 @@ impl PatternMatcher {
     /// Match a single pattern against an event.
     fn match_pattern(&self, pattern: &TriggerPattern, event: &MessagingEvent) -> Option<f64> {
         let matched = match &pattern.trigger_type {
-            TriggerType::AccessibilityId => {
-                event.metadata.get("accessibility_id")
-                    .or(event.metadata.get("resource_id"))
-                    .map(|id| id.contains(&pattern.value))
-                    .unwrap_or(false)
-            }
-            TriggerType::ClassName => {
-                event.metadata.get("class_name")
-                    .map(|cn| cn.contains(&pattern.value))
-                    .unwrap_or(false)
-            }
-            TriggerType::WindowTitle => {
-                event.window_title.as_ref()
-                    .map(|title| title.contains(&pattern.value))
-                    .unwrap_or(false)
-            }
-            TriggerType::TextContent => {
-                event.metadata.get("text_content")
-                    .or(event.metadata.get("content_description"))
-                    .map(|text| text.contains(&pattern.value))
-                    .unwrap_or(false)
-            }
-            TriggerType::ProcessName => {
-                event.process_name.contains(&pattern.value)
-            }
-            TriggerType::AutomationId => {
-                event.metadata.get("automation_id")
-                    .map(|id| id.contains(&pattern.value))
-                    .unwrap_or(false)
-            }
+            TriggerType::AccessibilityId => event
+                .metadata
+                .get("accessibility_id")
+                .or(event.metadata.get("resource_id"))
+                .map(|id| id.contains(&pattern.value))
+                .unwrap_or(false),
+            TriggerType::ClassName => event
+                .metadata
+                .get("class_name")
+                .map(|cn| cn.contains(&pattern.value))
+                .unwrap_or(false),
+            TriggerType::WindowTitle => event
+                .window_title
+                .as_ref()
+                .map(|title| title.contains(&pattern.value))
+                .unwrap_or(false),
+            TriggerType::TextContent => event
+                .metadata
+                .get("text_content")
+                .or(event.metadata.get("content_description"))
+                .map(|text| text.contains(&pattern.value))
+                .unwrap_or(false),
+            TriggerType::ProcessName => event.process_name.contains(&pattern.value),
+            TriggerType::AutomationId => event
+                .metadata
+                .get("automation_id")
+                .map(|id| id.contains(&pattern.value))
+                .unwrap_or(false),
         };
 
         if matched {
@@ -247,8 +247,9 @@ impl PatternMatcher {
     /// Save current database to file.
     pub fn save_database(&self, path: &std::path::Path) -> Result<()> {
         let content = serde_json::to_string_pretty(&self.database)?;
-        std::fs::write(path, content)
-            .map_err(|e| InterceptError::PatternMatch(format!("Failed to save pattern DB: {}", e)))?;
+        std::fs::write(path, content).map_err(|e| {
+            InterceptError::PatternMatch(format!("Failed to save pattern DB: {}", e))
+        })?;
         Ok(())
     }
 }

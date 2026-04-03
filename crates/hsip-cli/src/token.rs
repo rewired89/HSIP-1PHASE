@@ -64,15 +64,18 @@ pub fn issue_token(
     lifetime_ms: u64,
 ) -> ConsentToken {
     let (signing_key, verifying_key) = load_keypair().expect("Failed to load identity keypair");
-    generate_signed_token(&signing_key, &verifying_key, &grantee_identifier, capability_list, lifetime_ms)
-        .expect("Token generation failed")
+    generate_signed_token(
+        &signing_key,
+        &verifying_key,
+        &grantee_identifier,
+        capability_list,
+        lifetime_ms,
+    )
+    .expect("Token generation failed")
 }
 
 /// Validate token cryptographic signature and expiration
-pub fn verify_token(
-    token: &ConsentToken,
-    issuer_public_key: &VerifyingKey,
-) -> Result<(), String> {
+pub fn verify_token(token: &ConsentToken, issuer_public_key: &VerifyingKey) -> Result<(), String> {
     check_token_expiration(token)?;
     verify_token_signature(token, issuer_public_key)
 }
@@ -84,10 +87,7 @@ fn check_token_expiration(token: &ConsentToken) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_token_signature(
-    token: &ConsentToken,
-    issuer_key: &VerifyingKey,
-) -> Result<(), String> {
+fn verify_token_signature(token: &ConsentToken, issuer_key: &VerifyingKey) -> Result<(), String> {
     let canonical_message = serialize_token_for_signing(
         &token.issuer,
         &token.grantee,
@@ -96,8 +96,8 @@ fn verify_token_signature(
     )?;
 
     let signature_hex = token.sig_hex.strip_prefix("0x").unwrap_or(&token.sig_hex);
-    let signature_bytes = hex::decode(signature_hex)
-        .map_err(|_| "Invalid signature hex encoding")?;
+    let signature_bytes =
+        hex::decode(signature_hex).map_err(|_| "Invalid signature hex encoding")?;
 
     let signature_array: [u8; 64] = signature_bytes
         .try_into()
@@ -122,12 +122,8 @@ fn generate_signed_token(
     let issuer_peer_id = peer_id_from_pubkey(verifying_key);
     let expiration_time = current_timestamp_ms().saturating_add(lifetime_ms);
 
-    let signing_message = serialize_token_for_signing(
-        &issuer_peer_id,
-        recipient,
-        &capabilities,
-        expiration_time,
-    )?;
+    let signing_message =
+        serialize_token_for_signing(&issuer_peer_id, recipient, &capabilities, expiration_time)?;
 
     let signature = signing_key.sign(&signing_message);
     let signature_encoded = hex::encode(signature.to_bytes());

@@ -1,61 +1,70 @@
-use axum::{extract::{Path, State}, Json};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use ed25519_dalek::{Signer, VerifyingKey, Verifier, Signature};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-use crate::{auth::TenantId, db::now_ms, errors::{ApiError, ApiResult}, metrics, state::AppState};
 use super::identity::load_signing_key;
+use crate::{
+    auth::TenantId,
+    db::now_ms,
+    errors::{ApiError, ApiResult},
+    metrics,
+    state::AppState,
+};
 
 #[derive(Deserialize)]
 pub struct IssueRequest {
-    pub claim:       String,
-    pub user_token:  String,
+    pub claim: String,
+    pub user_token: String,
     pub ttl_seconds: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CredentialPayload {
-    pub id:                String,
-    pub claim:             String,
-    pub user_token:        String,
+    pub id: String,
+    pub claim: String,
+    pub user_token: String,
     pub issuer_verify_key: String,
-    pub issued_at:         i64,
-    pub expires_at:        i64,
+    pub issued_at: i64,
+    pub expires_at: i64,
 }
 
 #[derive(Serialize)]
 pub struct IssueResponse {
     pub credential: CredentialPayload,
-    pub signature:  String,
+    pub signature: String,
 }
 
 #[derive(Deserialize)]
 pub struct VerifyRequest {
     pub credential: CredentialPayload,
-    pub signature:  String,
+    pub signature: String,
 }
 
 #[derive(Serialize)]
 pub struct VerifyResponse {
-    pub valid:      bool,
-    pub claim:      String,
-    pub expired:    bool,
-    pub revoked:    bool,
+    pub valid: bool,
+    pub claim: String,
+    pub expired: bool,
+    pub revoked: bool,
     pub expires_at: i64,
 }
 
 #[derive(Serialize)]
 pub struct CredentialRecord {
-    pub id:                String,
-    pub claim:             String,
-    pub user_token:        String,
+    pub id: String,
+    pub claim: String,
+    pub user_token: String,
     pub issuer_verify_key: String,
-    pub issued_at:         i64,
-    pub expires_at:        i64,
-    pub revoked:           bool,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub revoked: bool,
 }
 
 /// M1: Produce a stable canonical JSON string for signing/verification.
@@ -63,12 +72,24 @@ pub struct CredentialRecord {
 /// deterministic across all languages and implementations.
 fn canonical_json(payload: &CredentialPayload) -> Result<String, ApiError> {
     let mut map = BTreeMap::new();
-    map.insert("claim",             serde_json::Value::String(payload.claim.clone()));
-    map.insert("expires_at",        serde_json::Value::Number(payload.expires_at.into()));
-    map.insert("id",                serde_json::Value::String(payload.id.clone()));
-    map.insert("issued_at",         serde_json::Value::Number(payload.issued_at.into()));
-    map.insert("issuer_verify_key", serde_json::Value::String(payload.issuer_verify_key.clone()));
-    map.insert("user_token",        serde_json::Value::String(payload.user_token.clone()));
+    map.insert("claim", serde_json::Value::String(payload.claim.clone()));
+    map.insert(
+        "expires_at",
+        serde_json::Value::Number(payload.expires_at.into()),
+    );
+    map.insert("id", serde_json::Value::String(payload.id.clone()));
+    map.insert(
+        "issued_at",
+        serde_json::Value::Number(payload.issued_at.into()),
+    );
+    map.insert(
+        "issuer_verify_key",
+        serde_json::Value::String(payload.issuer_verify_key.clone()),
+    );
+    map.insert(
+        "user_token",
+        serde_json::Value::String(payload.user_token.clone()),
+    );
     serde_json::to_string(&map).map_err(|e| ApiError::Internal(e.to_string()))
 }
 
@@ -79,35 +100,39 @@ pub async fn issue(
 ) -> ApiResult<Json<IssueResponse>> {
     // Validate claim length
     if req.claim.len() > 64 {
-        return Err(ApiError::BadRequest("claim must be 64 characters or fewer".into()));
+        return Err(ApiError::BadRequest(
+            "claim must be 64 characters or fewer".into(),
+        ));
     }
     // Validate user_token length
     if req.user_token.len() > 256 {
-        return Err(ApiError::BadRequest("user_token must be 256 characters or fewer".into()));
+        return Err(ApiError::BadRequest(
+            "user_token must be 256 characters or fewer".into(),
+        ));
     }
 
     // C1: load and decrypt the signing key
     let signing_key = load_signing_key(&state.db, &tenant.0, &state.master_key).await?;
-    let verify_b64  = BASE64.encode(signing_key.verifying_key().to_bytes());
+    let verify_b64 = BASE64.encode(signing_key.verifying_key().to_bytes());
 
-    let now        = now_ms();
-    let ttl_ms     = req.ttl_seconds.unwrap_or(86400) * 1000;
+    let now = now_ms();
+    let ttl_ms = req.ttl_seconds.unwrap_or(86400) * 1000;
     let expires_at = now + ttl_ms;
-    let cred_id    = Uuid::new_v4().to_string();
+    let cred_id = Uuid::new_v4().to_string();
 
     let payload = CredentialPayload {
-        id:                cred_id.clone(),
-        claim:             req.claim.clone(),
-        user_token:        req.user_token.clone(),
+        id: cred_id.clone(),
+        claim: req.claim.clone(),
+        user_token: req.user_token.clone(),
         issuer_verify_key: verify_b64.clone(),
-        issued_at:         now,
+        issued_at: now,
         expires_at,
     };
 
     // M1: sign canonical JSON (alphabetically-sorted keys)
     let canonical = canonical_json(&payload)?;
-    let signature  = signing_key.sign(canonical.as_bytes());
-    let sig_b64    = BASE64.encode(signature.to_bytes());
+    let signature = signing_key.sign(canonical.as_bytes());
+    let sig_b64 = BASE64.encode(signature.to_bytes());
 
     sqlx::query(
         "INSERT INTO credentials
@@ -137,9 +162,14 @@ pub async fn issue(
     .execute(&state.db)
     .await?;
 
-    metrics::CREDENTIALS_ISSUED.with_label_values(&[&req.claim]).inc();
+    metrics::CREDENTIALS_ISSUED
+        .with_label_values(&[&req.claim])
+        .inc();
 
-    Ok(Json(IssueResponse { credential: payload, signature: sig_b64 }))
+    Ok(Json(IssueResponse {
+        credential: payload,
+        signature: sig_b64,
+    }))
 }
 
 pub async fn verify(
@@ -147,24 +177,23 @@ pub async fn verify(
     tenant: TenantId,
     Json(req): Json<VerifyRequest>,
 ) -> ApiResult<Json<VerifyResponse>> {
-    let now     = now_ms();
+    let now = now_ms();
     let expired = now > req.credential.expires_at;
 
     // C3: revocation check uses credential ID only (globally unique UUID).
     // Do NOT filter by tenant_id — the verifying tenant may differ from the issuing tenant.
     // The cryptographic signature already proves authenticity.
-    let revoked_row = sqlx::query(
-        "SELECT revoked FROM credentials WHERE id = ?",
-    )
-    .bind(&req.credential.id)
-    .fetch_optional(&state.db)
-    .await?;
+    let revoked_row = sqlx::query("SELECT revoked FROM credentials WHERE id = ?")
+        .bind(&req.credential.id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let revoked = revoked_row
         .map(|r| r.try_get::<i64, _>(0).unwrap_or(0) != 0)
         .unwrap_or(false);
 
-    let key_bytes: [u8; 32] = BASE64.decode(&req.credential.issuer_verify_key)
+    let key_bytes: [u8; 32] = BASE64
+        .decode(&req.credential.issuer_verify_key)
         .map_err(|_| ApiError::BadRequest("Invalid issuer_verify_key".into()))?
         .try_into()
         .map_err(|_| ApiError::BadRequest("issuer_verify_key must be 32 bytes".into()))?;
@@ -172,7 +201,8 @@ pub async fn verify(
     let verifying_key = VerifyingKey::from_bytes(&key_bytes)
         .map_err(|_| ApiError::BadRequest("Invalid Ed25519 key".into()))?;
 
-    let sig_bytes: [u8; 64] = BASE64.decode(&req.signature)
+    let sig_bytes: [u8; 64] = BASE64
+        .decode(&req.signature)
         .map_err(|_| ApiError::BadRequest("Invalid signature".into()))?
         .try_into()
         .map_err(|_| ApiError::BadRequest("Signature must be 64 bytes".into()))?;
@@ -180,14 +210,22 @@ pub async fn verify(
     let signature = Signature::from_bytes(&sig_bytes);
     // M1: verify against canonical JSON (same alphabetical ordering used at issuance)
     let canonical = canonical_json(&req.credential)?;
-    let sig_valid = verifying_key.verify(canonical.as_bytes(), &signature).is_ok();
+    let sig_valid = verifying_key
+        .verify(canonical.as_bytes(), &signature)
+        .is_ok();
 
-    let valid  = sig_valid && !expired && !revoked;
+    let valid = sig_valid && !expired && !revoked;
     let result = if valid { "valid" } else { "invalid" };
-    metrics::CREDENTIALS_VERIFIED.with_label_values(&[result]).inc();
+    metrics::CREDENTIALS_VERIFIED
+        .with_label_values(&[result])
+        .inc();
 
-    let action = if valid { "credential.verified" } else { "credential.verification_failed" };
-    let aid    = Uuid::new_v4().to_string();
+    let action = if valid {
+        "credential.verified"
+    } else {
+        "credential.verification_failed"
+    };
+    let aid = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
          VALUES (?, ?, ?, ?, ?)",
@@ -202,7 +240,7 @@ pub async fn verify(
 
     Ok(Json(VerifyResponse {
         valid,
-        claim:      req.credential.claim,
+        claim: req.credential.claim,
         expired,
         revoked,
         expires_at: req.credential.expires_at,
@@ -214,14 +252,12 @@ pub async fn revoke(
     tenant: TenantId,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let now    = now_ms();
-    let result = sqlx::query(
-        "UPDATE credentials SET revoked = 1 WHERE id = ? AND tenant_id = ?",
-    )
-    .bind(&id)
-    .bind(&tenant.0)
-    .execute(&state.db)
-    .await?;
+    let now = now_ms();
+    let result = sqlx::query("UPDATE credentials SET revoked = 1 WHERE id = ? AND tenant_id = ?")
+        .bind(&id)
+        .bind(&tenant.0)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound("Credential not found".into()));
@@ -255,17 +291,20 @@ pub async fn list(
     .fetch_all(&state.db)
     .await?;
 
-    let records = rows.iter().map(|r| -> Result<CredentialRecord, sqlx::Error> {
-        Ok(CredentialRecord {
-            id:                r.try_get(0)?,
-            claim:             r.try_get(1)?,
-            user_token:        r.try_get(2)?,
-            issuer_verify_key: r.try_get(3)?,
-            issued_at:         r.try_get(4)?,
-            expires_at:        r.try_get(5)?,
-            revoked:           r.try_get::<i64, _>(6)? != 0,
+    let records = rows
+        .iter()
+        .map(|r| -> Result<CredentialRecord, sqlx::Error> {
+            Ok(CredentialRecord {
+                id: r.try_get(0)?,
+                claim: r.try_get(1)?,
+                user_token: r.try_get(2)?,
+                issuer_verify_key: r.try_get(3)?,
+                issued_at: r.try_get(4)?,
+                expires_at: r.try_get(5)?,
+                revoked: r.try_get::<i64, _>(6)? != 0,
+            })
         })
-    }).collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(records))
 }

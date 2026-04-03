@@ -1,6 +1,6 @@
-use std::sync::Once;
-use sqlx::AnyPool;
 use crate::config::DatabaseConfig;
+use sqlx::AnyPool;
+use std::sync::Once;
 
 pub type Db = AnyPool;
 
@@ -13,7 +13,11 @@ pub async fn init(database_url: &str) -> anyhow::Result<Db> {
 
     // In-memory databases must use exactly 1 connection, otherwise each connection
     // gets a separate database instance and tables/data won't be shared.
-    let max_conns = if database_url.contains(":memory:") { 1 } else { 10 };
+    let max_conns = if database_url.contains(":memory:") {
+        1
+    } else {
+        10
+    };
 
     let pool = sqlx::pool::PoolOptions::<sqlx::Any>::new()
         .max_connections(max_conns)
@@ -21,7 +25,9 @@ pub async fn init(database_url: &str) -> anyhow::Result<Db> {
         .await?;
 
     if database_url.starts_with("sqlite") {
-        sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await?;
         sqlx::query("PRAGMA foreign_keys=ON").execute(&pool).await?;
     }
 
@@ -50,7 +56,9 @@ pub async fn init_with_config(config: &DatabaseConfig) -> anyhow::Result<Db> {
         .await?;
 
     if config.url.starts_with("sqlite") {
-        sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await?;
         sqlx::query("PRAGMA foreign_keys=ON").execute(&pool).await?;
     }
 

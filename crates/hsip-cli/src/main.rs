@@ -792,9 +792,15 @@ fn main() {
                             Ok(pt) => {
                                 if let Ok(req) = serde_json::from_slice::<ConsentRequest>(&pt) {
                                     let (sk, vk) = load_keypair().expect("identity");
-                                    let resp =
-                                        create_signed_response(&sk, &vk, &req, &decision, ttl_ms, now_ms())
-                                            .expect("build resp");
+                                    let resp = create_signed_response(
+                                        &sk,
+                                        &vk,
+                                        &req,
+                                        &decision,
+                                        ttl_ms,
+                                        now_ms(),
+                                    )
+                                    .expect("build resp");
                                     let body = serde_json::to_vec(&resp).unwrap();
                                     match sess_tx.seal(AAD_CONTROL, &body) {
                                         Ok(ct2) => {
@@ -1660,8 +1666,8 @@ fn main() {
                         let json = match limit {
                             0 => audit_log.export_json().await,
                             n => {
-                                let entries = audit_log.recent(n).await
-                                    .expect("Failed to fetch entries");
+                                let entries =
+                                    audit_log.recent(n).await.expect("Failed to fetch entries");
                                 serde_json::to_string_pretty(&entries)
                                     .map_err(|e| format!("JSON serialization failed: {}", e))
                             }
@@ -1674,7 +1680,9 @@ fn main() {
                                 println!("[AUDIT] This file is court-ready evidence with:");
                                 println!("[AUDIT]   - Ed25519 signatures for non-repudiation");
                                 println!("[AUDIT]   - BLAKE3 chain hashing for tamper detection");
-                                println!("[AUDIT]   - Cryptographic timestamps (NTP-synced if enabled)");
+                                println!(
+                                    "[AUDIT]   - Cryptographic timestamps (NTP-synced if enabled)"
+                                );
                             }
                             Err(e) => eprintln!("[AUDIT] Export failed: {}", e),
                         }
@@ -1716,7 +1724,10 @@ fn main() {
                             Ok(true) => {
                                 let count = audit_log.len().await.unwrap_or(0);
                                 println!("[AUDIT] ✅ Chain integrity verified");
-                                println!("[AUDIT] {} entries checked - no tampering detected", count);
+                                println!(
+                                    "[AUDIT] {} entries checked - no tampering detected",
+                                    count
+                                );
                             }
                             Ok(false) => {
                                 eprintln!("[AUDIT] ❌ Chain integrity FAILED");
@@ -1739,7 +1750,12 @@ fn main() {
         }
 
         #[cfg(feature = "postgres")]
-        Commands::AuditQuery { destination, decision, db, limit } => {
+        Commands::AuditQuery {
+            destination,
+            decision,
+            db,
+            limit,
+        } => {
             use hsip_telemetry_guard::PostgresAuditLog;
 
             let conn_str = db.unwrap_or_else(|| {
@@ -1757,18 +1773,24 @@ fn main() {
 
                 match audit_log.init().await {
                     Ok(()) => {
-                        let entries = audit_log.recent(limit).await
+                        let entries = audit_log
+                            .recent(limit)
+                            .await
                             .expect("Failed to fetch entries");
 
-                        let filtered: Vec<_> = entries.iter()
+                        let filtered: Vec<_> = entries
+                            .iter()
                             .filter(|e| {
                                 if let Some(ref dest) = destination {
-                                    if !e.destination.to_lowercase().contains(&dest.to_lowercase()) {
+                                    if !e.destination.to_lowercase().contains(&dest.to_lowercase())
+                                    {
                                         return false;
                                     }
                                 }
                                 if let Some(ref dec) = decision {
-                                    if format!("{:?}", e.decision).to_lowercase() != dec.to_lowercase() {
+                                    if format!("{:?}", e.decision).to_lowercase()
+                                        != dec.to_lowercase()
+                                    {
                                         return false;
                                     }
                                 }
@@ -1781,7 +1803,8 @@ fn main() {
                         } else {
                             println!("[AUDIT] Found {} matching entries:", filtered.len());
                             for entry in filtered.iter().take(limit) {
-                                println!("  [{:?}] {} -> {} ({})",
+                                println!(
+                                    "  [{:?}] {} -> {} ({})",
                                     entry.decision,
                                     entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
                                     entry.destination,
@@ -1826,9 +1849,15 @@ fn main() {
 
                         println!("[AUDIT] === Audit Log Statistics ===");
                         println!("[AUDIT] Total entries: {}", count);
-                        println!("[AUDIT] Chain integrity: {}", if verified { "✅ Valid" } else { "❌ Invalid" });
+                        println!(
+                            "[AUDIT] Chain integrity: {}",
+                            if verified { "✅ Valid" } else { "❌ Invalid" }
+                        );
                         println!("[AUDIT] Database: PostgreSQL (write-once protected)");
-                        println!("[AUDIT] Court-ready: {}", if verified { "Yes" } else { "No (chain broken)" });
+                        println!(
+                            "[AUDIT] Court-ready: {}",
+                            if verified { "Yes" } else { "No (chain broken)" }
+                        );
                     }
                     Err(e) => eprintln!("[AUDIT] Failed to connect to database: {}", e),
                 }
@@ -1911,9 +1940,7 @@ fn run_demo_site() {
                     resp.add_header(
                         Header::from_bytes(b"X-Content-Type-Options", b"nosniff").unwrap(),
                     );
-                    resp.add_header(
-                        Header::from_bytes(b"X-Frame-Options", b"DENY").unwrap(),
-                    );
+                    resp.add_header(Header::from_bytes(b"X-Frame-Options", b"DENY").unwrap());
                     let _ = req.respond(resp);
                 } else {
                     let resp = Response::from_string("Not Found").with_status_code(StatusCode(404));

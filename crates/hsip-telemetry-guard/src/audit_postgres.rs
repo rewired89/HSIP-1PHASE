@@ -45,7 +45,8 @@ impl PostgresAuditLog {
 
     /// Initialize database connection and schema
     pub async fn init(&self) -> Result<(), String> {
-        let config = self.connection_string
+        let config = self
+            .connection_string
             .parse::<Config>()
             .map_err(|e| format!("Invalid connection string: {}", e))?;
 
@@ -155,7 +156,13 @@ impl PostgresAuditLog {
 
         // Compute entry ID
         let mut id_hasher = blake3::Hasher::new();
-        id_hasher.update(&decision.timestamp.timestamp_nanos_opt().unwrap_or(0).to_le_bytes());
+        id_hasher.update(
+            &decision
+                .timestamp
+                .timestamp_nanos_opt()
+                .unwrap_or(0)
+                .to_le_bytes(),
+        );
         id_hasher.update(decision.flow_summary.flow_id_prefix.as_bytes());
         let entry_id = id_hasher.finalize().as_bytes().to_vec();
 

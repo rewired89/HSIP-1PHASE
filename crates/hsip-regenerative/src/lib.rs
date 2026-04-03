@@ -238,10 +238,7 @@ impl IdentityRegenerator {
     }
 
     /// Shard an identity secret into recoverable pieces
-    pub fn shard_identity(
-        &self,
-        secret: &[u8],
-    ) -> Result<Vec<IdentityShard>, RegenerativeError> {
+    pub fn shard_identity(&self, secret: &[u8]) -> Result<Vec<IdentityShard>, RegenerativeError> {
         if secret.len() > MAX_SECRET_SIZE {
             return Err(RegenerativeError::SecretTooLarge(MAX_SECRET_SIZE));
         }
@@ -275,7 +272,9 @@ impl IdentityRegenerator {
             .into_iter()
             .enumerate()
             .map(|(i, share)| {
-                let (storage_type, label) = self.config.storage_plan
+                let (storage_type, label) = self
+                    .config
+                    .storage_plan
                     .get(i)
                     .cloned()
                     .unwrap_or((ShardStorageType::LocalDevice, format!("Shard {}", i + 1)));
@@ -295,10 +294,7 @@ impl IdentityRegenerator {
     }
 
     /// Recover identity from shards
-    pub fn recover_identity(
-        &self,
-        shards: &[IdentityShard],
-    ) -> Result<Vec<u8>, RegenerativeError> {
+    pub fn recover_identity(&self, shards: &[IdentityShard]) -> Result<Vec<u8>, RegenerativeError> {
         // Check minimum shards
         if shards.len() < self.config.threshold as usize {
             return Err(RegenerativeError::InsufficientShards(
@@ -381,7 +377,8 @@ impl RecoveryProgress {
         if shard.metadata.identity_fingerprint != self.fingerprint {
             return false;
         }
-        self.collected.insert(shard.metadata.index, shard.metadata.clone());
+        self.collected
+            .insert(shard.metadata.index, shard.metadata.clone());
         true
     }
 
@@ -490,7 +487,10 @@ mod tests {
         let recovery_shards = &shards[0..2];
         let result = regenerator.recover_identity(recovery_shards);
 
-        assert!(matches!(result, Err(RegenerativeError::InsufficientShards(2, 3))));
+        assert!(matches!(
+            result,
+            Err(RegenerativeError::InsufficientShards(2, 3))
+        ));
     }
 
     #[test]
@@ -523,8 +523,14 @@ mod tests {
         let shards = regenerator.shard_identity(&secret).unwrap();
 
         // Check metadata
-        assert_eq!(shards[0].metadata.storage_type, ShardStorageType::LocalDevice);
-        assert_eq!(shards[2].metadata.storage_type, ShardStorageType::TrustedContact);
+        assert_eq!(
+            shards[0].metadata.storage_type,
+            ShardStorageType::LocalDevice
+        );
+        assert_eq!(
+            shards[2].metadata.storage_type,
+            ShardStorageType::TrustedContact
+        );
         assert!(shards[0].metadata.expires_at.is_some());
 
         // All shards should have same fingerprint
@@ -561,11 +567,7 @@ mod tests {
 
     #[test]
     fn test_recovery_progress() {
-        let mut progress = RecoveryProgress::start(
-            [1u8; 8],
-            3,
-            Duration::hours(24),
-        );
+        let mut progress = RecoveryProgress::start([1u8; 8], 3, Duration::hours(24));
 
         assert_eq!(progress.remaining(), 3);
         assert!(!progress.can_recover());

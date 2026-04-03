@@ -100,7 +100,10 @@ impl DecoherenceState {
     #[must_use]
     pub fn new_consent() -> Self {
         let config = DecoherenceConfig::default();
-        Self::new(config.consent_lifetime_secs, config.session_idle_timeout_secs)
+        Self::new(
+            config.consent_lifetime_secs,
+            config.session_idle_timeout_secs,
+        )
     }
 
     /// Create with custom expiry date
@@ -131,8 +134,8 @@ impl DecoherenceState {
     /// Check if the entity is idle (exceeded idle timeout)
     #[must_use]
     pub fn is_idle(&self) -> bool {
-        let idle_deadline = self.last_activity
-            + ChronoDuration::seconds(self.idle_timeout_secs as i64);
+        let idle_deadline =
+            self.last_activity + ChronoDuration::seconds(self.idle_timeout_secs as i64);
         Utc::now() > idle_deadline
     }
 

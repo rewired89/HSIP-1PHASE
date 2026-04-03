@@ -69,7 +69,10 @@ impl QuantumNonce {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        Self { bytes, created_at_ms }
+        Self {
+            bytes,
+            created_at_ms,
+        }
     }
 
     /// Get the nonce bytes
@@ -118,7 +121,10 @@ impl QuantumNonce {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        Ok(Self { bytes, created_at_ms })
+        Ok(Self {
+            bytes,
+            created_at_ms,
+        })
     }
 }
 
@@ -260,11 +266,7 @@ impl AntiReplayGuard {
     }
 
     /// Remove oldest entries when cache is too large
-    fn cleanup_oldest(
-        &self,
-        seen: &mut HashSet<[u8; 32]>,
-        order: &mut Vec<NonceEntry>,
-    ) {
+    fn cleanup_oldest(&self, seen: &mut HashSet<[u8; 32]>, order: &mut Vec<NonceEntry>) {
         // Remove oldest 10% of entries
         let remove_count = order.len() / 10;
         for entry in order.drain(..remove_count) {

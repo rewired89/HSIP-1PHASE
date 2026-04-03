@@ -78,11 +78,7 @@ pub struct EntangledConsent {
 
 impl EntangledConsent {
     /// Create a new entanglement between two parties
-    pub fn new(
-        party_a: [u8; 32],
-        party_b: [u8; 32],
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Self {
+    pub fn new(party_a: [u8; 32], party_b: [u8; 32], expires_at: Option<DateTime<Utc>>) -> Self {
         let mut entanglement_id = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut entanglement_id);
 
@@ -142,7 +138,9 @@ impl EntangledConsent {
     /// Revoke consent (breaks entanglement)
     pub fn revoke(&mut self, revoking_party: &[u8; 32]) -> Result<(), EntanglementError> {
         if self.state == EntanglementState::Revoked {
-            return Err(EntanglementError::BrokenByParty(hex::encode(revoking_party)));
+            return Err(EntanglementError::BrokenByParty(hex::encode(
+                revoking_party,
+            )));
         }
 
         if revoking_party != &self.party_a && revoking_party != &self.party_b {
@@ -183,12 +181,7 @@ impl EntangledConsent {
         }
 
         let prev_hash = self.state_history.last().copied().unwrap_or([0u8; 32]);
-        let new_hash = Self::compute_state_hash(
-            &self.entanglement_id,
-            new_state,
-            &prev_hash,
-            now,
-        );
+        let new_hash = Self::compute_state_hash(&self.entanglement_id, new_state, &prev_hash, now);
 
         self.state = new_state;
         self.updated_at = now;
@@ -313,7 +306,10 @@ impl GroupEntanglement {
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<Self, EntanglementError> {
         if threshold > parties.len() || threshold == 0 {
-            return Err(EntanglementError::InsufficientParties(threshold, parties.len()));
+            return Err(EntanglementError::InsufficientParties(
+                threshold,
+                parties.len(),
+            ));
         }
 
         let mut group_id = [0u8; 32];
@@ -475,7 +471,8 @@ impl EntanglementManager {
     pub fn activate(&self, entanglement_id: &[u8; 32]) -> Result<(), EntanglementError> {
         let mut pairwise = self.pairwise.write();
 
-        let entanglement = pairwise.get_mut(entanglement_id)
+        let entanglement = pairwise
+            .get_mut(entanglement_id)
             .ok_or(EntanglementError::NotFound)?;
 
         entanglement.activate()
@@ -489,7 +486,8 @@ impl EntanglementManager {
     ) -> Result<(), EntanglementError> {
         let mut pairwise = self.pairwise.write();
 
-        let entanglement = pairwise.get_mut(entanglement_id)
+        let entanglement = pairwise
+            .get_mut(entanglement_id)
             .ok_or(EntanglementError::NotFound)?;
 
         entanglement.revoke(revoking_party)
@@ -500,7 +498,8 @@ impl EntanglementManager {
         let index = self.party_index.read();
         let pairwise = self.pairwise.read();
 
-        index.get(party)
+        index
+            .get(party)
             .map(|ids| {
                 ids.iter()
                     .filter_map(|id| pairwise.get(id))
@@ -547,7 +546,8 @@ impl EntanglementManager {
     ) -> Result<bool, EntanglementError> {
         let mut groups = self.groups.write();
 
-        let group = groups.get_mut(group_id)
+        let group = groups
+            .get_mut(group_id)
             .ok_or(EntanglementError::NotFound)?;
 
         group.add_consent(party)
@@ -561,7 +561,8 @@ impl EntanglementManager {
     ) -> Result<(), EntanglementError> {
         let mut groups = self.groups.write();
 
-        let group = groups.get_mut(group_id)
+        let group = groups
+            .get_mut(group_id)
             .ok_or(EntanglementError::NotFound)?;
 
         group.remove_consent(party)
@@ -569,7 +570,9 @@ impl EntanglementManager {
 
     /// Check if group is active
     pub fn is_group_active(&self, group_id: &[u8; 32]) -> bool {
-        self.groups.read().get(group_id)
+        self.groups
+            .read()
+            .get(group_id)
             .map(|g| g.is_active())
             .unwrap_or(false)
     }
@@ -582,7 +585,8 @@ impl EntanglementManager {
         // Clean pairwise
         {
             let mut pairwise = self.pairwise.write();
-            let expired_ids: Vec<_> = pairwise.iter()
+            let expired_ids: Vec<_> = pairwise
+                .iter()
                 .filter(|(_, e)| e.expires_at.map(|exp| now > exp).unwrap_or(false))
                 .map(|(id, _)| *id)
                 .collect();
@@ -596,7 +600,8 @@ impl EntanglementManager {
         // Clean groups
         {
             let mut groups = self.groups.write();
-            let expired_ids: Vec<_> = groups.iter()
+            let expired_ids: Vec<_> = groups
+                .iter()
                 .filter(|(_, g)| g.expires_at.map(|exp| now > exp).unwrap_or(false))
                 .map(|(id, _)| *id)
                 .collect();
@@ -615,13 +620,9 @@ impl EntanglementManager {
         let pairwise = self.pairwise.read();
         let groups = self.groups.read();
 
-        let active_pairwise = pairwise.values()
-            .filter(|e| e.is_active())
-            .count();
+        let active_pairwise = pairwise.values().filter(|e| e.is_active()).count();
 
-        let active_groups = groups.values()
-            .filter(|g| g.is_active())
-            .count();
+        let active_groups = groups.values().filter(|g| g.is_active()).count();
 
         EntanglementStats {
             total_pairwise: pairwise.len(),

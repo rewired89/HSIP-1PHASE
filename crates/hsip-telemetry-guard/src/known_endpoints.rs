@@ -3,10 +3,10 @@
 //! A curated database of known telemetry, analytics, and tracking endpoints.
 //! This is used to automatically classify network flows and infer intent.
 
-use crate::{TelemetryIntent, RiskLevel};
+use crate::{RiskLevel, TelemetryIntent};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use parking_lot::RwLock;
 use std::sync::Arc;
 
 /// A known telemetry endpoint entry
@@ -72,9 +72,7 @@ impl EndpointCategory {
     pub fn should_block_by_default(&self) -> bool {
         matches!(
             self,
-            EndpointCategory::AdNetwork
-                | EndpointCategory::Spyware
-                | EndpointCategory::Social
+            EndpointCategory::AdNetwork | EndpointCategory::Spyware | EndpointCategory::Social
         )
     }
 }
@@ -265,7 +263,6 @@ impl EndpointDatabase {
                 description: "Google Play Services telemetry".to_string(),
                 safe_to_block: false,
             },
-
             // === META/FACEBOOK ===
             EndpointEntry {
                 domain_pattern: "*.facebook.com".to_string(),
@@ -307,7 +304,6 @@ impl EndpointDatabase {
                 description: "Instagram analytics".to_string(),
                 safe_to_block: true,
             },
-
             // === MICROSOFT ===
             EndpointEntry {
                 domain_pattern: "*.data.microsoft.com".to_string(),
@@ -359,7 +355,6 @@ impl EndpointDatabase {
                 description: "Azure Application Insights".to_string(),
                 safe_to_block: true,
             },
-
             // === APPLE ===
             EndpointEntry {
                 domain_pattern: "metrics.apple.com".to_string(),
@@ -391,7 +386,6 @@ impl EndpointDatabase {
                 description: "Apple Search Ads".to_string(),
                 safe_to_block: true,
             },
-
             // === THIRD-PARTY ANALYTICS ===
             EndpointEntry {
                 domain_pattern: "*.mixpanel.com".to_string(),
@@ -463,7 +457,6 @@ impl EndpointDatabase {
                 description: "Heap Analytics".to_string(),
                 safe_to_block: true,
             },
-
             // === CRASH REPORTING ===
             EndpointEntry {
                 domain_pattern: "*.sentry.io".to_string(),
@@ -495,7 +488,6 @@ impl EndpointDatabase {
                 description: "Raygun crash reporting".to_string(),
                 safe_to_block: false,
             },
-
             // === AD NETWORKS ===
             EndpointEntry {
                 domain_pattern: "*.criteo.com".to_string(),
@@ -567,7 +559,6 @@ impl EndpointDatabase {
                 description: "PubMatic advertising".to_string(),
                 safe_to_block: true,
             },
-
             // === A/B TESTING ===
             EndpointEntry {
                 domain_pattern: "*.optimizely.com".to_string(),
@@ -599,7 +590,6 @@ impl EndpointDatabase {
                 description: "Split feature flags".to_string(),
                 safe_to_block: false,
             },
-
             // === SPYWARE / AGGRESSIVE TRACKERS ===
             EndpointEntry {
                 domain_pattern: "*.scorecardresearch.com".to_string(),
@@ -661,7 +651,6 @@ impl EndpointDatabase {
                 description: "Branch deep linking & attribution".to_string(),
                 safe_to_block: true,
             },
-
             // === AMAZON ===
             EndpointEntry {
                 domain_pattern: "*.amazon-adsystem.com".to_string(),
@@ -683,7 +672,6 @@ impl EndpointDatabase {
                 description: "Amazon click tracking".to_string(),
                 safe_to_block: true,
             },
-
             // === SOCIAL WIDGETS ===
             EndpointEntry {
                 domain_pattern: "*.twitter.com".to_string(),

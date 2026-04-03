@@ -80,7 +80,11 @@ impl MacOSOverlay {
 
 #[async_trait::async_trait]
 impl InterceptOverlay for MacOSOverlay {
-    async fn show(&mut self, event: &MessagingEvent, recipient: Option<&str>) -> Result<UserChoice> {
+    async fn show(
+        &mut self,
+        event: &MessagingEvent,
+        recipient: Option<&str>,
+    ) -> Result<UserChoice> {
         let content = OverlayContent::from_event(event, recipient);
 
         {
@@ -96,7 +100,10 @@ impl InterceptOverlay for MacOSOverlay {
         let visible = Arc::clone(&self.visible);
         let platform = event.platform;
 
-        info!("Showing macOS overlay notification for {:?}", event.platform);
+        info!(
+            "Showing macOS overlay notification for {:?}",
+            event.platform
+        );
 
         let choice = tokio::task::spawn_blocking(move || {
             let result = Self::show_notification(&summary, &body, timeout_secs);
