@@ -1,32 +1,24 @@
 # HSIP Build & Release Workflow
 #
 # Triggers on every push to main → updates the rolling "latest" pre-release.
-# Users always download from: https://github.com/rewired89/HSIP-1PHASE/releases/tag/latest
+# Users download from: https://github.com/rewired89/HSIP-1PHASE/releases/tag/latest
 #
-# Architecture:
-#   build  (matrix, 4 parallel jobs) → compiles each platform binary
-#   release (single job, runs after all builds finish) → uploads everything at once
-#
-# Using a single upload job eliminates race conditions that caused stale assets.
+# Trigger manually any time from: Actions → Build & release → Run workflow
 
 name: Build & release
 
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
-  workflow_dispatch:   # allows manual trigger from GitHub Actions tab
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  # ── Build ─────────────────────────────────────────────────────────────────
   build:
     name: Build — ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -56,95 +48,113 @@ jobs:
             asset:  hsip-linux-x64
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      # ── Dashboard ──────────────────────────────────────────────────────────
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
-          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm install
 
       - name: Build dashboard
         working-directory: dashboard
-        run: npm ci && npm run build
+        run: npm run build
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify dashboard dist exists
+        shell: bash
+        run: |
+          echo "Dashboard dist contents:"
+          ls -lh dashboard/dist/
+
+      # ── Rust ───────────────────────────────────────────────────────────────
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+      - name: Print Rust version
+        run: rustc --version && cargo --version
 
       - name: Build binary
         run: cargo build --release --package hsip-api --target ${{ matrix.target }} --features hsip-api/embed-dashboard
 
-      - name: Prepare asset (Unix)
+      # ── Package ────────────────────────────────────────────────────────────
+      - name: Package asset (Unix)
         if: runner.os != 'Windows'
         run: |
           strip ${{ matrix.binary }} || true
           cp ${{ matrix.binary }} ${{ matrix.asset }}
           chmod +x ${{ matrix.asset }}
+          ls -lh ${{ matrix.asset }}
 
-      - name: Prepare asset (Windows)
+      - name: Package asset (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Copy-Item "${{ matrix.binary }}" "${{ matrix.asset }}"
+        run: |
+          Copy-Item "${{ matrix.binary }}" "${{ matrix.asset }}"
+          Get-Item "${{ matrix.asset }}"
 
-      # Save binary as a workflow artifact so the release job can pick it up
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
-          retention-days: 1
+          retention-days: 3
 
-  # ── Release ───────────────────────────────────────────────────────────────
-  # Runs once, after ALL build jobs finish. Downloads every artifact and
-  # publishes them in a single operation — no parallel upload races.
+  # ── Release ─────────────────────────────────────────────────────────────────
   release:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download all build artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          merge-multiple: true   # puts every file in the working directory
+          merge-multiple: true
 
-      - name: List files (sanity check)
+      - name: List downloaded files
         run: ls -lh
 
-      # ── Push to main OR manual trigger → update rolling "latest" pre-release
-      - name: Publish to "latest" pre-release
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      - name: Create or update "latest" pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cat > release-notes.md << 'EOF'
-This release rebuilds automatically on every push to main. Always download from here for the latest version.
-
-| Platform | Download |
-|----------|----------|
-| **Windows** | `hsip-windows-x64.exe` |
-| macOS Apple Silicon | `hsip-macos-arm64` |
-| macOS Intel | `hsip-macos-x64` |
-| Linux | `hsip-linux-x64` |
-
-**Windows:** Download `hsip-windows-x64.exe` and double-click it. On first run it installs itself, creates a Desktop shortcut and Start Menu entry, then opens in your browser. Use the shortcut from then on.
-EOF
-
-          echo "Last updated: ${{ github.sha }}" >> release-notes.md
-
+          # Create the release if it doesn't exist yet
           gh release view latest --repo rewired89/HSIP-1PHASE > /dev/null 2>&1 \
-            || gh release create latest --repo rewired89/HSIP-1PHASE \
-                 --prerelease --title "Latest build (auto-updated)" --notes "init"
+            || gh release create latest \
+                 --repo rewired89/HSIP-1PHASE \
+                 --prerelease \
+                 --title "Latest build (auto-updated)" \
+                 --notes "Initializing..."
 
-          gh release edit latest --repo rewired89/HSIP-1PHASE \
+          # Write release notes
+          cat > notes.md << 'EOF'
+Rebuilds automatically on every push to main. Always download from here for the latest version.
+
+| Platform | File |
+|----------|------|
+| **Windows 10 / 11** | `hsip-windows-x64.exe` |
+| macOS Apple Silicon (M1/M2/M3/M4) | `hsip-macos-arm64` |
+| macOS Intel | `hsip-macos-x64` |
+| Linux x64 | `hsip-linux-x64` |
+
+**Windows:** Download `hsip-windows-x64.exe`, double-click it. If Windows shows a blue warning screen click **More info → Run anyway**. Then open your browser and go to `localhost:7474`.
+EOF
+          echo "" >> notes.md
+          echo "Built from commit: ${{ github.sha }}" >> notes.md
+
+          gh release edit latest \
+            --repo rewired89/HSIP-1PHASE \
             --title "Latest build (auto-updated)" \
-            --notes-file release-notes.md
+            --notes-file notes.md
 
+          # Upload binaries (--clobber replaces any existing files)
           gh release upload latest \
             hsip-windows-x64.exe \
             hsip-macos-arm64 \
@@ -153,16 +163,5 @@ EOF
             --repo rewired89/HSIP-1PHASE \
             --clobber
 
-      # ── Versioned release → attach binaries ──────────────────────────────
-      - name: Upload to versioned release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload ${{ github.ref_name }} \
-            hsip-windows-x64.exe \
-            hsip-macos-arm64 \
-            hsip-macos-x64 \
-            hsip-linux-x64 \
-            --repo rewired89/HSIP-1PHASE \
-            --clobber
+          echo "✅ Release updated successfully"
+          gh release view latest --repo rewired89/HSIP-1PHASE
