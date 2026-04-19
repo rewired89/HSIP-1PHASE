@@ -30,7 +30,7 @@ pub use event_monitor::AndroidEventMonitor;
 pub use overlay::AndroidOverlay;
 
 #[cfg(target_os = "android")]
-pub use messenger::{open_messenger_activity, extract_recipient_from_view};
+pub use messenger::{extract_recipient_from_view, open_messenger_activity};
 
 // Stub implementations for non-Android platforms (for compilation)
 #[cfg(not(target_os = "android"))]
@@ -41,7 +41,10 @@ pub mod event_monitor {
     pub struct AndroidEventMonitor;
 
     impl AndroidEventMonitor {
-        pub fn new(_tx: mpsc::Sender<crate::MessagingEvent>, _config: &InterceptConfig) -> Result<Box<dyn EventMonitor>> {
+        pub fn new(
+            _tx: mpsc::Sender<crate::MessagingEvent>,
+            _config: &InterceptConfig,
+        ) -> Result<Box<dyn EventMonitor>> {
             unimplemented!("Android event monitor only available on Android")
         }
     }
@@ -49,7 +52,7 @@ pub mod event_monitor {
 
 #[cfg(not(target_os = "android"))]
 pub mod overlay {
-    use crate::{InterceptOverlay, InterceptConfig, Result};
+    use crate::{InterceptConfig, InterceptOverlay, Result};
 
     pub struct AndroidOverlay;
 
@@ -62,7 +65,7 @@ pub mod overlay {
 
 #[cfg(not(target_os = "android"))]
 pub mod messenger {
-    use crate::{Result, MessagingEvent};
+    use crate::{MessagingEvent, Result};
 
     pub async fn open_messenger_activity(_hint: Option<String>) -> Result<()> {
         unimplemented!("Android messenger only available on Android")

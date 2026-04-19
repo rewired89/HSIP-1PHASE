@@ -470,7 +470,7 @@ fn create_shortcuts(target_exe: &std::path::Path) {
     for folder in &folders {
         let _ = std::fs::create_dir_all(folder);
         let lnk = folder.join("HSIP.lnk");
-        if let Ok(sl) = ShellLink::new(&target) {
+        if let Ok(sl) = ShellLink::new(&*target) {
             let _ = sl.create_lnk(lnk.to_string_lossy().as_ref());
         }
     }

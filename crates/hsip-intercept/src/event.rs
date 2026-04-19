@@ -184,6 +184,9 @@ mod tests {
 
         assert_eq!(event.platform, PlatformType::Instagram);
         assert_eq!(event.confidence, 0.95);
-        assert_eq!(event.metadata.get("resource_id").unwrap(), "direct_inbox_button");
+        assert_eq!(
+            event.metadata.get("resource_id").unwrap(),
+            "direct_inbox_button"
+        );
     }
 }

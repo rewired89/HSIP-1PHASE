@@ -48,7 +48,8 @@ pub fn pad_message(message: &[u8]) -> Vec<u8> {
     let current_len = message.len();
 
     // Find the next bucket size
-    let target_size = BUCKETS.iter()
+    let target_size = BUCKETS
+        .iter()
         .find(|&&size| size >= current_len)
         .copied()
         .unwrap_or(current_len + 256); // If too large, add 256 bytes
@@ -58,9 +59,7 @@ pub fn pad_message(message: &[u8]) -> Vec<u8> {
 
     // Pad with random bytes (more secure than zeros)
     let padding_len = target_size - current_len;
-    let padding: Vec<u8> = (0..padding_len)
-        .map(|_| rand::random::<u8>())
-        .collect();
+    let padding: Vec<u8> = (0..padding_len).map(|_| rand::random::<u8>()).collect();
     padded.extend_from_slice(&padding);
 
     debug!("Padded message: {} -> {} bytes", current_len, target_size);

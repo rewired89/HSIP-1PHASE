@@ -53,7 +53,10 @@ pub struct MacOSEventMonitor {
 
 impl MacOSEventMonitor {
     /// Create a new macOS event monitor.
-    pub fn new(event_tx: mpsc::Sender<MessagingEvent>, config: &InterceptConfig) -> Result<Box<dyn EventMonitor>> {
+    pub fn new(
+        event_tx: mpsc::Sender<MessagingEvent>,
+        config: &InterceptConfig,
+    ) -> Result<Box<dyn EventMonitor>> {
         Ok(Box::new(Self {
             event_tx,
             config: config.clone(),
@@ -118,7 +121,13 @@ impl MacOSEventMonitor {
     /// Check messaging keywords in window title.
     fn has_messaging_title(title: &str) -> (bool, f64) {
         let title_lower = title.to_lowercase();
-        let strong_keywords = ["compose", "new message", "direct message", "dm", "send message"];
+        let strong_keywords = [
+            "compose",
+            "new message",
+            "direct message",
+            "dm",
+            "send message",
+        ];
         let weak_keywords = ["message", "chat", "conversation", "inbox"];
 
         if strong_keywords.iter().any(|&kw| title_lower.contains(kw)) {
@@ -131,11 +140,7 @@ impl MacOSEventMonitor {
     }
 
     /// Core polling tick: sample, compare, and emit event if changed.
-    fn poll_once(
-        &self,
-        last_app: &mut Option<String>,
-        last_title: &mut Option<String>,
-    ) {
+    fn poll_once(&self, last_app: &mut Option<String>, last_title: &mut Option<String>) {
         let (app, title) = Self::sample_frontmost();
 
         // Only proceed if something changed
@@ -167,7 +172,11 @@ impl MacOSEventMonitor {
             .unwrap_or((false, 0.50));
 
         // Confidence: app match alone is 0.6; window title keywords raise it
-        let confidence = if keyword_hit { keyword_confidence } else { 0.60 };
+        let confidence = if keyword_hit {
+            keyword_confidence
+        } else {
+            0.60
+        };
 
         let mut event = MessagingEvent::new(platform, EventType::WindowChange, app_name)
             .with_confidence(confidence);
@@ -193,7 +202,12 @@ impl EventMonitor for MacOSEventMonitor {
         }
 
         // Verify that osascript is available (it always is on macOS, but be defensive)
-        if Command::new("osascript").arg("-e").arg("1").output().is_err() {
+        if Command::new("osascript")
+            .arg("-e")
+            .arg("1")
+            .output()
+            .is_err()
+        {
             return Err(InterceptError::EventMonitor(
                 "osascript not available on this system".to_string(),
             ));

@@ -31,7 +31,10 @@ pub struct LinuxEventMonitor {
 
 impl LinuxEventMonitor {
     /// Create a new Linux event monitor.
-    pub fn new(event_tx: mpsc::Sender<MessagingEvent>, config: &InterceptConfig) -> Result<Box<dyn EventMonitor>> {
+    pub fn new(
+        event_tx: mpsc::Sender<MessagingEvent>,
+        config: &InterceptConfig,
+    ) -> Result<Box<dyn EventMonitor>> {
         Ok(Box::new(Self {
             event_tx,
             config: config.clone(),
@@ -77,7 +80,9 @@ impl LinuxEventMonitor {
             return None;
         }
 
-        let pid_str = String::from_utf8_lossy(&pid_output.stdout).trim().to_string();
+        let pid_str = String::from_utf8_lossy(&pid_output.stdout)
+            .trim()
+            .to_string();
         let pid: u32 = pid_str.parse().ok()?;
         Self::read_proc_comm(pid)
     }
@@ -143,11 +148,7 @@ impl LinuxEventMonitor {
     }
 
     /// Sample the current window state and emit events on change.
-    fn poll_once(
-        &self,
-        last_title: &mut Option<String>,
-        last_process: &mut Option<String>,
-    ) {
+    fn poll_once(&self, last_title: &mut Option<String>, last_process: &mut Option<String>) {
         let (title, process) = if Self::is_wayland() {
             // On Wayland, we can't easily query the focused window without
             // a compositor-specific protocol. Fall back to process scanning.
@@ -183,12 +184,23 @@ impl LinuxEventMonitor {
         // Compute confidence from title keywords
         let title_lower = title.as_deref().unwrap_or("").to_lowercase();
         let messaging_keywords = [
-            "compose", "message", "chat", "direct", "dm",
-            "messenger", "inbox", "conversation", "write",
-            "new message", "send", "reply",
+            "compose",
+            "message",
+            "chat",
+            "direct",
+            "dm",
+            "messenger",
+            "inbox",
+            "conversation",
+            "write",
+            "new message",
+            "send",
+            "reply",
         ];
 
-        let keyword_hit = messaging_keywords.iter().any(|&kw| title_lower.contains(kw));
+        let keyword_hit = messaging_keywords
+            .iter()
+            .any(|&kw| title_lower.contains(kw));
         let confidence = if keyword_hit { 0.85 } else { 0.55 };
 
         let mut event = MessagingEvent::new(platform, EventType::WindowChange, process_name)
@@ -222,8 +234,10 @@ impl EventMonitor for LinuxEventMonitor {
         if !Self::is_wayland() {
             // Check if xdotool is available
             if Command::new("xdotool").arg("--version").output().is_err() {
-                warn!("xdotool not found; falling back to /proc scanning. \
-                       Install xdotool for more accurate window detection.");
+                warn!(
+                    "xdotool not found; falling back to /proc scanning. \
+                       Install xdotool for more accurate window detection."
+                );
             }
         }
 

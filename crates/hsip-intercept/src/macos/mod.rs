@@ -19,7 +19,9 @@ pub use overlay::MacOSOverlay;
 ///
 /// Reads the window title stored in event metadata and parses common
 /// patterns like "Chat with Alice" or "Alice - iMessage".
-pub fn extract_recipient_from_window(event: &crate::event::MessagingEvent) -> crate::Result<String> {
+pub fn extract_recipient_from_window(
+    event: &crate::event::MessagingEvent,
+) -> crate::Result<String> {
     if let Some(title) = &event.window_title {
         // Patterns: "Chat with Alice", "Alice – Telegram", "Alice - Messages"
         for prefix in &["Chat with ", "DM with ", "Message to "] {
@@ -38,5 +40,7 @@ pub fn extract_recipient_from_window(event: &crate::event::MessagingEvent) -> cr
             }
         }
     }
-    Err(crate::InterceptError::EventMonitor("Cannot extract recipient from macOS window".to_string()))
+    Err(crate::InterceptError::EventMonitor(
+        "Cannot extract recipient from macOS window".to_string(),
+    ))
 }

@@ -1,6 +1,6 @@
 //! Windows HSIP Messenger window integration.
 
-use crate::{Result, InterceptError, MessagingEvent};
+use crate::{InterceptError, MessagingEvent, Result};
 use tracing::{info, warn};
 
 /// Open HSIP Messenger window.
@@ -10,7 +10,10 @@ use tracing::{info, warn};
 /// 2. Activate existing messenger window
 /// 3. Show a temporary encrypted text input dialog
 pub async fn open_messenger_window(recipient_hint: Option<String>) -> Result<()> {
-    info!("Opening HSIP Messenger window (recipient: {:?})", recipient_hint);
+    info!(
+        "Opening HSIP Messenger window (recipient: {:?})",
+        recipient_hint
+    );
 
     // TODO: Implement messenger window
     // Options:
@@ -26,13 +29,19 @@ pub async fn open_messenger_window(recipient_hint: Option<String>) -> Result<()>
         use windows::Win32::UI::WindowsAndMessaging::*;
 
         let message = if let Some(recipient) = recipient_hint {
-            format!("Opening HSIP Messenger for: {}\n\n(Messenger UI not yet implemented)", recipient)
+            format!(
+                "Opening HSIP Messenger for: {}\n\n(Messenger UI not yet implemented)",
+                recipient
+            )
         } else {
             "Opening HSIP Messenger\n\n(Messenger UI not yet implemented)".to_string()
         };
 
         let wide_msg: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
-        let wide_title: Vec<u16> = "HSIP Messenger".encode_utf16().chain(std::iter::once(0)).collect();
+        let wide_title: Vec<u16> = "HSIP Messenger"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
         MessageBoxW(
             None,

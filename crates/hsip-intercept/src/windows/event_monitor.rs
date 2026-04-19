@@ -1,22 +1,25 @@
 //! Windows UI Automation event monitoring.
 
 use crate::{
-    EventMonitor, MessagingEvent, EventType, PlatformType, InterceptConfig, Result, InterceptError,
+    EventMonitor, EventType, InterceptConfig, InterceptError, MessagingEvent, PlatformType, Result,
+};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use tokio::sync::mpsc;
-use tracing::{info, debug, error};
+use tracing::{debug, error, info};
 use windows::{
     core::*,
     Win32::Foundation::*,
     Win32::System::Com::{
-        CoInitializeEx, CoCreateInstance, CoUninitialize,
-        COINIT_APARTMENTTHREADED, CLSCTX_INPROC_SERVER,
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
     },
     Win32::System::Threading::*,
     Win32::UI::Accessibility::*,
     Win32::UI::WindowsAndMessaging::*,
 };
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 /// Wrapper for COM objects to mark them as Send+Sync.
 /// SAFETY: Windows COM objects with apartment threading are safe to move between threads
@@ -71,12 +74,10 @@ impl WindowsEventMonitor {
                 .map_err(|e| InterceptError::EventMonitor(format!("COM init failed: {}", e)))?;
 
             // Create IUIAutomation instance
-            let automation: IUIAutomation = CoCreateInstance(
-                &CUIAutomation,
-                None,
-                CLSCTX_INPROC_SERVER,
-            )
-            .map_err(|e| InterceptError::EventMonitor(format!("Failed to create IUIAutomation: {}", e)))?;
+            let automation: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).map_err(|e| {
+                    InterceptError::EventMonitor(format!("Failed to create IUIAutomation: {}", e))
+                })?;
 
             self.automation = SendSyncWrapper::new(automation);
             info!("UI Automation initialized successfully");
@@ -86,8 +87,9 @@ impl WindowsEventMonitor {
 
     /// Register event handlers for UI Automation events.
     fn register_event_handlers(&self) -> Result<()> {
-        let automation = self.automation.as_ref()
-            .ok_or_else(|| InterceptError::EventMonitor("Automation not initialized".to_string()))?;
+        let automation = self.automation.as_ref().ok_or_else(|| {
+            InterceptError::EventMonitor("Automation not initialized".to_string())
+        })?;
 
         unsafe {
             // Register for InvokePattern events (button clicks)
@@ -205,7 +207,9 @@ impl WindowsEventMonitor {
             PROCESS_NAME_WIN32,
             windows::core::PWSTR(process_name_buf.as_mut_ptr()),
             &mut size,
-        ).is_ok() {
+        )
+        .is_ok()
+        {
             String::from_utf16_lossy(&process_name_buf[..size as usize])
         } else {
             "unknown".to_string()
@@ -267,7 +271,8 @@ impl WindowsEventMonitor {
             // Adjust confidence based on window title
             if window_info.title.to_lowercase().contains("compose")
                 || window_info.title.to_lowercase().contains("message")
-                || window_info.title.to_lowercase().contains("chat") {
+                || window_info.title.to_lowercase().contains("chat")
+            {
                 event = event.with_confidence(0.85);
             }
 
@@ -288,11 +293,19 @@ impl WindowsEventMonitor {
         // Check for common messaging indicators
         let title_lower = window_info.title.to_lowercase();
         let messaging_keywords = [
-            "compose", "message", "chat", "direct", "dm",
-            "messenger", "inbox", "conversation",
+            "compose",
+            "message",
+            "chat",
+            "direct",
+            "dm",
+            "messenger",
+            "inbox",
+            "conversation",
         ];
 
-        messaging_keywords.iter().any(|&keyword| title_lower.contains(keyword))
+        messaging_keywords
+            .iter()
+            .any(|&keyword| title_lower.contains(keyword))
     }
 }
 
@@ -331,17 +344,27 @@ impl EventMonitor for WindowsEventMonitor {
                             // Check if window changed
                             if Some(&window_info) != last_focused_window.as_ref() {
                                 // Create and send event synchronously
-                                let platform = PlatformType::from_process_name(&window_info.process_name);
+                                let platform =
+                                    PlatformType::from_process_name(&window_info.process_name);
 
                                 // Check for messaging window
                                 let title_lower = window_info.title.to_lowercase();
                                 let messaging_keywords = [
-                                    "compose", "message", "chat", "direct", "dm",
-                                    "messenger", "inbox", "conversation",
+                                    "compose",
+                                    "message",
+                                    "chat",
+                                    "direct",
+                                    "dm",
+                                    "messenger",
+                                    "inbox",
+                                    "conversation",
                                 ];
 
-                                if messaging_keywords.iter().any(|&kw| title_lower.contains(kw))
-                                   && config.is_platform_enabled(platform) {
+                                if messaging_keywords
+                                    .iter()
+                                    .any(|&kw| title_lower.contains(kw))
+                                    && config.is_platform_enabled(platform)
+                                {
                                     let event = MessagingEvent::new(
                                         platform,
                                         EventType::WindowChange,
