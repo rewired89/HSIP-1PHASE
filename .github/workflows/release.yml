@@ -1,9 +1,13 @@
 # HSIP Build & Release Workflow
 #
 # Triggers on every push to main → updates the rolling "latest" pre-release.
-# Users download from: https://github.com/rewired89/HSIP-1PHASE/releases/tag/latest
+# Users always download from: https://github.com/rewired89/HSIP-1PHASE/releases/tag/latest
 #
 # Trigger manually any time from: Actions → Build & release → Run workflow
+#
+# Architecture:
+#   build  (matrix, 4 parallel jobs) → compiles each platform binary
+#   release (single job, runs after all builds finish) → uploads everything at once
 
 name: Build & release
 
@@ -16,9 +20,11 @@ permissions:
   contents: write
 
 jobs:
+  # ── Build ─────────────────────────────────────────────────────────────────────────────
   build:
     name: Build — ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -48,43 +54,28 @@ jobs:
             asset:  hsip-linux-x64
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # ── Dashboard ──────────────────────────────────────────────────────────
-      - name: Setup Node 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install dashboard dependencies
-        working-directory: dashboard
-        run: npm install
-
       - name: Build dashboard
         working-directory: dashboard
-        run: npm run build
+        run: npm install && npm run build
 
-      - name: Verify dashboard dist exists
+      - name: Verify dashboard dist
         shell: bash
-        run: |
-          echo "Dashboard dist contents:"
-          ls -lh dashboard/dist/
+        run: ls -lh dashboard/dist/
 
-      # ── Rust ───────────────────────────────────────────────────────────────
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Print Rust version
-        run: rustc --version && cargo --version
 
       - name: Build binary
         run: cargo build --release --package hsip-api --target ${{ matrix.target }} --features hsip-api/embed-dashboard
 
-      # ── Package ────────────────────────────────────────────────────────────
-      - name: Package asset (Unix)
+      - name: Prepare asset (Unix)
         if: runner.os != 'Windows'
         run: |
           strip ${{ matrix.binary }} || true
@@ -92,7 +83,7 @@ jobs:
           chmod +x ${{ matrix.asset }}
           ls -lh ${{ matrix.asset }}
 
-      - name: Package asset (Windows)
+      - name: Prepare asset (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -106,14 +97,14 @@ jobs:
           path: ${{ matrix.asset }}
           retention-days: 3
 
-  # ── Release ─────────────────────────────────────────────────────────────────
+  # ── Release ───────────────────────────────────────────────────────────────────────────
   release:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download all artifacts
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           merge-multiple: true
@@ -133,21 +124,23 @@ jobs:
                  --title "Latest build (auto-updated)" \
                  --notes "Initializing..."
 
-          # Write release notes
-          cat > notes.md << 'EOF'
-Rebuilds automatically on every push to main. Always download from here for the latest version.
-
-| Platform | File |
-|----------|------|
-| **Windows 10 / 11** | `hsip-windows-x64.exe` |
-| macOS Apple Silicon (M1/M2/M3/M4) | `hsip-macos-arm64` |
-| macOS Intel | `hsip-macos-x64` |
-| Linux x64 | `hsip-linux-x64` |
-
-**Windows:** Download `hsip-windows-x64.exe`, double-click it. If Windows shows a blue warning screen click **More info → Run anyway**. Then open your browser and go to `localhost:7474`.
-EOF
-          echo "" >> notes.md
-          echo "Built from commit: ${{ github.sha }}" >> notes.md
+          # Write release notes without heredoc to avoid YAML parse errors
+          {
+            echo "Rebuilds automatically on every push to main. Always download from here for the latest version."
+            echo ""
+            echo "DOWNLOADS"
+            echo "---------"
+            echo "Windows 10 / 11                    hsip-windows-x64.exe"
+            echo "macOS Apple Silicon (M1/M2/M3/M4)  hsip-macos-arm64"
+            echo "macOS Intel                         hsip-macos-x64"
+            echo "Linux x64                           hsip-linux-x64"
+            echo ""
+            echo "Windows: Download hsip-windows-x64.exe and double-click it."
+            echo "If Windows shows a blue warning screen, click More info then Run anyway."
+            echo "Then open your browser and go to localhost:7474."
+            echo ""
+            echo "Built from commit: ${{ github.sha }}"
+          } > notes.md
 
           gh release edit latest \
             --repo rewired89/HSIP-1PHASE \
@@ -163,5 +156,5 @@ EOF
             --repo rewired89/HSIP-1PHASE \
             --clobber
 
-          echo "✅ Release updated successfully"
+          echo "Release updated successfully"
           gh release view latest --repo rewired89/HSIP-1PHASE
