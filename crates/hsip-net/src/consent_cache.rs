@@ -80,7 +80,10 @@ impl SharedConsentCache {
 
     /// Create a consent check callback for use with sessions
     /// Sessions will check consent on every encrypt/decrypt operation
-    pub fn create_check_callback(&self, peer_id: String) -> impl Fn() -> bool + Send + Sync + 'static {
+    pub fn create_check_callback(
+        &self,
+        peer_id: String,
+    ) -> impl Fn() -> bool + Send + Sync + 'static {
         let cache = self.clone();
         move || cache.is_allowed(&peer_id)
     }

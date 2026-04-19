@@ -1,24 +1,32 @@
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{auth::{TenantId, hash_key}, db::now_ms, errors::{ApiError, ApiResult}, state::AppState};
+use crate::{
+    auth::{hash_key, TenantId},
+    db::now_ms,
+    errors::{ApiError, ApiResult},
+    state::AppState,
+};
 
 #[derive(Deserialize)]
 pub struct CreateKeyRequest {
-    pub name:       Option<String>,
+    pub name: Option<String>,
     pub agent_type: Option<String>, // "human" | "service" | "ai_agent"
     pub expires_in_days: Option<i64>,
 }
 
 #[derive(Serialize)]
 pub struct CreateKeyResponse {
-    pub id:         String,
-    pub key:        String,
-    pub name:       String,
+    pub id: String,
+    pub key: String,
+    pub name: String,
     pub agent_type: String,
     pub created_at: i64,
     pub expires_at: Option<i64>,
@@ -26,12 +34,12 @@ pub struct CreateKeyResponse {
 
 #[derive(Serialize)]
 pub struct KeyRecord {
-    pub id:         String,
-    pub name:       String,
+    pub id: String,
+    pub name: String,
     pub agent_type: String,
     pub created_at: i64,
     pub expires_at: Option<i64>,
-    pub active:     bool,
+    pub active: bool,
 }
 
 pub async fn create(
@@ -39,16 +47,17 @@ pub async fn create(
     tenant: TenantId,
     Json(req): Json<CreateKeyRequest>,
 ) -> ApiResult<Json<CreateKeyResponse>> {
-    let raw_key    = gen_key();
-    let key_hash   = hash_key(&raw_key);
-    let name       = req.name.unwrap_or_else(|| "default".into());
-    let agent_type = req.agent_type
+    let raw_key = gen_key();
+    let key_hash = hash_key(&raw_key);
+    let name = req.name.unwrap_or_else(|| "default".into());
+    let agent_type = req
+        .agent_type
         .as_deref()
         .filter(|t| ["human", "service", "ai_agent"].contains(t))
         .unwrap_or("human")
         .to_string();
-    let now        = now_ms();
-    let id         = Uuid::new_v4().to_string();
+    let now = now_ms();
+    let id = Uuid::new_v4().to_string();
     let expires_at = req.expires_in_days.map(|d| now + d * 86_400_000);
 
     sqlx::query(
@@ -65,7 +74,14 @@ pub async fn create(
     .execute(&state.db)
     .await?;
 
-    Ok(Json(CreateKeyResponse { id, key: raw_key, name, agent_type, created_at: now, expires_at }))
+    Ok(Json(CreateKeyResponse {
+        id,
+        key: raw_key,
+        name,
+        agent_type,
+        created_at: now,
+        expires_at,
+    }))
 }
 
 pub async fn list(
@@ -80,16 +96,19 @@ pub async fn list(
     .fetch_all(&state.db)
     .await?;
 
-    let keys = rows.iter().map(|r| -> Result<KeyRecord, sqlx::Error> {
-        Ok(KeyRecord {
-            id:         r.try_get(0)?,
-            name:       r.try_get(1)?,
-            agent_type: r.try_get(2)?,
-            created_at: r.try_get(3)?,
-            expires_at: r.try_get(4)?,
-            active:     r.try_get::<i64, _>(5)? != 0,
+    let keys = rows
+        .iter()
+        .map(|r| -> Result<KeyRecord, sqlx::Error> {
+            Ok(KeyRecord {
+                id: r.try_get(0)?,
+                name: r.try_get(1)?,
+                agent_type: r.try_get(2)?,
+                created_at: r.try_get(3)?,
+                expires_at: r.try_get(4)?,
+                active: r.try_get::<i64, _>(5)? != 0,
+            })
         })
-    }).collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(keys))
 }
@@ -99,13 +118,11 @@ pub async fn revoke(
     tenant: TenantId,
     Path(key_id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let result = sqlx::query(
-        "UPDATE api_keys SET active=0 WHERE id=? AND tenant_id=?",
-    )
-    .bind(&key_id)
-    .bind(&tenant.0)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("UPDATE api_keys SET active=0 WHERE id=? AND tenant_id=?")
+        .bind(&key_id)
+        .bind(&tenant.0)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound(format!("Key {key_id} not found")));

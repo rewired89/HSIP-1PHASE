@@ -28,10 +28,14 @@ mod tests {
     #[test]
     fn verify_label_uniqueness() {
         let labels = [
-            AAD_HELLO, AAD_CONSENT, AAD_DATA, 
-            AAD_TICKET, AAD_REKEY, AAD_STATUS
+            AAD_HELLO,
+            AAD_CONSENT,
+            AAD_DATA,
+            AAD_TICKET,
+            AAD_REKEY,
+            AAD_STATUS,
         ];
-        
+
         for i in 0..labels.len() {
             for j in (i + 1)..labels.len() {
                 assert_ne!(

@@ -94,7 +94,11 @@ pub fn validate_peer_id(peer_id: &str) -> Result<(), ValidationError> {
 }
 
 /// Validates a hex string (signature, public key, etc.)
-pub fn validate_hex_string(hex: &str, max_len: usize, field_name: &str) -> Result<(), ValidationError> {
+pub fn validate_hex_string(
+    hex: &str,
+    max_len: usize,
+    field_name: &str,
+) -> Result<(), ValidationError> {
     if hex.is_empty() {
         return Err(ValidationError::Empty(field_name.to_string()));
     }

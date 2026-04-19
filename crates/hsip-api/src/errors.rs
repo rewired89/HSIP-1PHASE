@@ -1,4 +1,8 @@
-use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde_json::json;
 use thiserror::Error;
 
@@ -19,7 +23,9 @@ pub enum ApiError {
 }
 
 impl From<anyhow::Error> for ApiError {
-    fn from(e: anyhow::Error) -> Self { ApiError::Internal(e.to_string()) }
+    fn from(e: anyhow::Error) -> Self {
+        ApiError::Internal(e.to_string())
+    }
 }
 
 impl From<sqlx::Error> for ApiError {
@@ -34,12 +40,12 @@ impl From<sqlx::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
-            ApiError::Unauthorized(m)    => (StatusCode::UNAUTHORIZED, m.clone()),
-            ApiError::NotFound(m)        => (StatusCode::NOT_FOUND, m.clone()),
-            ApiError::BadRequest(m)      => (StatusCode::BAD_REQUEST, m.clone()),
-            ApiError::Conflict(m)        => (StatusCode::CONFLICT, m.clone()),
+            ApiError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
+            ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
+            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m.clone()),
-            ApiError::Internal(m)        => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
+            ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
         };
         (status, Json(json!({ "error": message }))).into_response()
     }

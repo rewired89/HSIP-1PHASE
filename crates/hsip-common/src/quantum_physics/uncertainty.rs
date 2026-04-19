@@ -313,24 +313,37 @@ impl UncertaintyConfig {
             PrivacyLevel::Balanced => {
                 // Pad to next 256 bytes
                 let remainder = message_size % 256;
-                if remainder == 0 { 0 } else { 256 - remainder }
+                if remainder == 0 {
+                    0
+                } else {
+                    256 - remainder
+                }
             }
             PrivacyLevel::Enhanced => {
                 // Pad to next 1KB
                 let remainder = message_size % 1024;
-                if remainder == 0 { 0 } else { 1024 - remainder }
+                if remainder == 0 {
+                    0
+                } else {
+                    1024 - remainder
+                }
             }
             PrivacyLevel::Maximum => {
                 // Pad all messages to fixed size (4KB)
                 let target = 4096;
-                if message_size >= target { 0 } else { target - message_size }
+                if message_size >= target {
+                    0
+                } else {
+                    target - message_size
+                }
             }
         }
     }
 
     /// Get cover traffic interval (if enabled)
     pub fn cover_traffic_interval_ms(&self) -> Option<u64> {
-        if self.features.cover_traffic || self.custom_overrides.get("cover_traffic") == Some(&true) {
+        if self.features.cover_traffic || self.custom_overrides.get("cover_traffic") == Some(&true)
+        {
             Some(match self.level {
                 PrivacyLevel::Maximum => 1000,  // Every second
                 PrivacyLevel::Enhanced => 5000, // Every 5 seconds
@@ -343,7 +356,9 @@ impl UncertaintyConfig {
 
     /// Get delay for batched delivery (if enabled)
     pub fn batch_delay_ms(&self) -> Option<u64> {
-        if self.features.delayed_delivery || self.custom_overrides.get("delayed_delivery") == Some(&true) {
+        if self.features.delayed_delivery
+            || self.custom_overrides.get("delayed_delivery") == Some(&true)
+        {
             Some(self.performance.delivery_delay_ms)
         } else {
             None
@@ -511,9 +526,8 @@ impl SliderData {
     pub fn decrease(&mut self) {
         if self.position > 0 {
             self.position -= 1;
-            self.summary = TradeoffSummary::for_level(
-                PrivacyLevel::from_value(self.position).unwrap()
-            );
+            self.summary =
+                TradeoffSummary::for_level(PrivacyLevel::from_value(self.position).unwrap());
         }
     }
 
@@ -521,9 +535,8 @@ impl SliderData {
     pub fn increase(&mut self) {
         if self.position < 4 {
             self.position += 1;
-            self.summary = TradeoffSummary::for_level(
-                PrivacyLevel::from_value(self.position).unwrap()
-            );
+            self.summary =
+                TradeoffSummary::for_level(PrivacyLevel::from_value(self.position).unwrap());
         }
     }
 

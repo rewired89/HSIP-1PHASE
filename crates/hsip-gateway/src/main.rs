@@ -8,11 +8,17 @@ use std::path::PathBuf;
 fn main() -> Result<()> {
     let gateway_config = build_gateway_configuration();
 
-    println!("[gateway] Initializing with configuration: {:?}", gateway_config);
+    println!(
+        "[gateway] Initializing with configuration: {:?}",
+        gateway_config
+    );
 
     // Generate proxy auto-config files for easy setup
     if let Err(e) = generate_proxy_config_files(&gateway_config.listen_addr) {
-        eprintln!("[gateway] Warning: Failed to generate proxy config files: {}", e);
+        eprintln!(
+            "[gateway] Warning: Failed to generate proxy config files: {}",
+            e
+        );
     }
 
     run_proxy(gateway_config)
@@ -51,19 +57,20 @@ fn generate_proxy_config_files(listen_addr: &str) -> Result<()> {
 
     // Generate Windows registry scripts for easy enable/disable
     #[cfg(target_os = "windows")]
-    {{
-        let enable_script = format!(
-            r#"@echo off
+    {
+        {
+            let enable_script = format!(
+                r#"@echo off
 echo Enabling HSIP Privacy Proxy...
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "{}" /f
 echo HSIP proxy enabled. Please restart your browser.
 pause
 "#,
-            listen_addr
-        );
+                listen_addr
+            );
 
-        let disable_script = r#"@echo off
+            let disable_script = r#"@echo off
 echo Disabling HSIP Privacy Proxy...
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /f 2>nul
@@ -71,10 +78,14 @@ echo HSIP proxy disabled. Please restart your browser.
 pause
 "#;
 
-        fs::write(config_dir.join("enable-proxy.bat"), enable_script)?;
-        fs::write(config_dir.join("disable-proxy.bat"), disable_script)?;
-        println!("[gateway] Generated Windows proxy scripts in: {}", config_dir.display());
-    }}
+            fs::write(config_dir.join("enable-proxy.bat"), enable_script)?;
+            fs::write(config_dir.join("disable-proxy.bat"), disable_script)?;
+            println!(
+                "[gateway] Generated Windows proxy scripts in: {}",
+                config_dir.display()
+            );
+        }
+    }
 
     Ok(())
 }
@@ -83,11 +94,10 @@ fn get_config_directory() -> Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         // Use LocalAppData for Windows
-        let local_appdata = std::env::var("LOCALAPPDATA")
-            .unwrap_or_else(|_| {
-                let userprofile = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
-                format!("{}\\AppData\\Local", userprofile)
-            });
+        let local_appdata = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
+            let userprofile = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
+            format!("{}\\AppData\\Local", userprofile)
+        });
         Ok(PathBuf::from(local_appdata).join("HSIP").join("gateway"))
     }
 
@@ -95,7 +105,10 @@ fn get_config_directory() -> Result<PathBuf> {
     {
         // Use ~/.config/hsip on Unix-like systems
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        Ok(PathBuf::from(home).join(".config").join("hsip").join("gateway"))
+        Ok(PathBuf::from(home)
+            .join(".config")
+            .join("hsip")
+            .join("gateway"))
     }
 }
 
@@ -110,8 +123,7 @@ fn build_gateway_configuration() -> Config {
 }
 
 fn read_listen_address() -> String {
-    std::env::var("HSIP_GATEWAY_LISTEN")
-        .unwrap_or_else(|_| String::from("127.0.0.1:8080"))
+    std::env::var("HSIP_GATEWAY_LISTEN").unwrap_or_else(|_| String::from("127.0.0.1:8080"))
 }
 
 fn read_timeout_configuration() -> u64 {

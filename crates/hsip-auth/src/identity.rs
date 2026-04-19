@@ -23,8 +23,7 @@ fn create_and_store_new_identity() -> Result<(SigningKey, VerifyingKey)> {
 // Generate base64-encoded peer identifier from verifying key
 pub fn peer_id_b64() -> Result<String> {
     let (_signing_key, verifying_key) = ensure_device_identity()?;
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(verifying_key.to_bytes());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(verifying_key.to_bytes());
     Ok(encoded)
 }
 

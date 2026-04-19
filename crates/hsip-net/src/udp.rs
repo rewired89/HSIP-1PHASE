@@ -94,14 +94,22 @@ pub mod hello {
                     last_error = Some(e);
                     if attempt < max_retries {
                         let delay_ms = 1000 * (1 << attempt); // Exponential: 1s, 2s, 4s
-                        eprintln!("[hello] send failed (attempt {}), retrying in {}ms...", attempt + 1, delay_ms);
+                        eprintln!(
+                            "[hello] send failed (attempt {}), retrying in {}ms...",
+                            attempt + 1,
+                            delay_ms
+                        );
                         std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                     }
                 }
             }
         }
 
-        Err(anyhow!("HELLO send failed after {} retries: {}", max_retries, last_error.unwrap()))
+        Err(anyhow!(
+            "HELLO send failed after {} retries: {}",
+            max_retries,
+            last_error.unwrap()
+        ))
     }
 }
 
@@ -506,7 +514,10 @@ fn handle_control_message(
             // Add to consent cache
             consent_cache.insert_allow(&peer_id);
 
-            println!("[consent] Attached instant revocation to session for peer: {}", peer_id);
+            println!(
+                "[consent] Attached instant revocation to session for peer: {}",
+                peer_id
+            );
         }
 
         let response =

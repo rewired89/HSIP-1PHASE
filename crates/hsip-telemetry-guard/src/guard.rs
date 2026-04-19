@@ -3,10 +3,9 @@
 //! The TelemetryGuard combines all components into a single, easy-to-use interface.
 
 use crate::{
-    AuditLog, ConsentGate, ConsentScope, Decision, DecisionStats, DecisionType,
-    EndpointDatabase, FlowMeta, PolicyConfig, PolicyEngine, PolicyRule,
-    QuarantineReason, QuarantineStorage, QuarantineStats, TelemetryConsent,
-    TelemetryGuardError, Result,
+    AuditLog, ConsentGate, ConsentScope, Decision, DecisionStats, DecisionType, EndpointDatabase,
+    FlowMeta, PolicyConfig, PolicyEngine, PolicyRule, QuarantineReason, QuarantineStats,
+    QuarantineStorage, Result, TelemetryConsent, TelemetryGuardError,
 };
 use hsip_common::quantum_physics::uncertainty::PrivacyLevel;
 use parking_lot::RwLock;
@@ -140,11 +139,7 @@ impl TelemetryGuard {
     }
 
     /// Evaluate and optionally quarantine
-    pub fn evaluate_with_quarantine(
-        &self,
-        flow: &FlowMeta,
-        payload: Option<&[u8]>,
-    ) -> Decision {
+    pub fn evaluate_with_quarantine(&self, flow: &FlowMeta, payload: Option<&[u8]>) -> Decision {
         let decision = self.evaluate(flow);
 
         // Quarantine if decision is to quarantine
@@ -231,7 +226,8 @@ impl TelemetryGuard {
             self.consent.grant_for_scope(scope, grantor)?;
 
             // Mark as approved
-            self.quarantine.set_status(entry_id, crate::ReviewStatus::Approved);
+            self.quarantine
+                .set_status(entry_id, crate::ReviewStatus::Approved);
 
             Ok(())
         } else {
@@ -257,7 +253,8 @@ impl TelemetryGuard {
             });
 
             // Mark as rejected
-            self.quarantine.set_status(entry_id, crate::ReviewStatus::Rejected);
+            self.quarantine
+                .set_status(entry_id, crate::ReviewStatus::Rejected);
 
             Ok(())
         } else {
@@ -323,7 +320,8 @@ impl TelemetryGuard {
             "rules": self.rules(),
             "consents": self.active_consents(),
             "audit_sample": self.recent_audit(100),
-        }).to_string()
+        })
+        .to_string()
     }
 }
 

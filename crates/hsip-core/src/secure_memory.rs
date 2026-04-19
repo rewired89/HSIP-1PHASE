@@ -47,9 +47,7 @@ impl SecureBytes {
 
     /// Create zeroed bytes of given length
     pub fn zeroed(len: usize) -> Self {
-        Self {
-            data: vec![0; len],
-        }
+        Self { data: vec![0; len] }
     }
 
     /// Get length

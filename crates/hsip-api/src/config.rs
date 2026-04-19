@@ -1,7 +1,7 @@
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -90,10 +90,18 @@ fn normalise_sqlite_url(url: &str) -> String {
     url.replace('\\', "/")
 }
 
-fn default_true() -> bool { true }
-fn default_max_connections() -> u32 { 10 }
-fn default_rate_limit() -> u32 { 60 }
-fn default_log_level() -> String { "info".to_string() }
+fn default_true() -> bool {
+    true
+}
+fn default_max_connections() -> u32 {
+    10
+}
+fn default_rate_limit() -> u32 {
+    60
+}
+fn default_log_level() -> String {
+    "info".to_string()
+}
 
 impl Config {
     /// Load configuration from file, with environment variable overrides
@@ -122,8 +130,7 @@ impl Config {
             config.security.admin_key_path = admin_key_path;
         }
         if let Ok(port) = std::env::var("PORT") {
-            config.server.port = port.parse()
-                .context("PORT must be a valid u16")?;
+            config.server.port = port.parse().context("PORT must be a valid u16")?;
         }
 
         Ok(config)
@@ -134,13 +141,17 @@ impl Config {
         // Validate database URL format
         if !self.database.url.starts_with("sqlite:")
             && !self.database.url.starts_with("postgres://")
-            && !self.database.url.starts_with("postgresql://") {
+            && !self.database.url.starts_with("postgresql://")
+        {
             bail!("database.url must start with 'sqlite:', 'postgres://', or 'postgresql://'");
         }
 
         // Check master key file exists
         if !Path::new(&self.security.master_key_path).exists() {
-            bail!("Master key file not found: {}", self.security.master_key_path);
+            bail!(
+                "Master key file not found: {}",
+                self.security.master_key_path
+            );
         }
 
         // Check admin key file exists
@@ -210,35 +221,32 @@ impl Config {
             .with_context(|| format!("Cannot create HSIP data directory: {}", dir.display()))?;
 
         let master_key_path = dir.join("master.key");
-        let admin_key_path  = dir.join("admin.key");
-        let db_path         = dir.join("hsip.db");
+        let admin_key_path = dir.join("admin.key");
+        let db_path = dir.join("hsip.db");
 
         // Generate master key on first run
         if !master_key_path.exists() {
             let mut raw = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut raw);
-            fs::write(&master_key_path, hex::encode(raw))
-                .context("Cannot write master key")?;
+            fs::write(&master_key_path, hex::encode(raw)).context("Cannot write master key")?;
             tracing::info!("Generated new master key at {}", master_key_path.display());
         }
 
         // Create an empty placeholder for the admin key file
         // (bootstrap_admin overwrites it with the real key on first DB setup)
         if !admin_key_path.exists() {
-            fs::write(&admin_key_path, "")
-                .context("Cannot create admin key placeholder")?;
+            fs::write(&admin_key_path, "").context("Cannot create admin key placeholder")?;
         }
 
         // Allow DATABASE_URL env var to override the default path (useful for debugging)
-        let db_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| {
-                // ?mode=rwc sets create_if_missing=true in sqlx (see sqlx-sqlite options/parse.rs).
-                // Without it, sqlx defaults to create_if_missing=false and SQLite returns
-                // SQLITE_CANTOPEN (14) when the database file does not yet exist.
-                // Backslashes must be converted to forward slashes for the URL parser.
-                let path_fwd = db_path.to_string_lossy().replace('\\', "/");
-                format!("sqlite:{}?mode=rwc", path_fwd)
-            });
+        let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            // ?mode=rwc sets create_if_missing=true in sqlx (see sqlx-sqlite options/parse.rs).
+            // Without it, sqlx defaults to create_if_missing=false and SQLite returns
+            // SQLITE_CANTOPEN (14) when the database file does not yet exist.
+            // Backslashes must be converted to forward slashes for the URL parser.
+            let path_fwd = db_path.to_string_lossy().replace('\\', "/");
+            format!("sqlite:{}?mode=rwc", path_fwd)
+        });
 
         Ok(Config {
             server: ServerConfig {
@@ -253,7 +261,7 @@ impl Config {
             },
             security: SecurityConfig {
                 master_key_path: master_key_path.to_string_lossy().into_owned(),
-                admin_key_path:  admin_key_path.to_string_lossy().into_owned(),
+                admin_key_path: admin_key_path.to_string_lossy().into_owned(),
                 rate_limit_per_minute: 300,
             },
             cors: CorsConfig {
@@ -292,9 +300,7 @@ impl Default for Config {
             cors: CorsConfig {
                 allowed_origins: vec![],
             },
-            metrics: MetricsConfig {
-                token: None,
-            },
+            metrics: MetricsConfig { token: None },
             logging: LoggingConfig {
                 level: "info".to_string(),
                 format: LogFormat::Pretty,

@@ -5,7 +5,7 @@
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
 };
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -27,10 +27,10 @@ async fn test_app() -> (axum::Router, String) {
 
     // Bootstrap a test tenant + key manually
     let tenant_id = uuid::Uuid::new_v4().to_string();
-    let raw_key   = format!("hsip_{}", hex::encode([0u8; 32]));
-    let key_hash  = hsip_api::auth::hash_key(&raw_key);
-    let key_id    = uuid::Uuid::new_v4().to_string();
-    let now       = hsip_api::db::now_ms();
+    let raw_key = format!("hsip_{}", hex::encode([0u8; 32]));
+    let key_hash = hsip_api::auth::hash_key(&raw_key);
+    let key_id = uuid::Uuid::new_v4().to_string();
+    let now = hsip_api::db::now_ms();
 
     use sqlx::Executor;
     db.execute(
@@ -55,7 +55,7 @@ async fn test_app() -> (axum::Router, String) {
     .unwrap();
 
     let state = hsip_api::state::AppState::new(db, vec![0u8; 32]);
-    let app   = hsip_api::routes::router().with_state(state);
+    let app = hsip_api::routes::router().with_state(state);
 
     (app, raw_key)
 }
@@ -256,7 +256,9 @@ async fn test_credential_issue_verify_revoke() {
             Request::post("/v1/credentials/issue")
                 .header(header::AUTHORIZATION, bearer(&key))
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"claim":"age_over_18","user_token":"tok_abc123","ttl_seconds":3600}"#))
+                .body(Body::from(
+                    r#"{"claim":"age_over_18","user_token":"tok_abc123","ttl_seconds":3600}"#,
+                ))
                 .unwrap(),
         )
         .await

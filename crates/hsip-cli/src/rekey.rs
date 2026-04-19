@@ -39,13 +39,13 @@ pub struct RevocationRecord {
 
 // Generate new keypair and create cryptographic rebinding proof
 pub fn rotate_key_make_rebind() -> (SigningKey, VerifyingKey, RebindProof) {
-    let (previous_signing_key, previous_verifying_key) = 
+    let (previous_signing_key, previous_verifying_key) =
         load_keypair().expect("Failed to load existing identity");
     let (replacement_signing_key, replacement_verifying_key) = generate_keypair();
 
     let binding_message = replacement_verifying_key.to_bytes();
     let binding_signature = previous_signing_key.sign(&binding_message);
-    
+
     save_keypair(&replacement_signing_key, &replacement_verifying_key)
         .expect("Failed to persist new keystore");
 
@@ -56,12 +56,16 @@ pub fn rotate_key_make_rebind() -> (SigningKey, VerifyingKey, RebindProof) {
         sig_hex: hex::encode(binding_signature.to_bytes()),
     };
 
-    (replacement_signing_key, replacement_verifying_key, rebind_proof)
+    (
+        replacement_signing_key,
+        replacement_verifying_key,
+        rebind_proof,
+    )
 }
 
 // Create signed revocation record for current identity
 pub fn revoke_current(revocation_reason: String) -> RevocationRecord {
-    let (signing_key, verifying_key) = 
+    let (signing_key, verifying_key) =
         load_keypair().expect("Failed to load identity for revocation");
     let revocation_timestamp = current_timestamp_ms();
 

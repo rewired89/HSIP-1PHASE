@@ -5,8 +5,8 @@
 
 #[allow(unused_imports)] // DecisionType used in tests
 use crate::{
-    Decision, DecisionReason, DecisionType, EndpointDatabase, EndpointEntry,
-    FlowMeta, RiskLevel, TelemetryIntent,
+    Decision, DecisionReason, DecisionType, EndpointDatabase, EndpointEntry, FlowMeta, RiskLevel,
+    TelemetryIntent,
 };
 use chrono::Duration;
 use parking_lot::RwLock;
@@ -96,30 +96,28 @@ impl RuleCondition {
                 }
                 false
             }
-            RuleCondition::PathPrefix(prefix) => {
-                flow.request_path
-                    .as_ref()
-                    .map(|p| p.starts_with(prefix))
-                    .unwrap_or(false)
-            }
+            RuleCondition::PathPrefix(prefix) => flow
+                .request_path
+                .as_ref()
+                .map(|p| p.starts_with(prefix))
+                .unwrap_or(false),
             RuleCondition::Intent(intent) => flow.inferred_intent == *intent,
             RuleCondition::MinRiskLevel(level) => flow.risk_level >= *level,
-            RuleCondition::Vendor(vendor) => {
-                endpoint.map(|e| e.vendor.to_lowercase() == vendor.to_lowercase()).unwrap_or(false)
-            }
-            RuleCondition::Category(category) => {
-                endpoint.map(|e| format!("{:?}", e.category).to_lowercase() == category.to_lowercase()).unwrap_or(false)
-            }
+            RuleCondition::Vendor(vendor) => endpoint
+                .map(|e| e.vendor.to_lowercase() == vendor.to_lowercase())
+                .unwrap_or(false),
+            RuleCondition::Category(category) => endpoint
+                .map(|e| format!("{:?}", e.category).to_lowercase() == category.to_lowercase())
+                .unwrap_or(false),
             RuleCondition::MinRequestSize(size) => flow.request_size >= *size,
             RuleCondition::Protocol(proto) => {
                 format!("{:?}", flow.protocol).to_lowercase() == proto.to_lowercase()
             }
-            RuleCondition::ProcessName(name) => {
-                flow.process_name
-                    .as_ref()
-                    .map(|p| p.to_lowercase().contains(&name.to_lowercase()))
-                    .unwrap_or(false)
-            }
+            RuleCondition::ProcessName(name) => flow
+                .process_name
+                .as_ref()
+                .map(|p| p.to_lowercase().contains(&name.to_lowercase()))
+                .unwrap_or(false),
             RuleCondition::HostnameRegex(pattern) => {
                 let hostname = flow.effective_hostname();
                 if let Ok(re) = Regex::new(pattern) {
@@ -140,9 +138,7 @@ impl RuleCondition {
             hostname.ends_with(suffix) || hostname == suffix
         } else if pattern.contains('*') {
             // Convert glob to regex
-            let regex_pattern = pattern
-                .replace('.', "\\.")
-                .replace('*', ".*");
+            let regex_pattern = pattern.replace('.', "\\.").replace('*', ".*");
             if let Ok(re) = Regex::new(&format!("^{}$", regex_pattern)) {
                 return re.is_match(hostname);
             }
@@ -335,7 +331,11 @@ impl PolicyEngine {
     }
 
     /// Evaluate custom rules
-    fn evaluate_custom_rules(&self, flow: &FlowMeta, endpoint: Option<&EndpointEntry>) -> Option<Decision> {
+    fn evaluate_custom_rules(
+        &self,
+        flow: &FlowMeta,
+        endpoint: Option<&EndpointEntry>,
+    ) -> Option<Decision> {
         let rules = self.rules.read();
 
         for rule in rules.iter() {
@@ -352,20 +352,28 @@ impl PolicyEngine {
                 return Some(match rule.action {
                     RuleAction::Allow => Decision::allow(
                         flow,
-                        DecisionReason::PatternMatch { pattern: rule.id.clone() },
+                        DecisionReason::PatternMatch {
+                            pattern: rule.id.clone(),
+                        },
                         ttl,
                     ),
                     RuleAction::AllowOnce => Decision::allow_once(
                         flow,
-                        DecisionReason::PatternMatch { pattern: rule.id.clone() },
+                        DecisionReason::PatternMatch {
+                            pattern: rule.id.clone(),
+                        },
                     ),
                     RuleAction::Block => Decision::block(
                         flow,
-                        DecisionReason::BlocklistMatch { rule_id: rule.id.clone() },
+                        DecisionReason::BlocklistMatch {
+                            rule_id: rule.id.clone(),
+                        },
                     ),
                     RuleAction::Quarantine => Decision::quarantine(
                         flow,
-                        DecisionReason::PatternMatch { pattern: rule.id.clone() },
+                        DecisionReason::PatternMatch {
+                            pattern: rule.id.clone(),
+                        },
                     ),
                     RuleAction::Prompt => Decision::pending(flow),
                     RuleAction::Continue => continue, // Skip to next rule
@@ -387,7 +395,9 @@ impl PolicyEngine {
         if config.auto_block_ads && endpoint.intent == TelemetryIntent::Advertising {
             return Some(Decision::block(
                 flow,
-                DecisionReason::KnownTracker { vendor: endpoint.vendor.clone() },
+                DecisionReason::KnownTracker {
+                    vendor: endpoint.vendor.clone(),
+                },
             ));
         }
 
@@ -395,7 +405,9 @@ impl PolicyEngine {
         if config.auto_block_trackers && endpoint.intent == TelemetryIntent::BehaviorTracking {
             return Some(Decision::block(
                 flow,
-                DecisionReason::KnownTracker { vendor: endpoint.vendor.clone() },
+                DecisionReason::KnownTracker {
+                    vendor: endpoint.vendor.clone(),
+                },
             ));
         }
 
@@ -412,7 +424,9 @@ impl PolicyEngine {
         if endpoint.risk_level >= config.auto_block_risk_level {
             return Some(Decision::block(
                 flow,
-                DecisionReason::HighRisk { level: endpoint.risk_level },
+                DecisionReason::HighRisk {
+                    level: endpoint.risk_level,
+                },
             ));
         }
 
@@ -425,7 +439,9 @@ impl PolicyEngine {
         if flow.risk_level >= config.auto_block_risk_level {
             return Some(Decision::block(
                 flow,
-                DecisionReason::HighRisk { level: flow.risk_level },
+                DecisionReason::HighRisk {
+                    level: flow.risk_level,
+                },
             ));
         }
 
@@ -568,7 +584,9 @@ mod tests {
             description: "Block internal telemetry".to_string(),
             enabled: true,
             priority: 100,
-            conditions: vec![RuleCondition::DomainSuffix(".internal.company.com".to_string())],
+            conditions: vec![RuleCondition::DomainSuffix(
+                ".internal.company.com".to_string(),
+            )],
             action: RuleAction::Block,
             ttl: None,
         });
@@ -583,7 +601,7 @@ mod tests {
     fn test_privacy_level_blocking() {
         let db = Arc::new(EndpointDatabase::new());
         let config = PolicyConfig {
-            privacy_level: 4, // Maximum
+            privacy_level: 4,           // Maximum
             auto_block_trackers: false, // Disable so we test privacy level specifically
             ..Default::default()
         };
@@ -595,7 +613,10 @@ mod tests {
 
         let decision = engine.evaluate(&flow);
         assert_eq!(decision.decision_type, DecisionType::Block);
-        assert!(matches!(decision.primary_reason, DecisionReason::PrivacyLevelBlock { .. }));
+        assert!(matches!(
+            decision.primary_reason,
+            DecisionReason::PrivacyLevelBlock { .. }
+        ));
     }
 
     #[test]
@@ -620,7 +641,9 @@ mod tests {
 
         assert!(condition.matches(&flow, None));
 
-        let not_condition = RuleCondition::Not(Box::new(RuleCondition::DomainSuffix("safe.com".to_string())));
+        let not_condition = RuleCondition::Not(Box::new(RuleCondition::DomainSuffix(
+            "safe.com".to_string(),
+        )));
         assert!(not_condition.matches(&flow, None));
     }
 

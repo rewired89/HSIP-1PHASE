@@ -1,14 +1,13 @@
 use once_cell::sync::Lazy;
-use prometheus::{
-    register_counter_vec, register_gauge, CounterVec, Gauge, TextEncoder, Encoder,
-};
+use prometheus::{register_counter_vec, register_gauge, CounterVec, Encoder, Gauge, TextEncoder};
 
 pub static REQUESTS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
     register_counter_vec!(
         "hsip_requests_total",
         "Total HTTP requests by endpoint and status",
         &["endpoint", "status"]
-    ).unwrap()
+    )
+    .unwrap()
 });
 
 pub static AUTH_FAILURES: Lazy<CounterVec> = Lazy::new(|| {
@@ -16,7 +15,8 @@ pub static AUTH_FAILURES: Lazy<CounterVec> = Lazy::new(|| {
         "hsip_auth_failures_total",
         "Authentication failures by reason",
         &["reason"]
-    ).unwrap()
+    )
+    .unwrap()
 });
 
 pub static CREDENTIALS_ISSUED: Lazy<CounterVec> = Lazy::new(|| {
@@ -24,7 +24,8 @@ pub static CREDENTIALS_ISSUED: Lazy<CounterVec> = Lazy::new(|| {
         "hsip_credentials_issued_total",
         "Credentials issued by claim type",
         &["claim"]
-    ).unwrap()
+    )
+    .unwrap()
 });
 
 pub static CREDENTIALS_VERIFIED: Lazy<CounterVec> = Lazy::new(|| {
@@ -32,7 +33,8 @@ pub static CREDENTIALS_VERIFIED: Lazy<CounterVec> = Lazy::new(|| {
         "hsip_credentials_verified_total",
         "Credential verifications by result",
         &["result"]
-    ).unwrap()
+    )
+    .unwrap()
 });
 
 pub static AGENT_ANOMALIES: Lazy<CounterVec> = Lazy::new(|| {
@@ -40,22 +42,15 @@ pub static AGENT_ANOMALIES: Lazy<CounterVec> = Lazy::new(|| {
         "hsip_agent_anomalies_total",
         "AI agent anomaly events by type",
         &["event_type"]
-    ).unwrap()
+    )
+    .unwrap()
 });
 
-pub static ACTIVE_TENANTS: Lazy<Gauge> = Lazy::new(|| {
-    register_gauge!(
-        "hsip_active_tenants",
-        "Number of active tenants"
-    ).unwrap()
-});
+pub static ACTIVE_TENANTS: Lazy<Gauge> =
+    Lazy::new(|| register_gauge!("hsip_active_tenants", "Number of active tenants").unwrap());
 
 pub static MESSAGES_SIGNED: Lazy<CounterVec> = Lazy::new(|| {
-    register_counter_vec!(
-        "hsip_messages_signed_total",
-        "Messages signed",
-        &["tenant"]
-    ).unwrap()
+    register_counter_vec!("hsip_messages_signed_total", "Messages signed", &["tenant"]).unwrap()
 });
 
 /// Force initialization of all metrics at startup

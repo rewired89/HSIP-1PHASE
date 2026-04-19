@@ -39,8 +39,8 @@ pub type GuardConfig = GuardCfg;
 impl Default for GuardCfg {
     fn default() -> Self {
         use hsip_core::wire::{
-            MAX_HELLO_SIZE, MAX_CONSENT_REQUEST_SIZE,
-            MAX_CONSENT_RESPONSE_SIZE, MAX_CONTROL_FRAME_SIZE,
+            MAX_CONSENT_REQUEST_SIZE, MAX_CONSENT_RESPONSE_SIZE, MAX_CONTROL_FRAME_SIZE,
+            MAX_HELLO_SIZE,
         };
 
         Self {

@@ -53,7 +53,8 @@ impl NtpSync {
             let mut interval = tokio::time::interval(Duration::from_secs(300)); // 5 minutes
             loop {
                 interval.tick().await;
-                if let Err(e) = Self::sync_internal(&server_clone, &offset_clone, max_offset).await {
+                if let Err(e) = Self::sync_internal(&server_clone, &offset_clone, max_offset).await
+                {
                     eprintln!("NTP sync failed: {}", e);
                 }
             }
@@ -84,9 +85,7 @@ impl NtpSync {
         // Parse server address
         let result = tokio::task::spawn_blocking({
             let server = server.to_string();
-            move || {
-                client.synchronize(&server)
-            }
+            move || client.synchronize(&server)
         })
         .await
         .map_err(|e| format!("NTP task failed: {}", e))?

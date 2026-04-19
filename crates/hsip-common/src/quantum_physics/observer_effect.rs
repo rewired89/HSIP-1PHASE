@@ -56,9 +56,7 @@ impl ObservationType {
     pub fn requires_explicit_log(&self) -> bool {
         matches!(
             self,
-            ObservationType::Decryption
-                | ObservationType::Export
-                | ObservationType::Forward
+            ObservationType::Decryption | ObservationType::Export | ObservationType::Forward
         )
     }
 }
@@ -249,9 +247,7 @@ impl ObservationLog {
 
         // Get previous receipt hash for chaining
         let prev_receipt_hash = records.last().map(|r| r.receipt.hash());
-        let prev_hash = records.last()
-            .map(|r| r.record_hash)
-            .unwrap_or([0u8; 32]);
+        let prev_hash = records.last().map(|r| r.record_hash).unwrap_or([0u8; 32]);
 
         // Create receipt
         let receipt = ReadReceipt::new(
@@ -264,23 +260,20 @@ impl ObservationLog {
 
         // Create record
         let index = records.len() as u64;
-        let record = ObservationRecord::new(
-            index,
-            receipt.clone(),
-            encrypted_context,
-            prev_hash,
-        );
+        let record = ObservationRecord::new(index, receipt.clone(), encrypted_context, prev_hash);
 
         // Update indices
         {
             let mut resource_idx = self.resource_index.write();
-            resource_idx.entry(resource_id)
+            resource_idx
+                .entry(resource_id)
                 .or_insert_with(Vec::new)
                 .push(index as usize);
         }
         {
             let mut observer_idx = self.observer_index.write();
-            observer_idx.entry(observer_id)
+            observer_idx
+                .entry(observer_id)
                 .or_insert_with(Vec::new)
                 .push(index as usize);
         }
@@ -322,9 +315,11 @@ impl ObservationLog {
         let resource_idx = self.resource_index.read();
         let records = self.records.read();
 
-        resource_idx.get(resource_id)
+        resource_idx
+            .get(resource_id)
             .map(|indices| {
-                indices.iter()
+                indices
+                    .iter()
                     .filter_map(|&i| records.get(i))
                     .map(|r| r.receipt.clone())
                     .collect()
@@ -337,9 +332,11 @@ impl ObservationLog {
         let observer_idx = self.observer_index.read();
         let records = self.records.read();
 
-        observer_idx.get(observer_id)
+        observer_idx
+            .get(observer_id)
             .map(|indices| {
-                indices.iter()
+                indices
+                    .iter()
                     .filter_map(|&i| records.get(i))
                     .map(|r| r.receipt.clone())
                     .collect()
@@ -417,12 +414,9 @@ impl ResourceObserver {
             return Err(ObserverError::Unauthorized);
         }
 
-        Ok(self.log.record_observation(
-            self.resource_id,
-            observer_id,
-            observation_type,
-            context,
-        ))
+        Ok(self
+            .log
+            .record_observation(self.resource_id, observer_id, observation_type, context))
     }
 
     /// Get all observation receipts for this resource

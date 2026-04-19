@@ -1,4 +1,6 @@
-use hsip_core::consent::{create_signed_request, create_signed_response, validate_request, validate_response};
+use hsip_core::consent::{
+    create_signed_request, create_signed_response, validate_request, validate_response,
+};
 use hsip_core::identity::generate_keypair;
 
 #[test]

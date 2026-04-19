@@ -4,8 +4,7 @@ fn main() {
 }
 
 #[cfg(not(windows))]
-fn main() {
-}
+fn main() {}
 
 #[cfg(windows)]
 use std::path::PathBuf;
@@ -35,7 +34,6 @@ fn icon_embedding_disabled() -> bool {
 
 #[cfg(windows)]
 fn locate_icon_file() -> PathBuf {
-
     let crate_directory = std::env::var("CARGO_MANIFEST_DIR")
         .expect("CARGO_MANIFEST_DIR environment variable not set");
 
@@ -65,9 +63,7 @@ fn register_rebuild_trigger(icon_path: &std::path::Path) {
 fn embed_windows_resources(icon_path: &std::path::Path) {
     let mut resource_builder = winres::WindowsResource::new();
 
-    let icon_string = icon_path
-        .to_str()
-        .expect("Icon path is not valid UTF-8");
+    let icon_string = icon_path.to_str().expect("Icon path is not valid UTF-8");
 
     resource_builder.set_icon(icon_string);
 

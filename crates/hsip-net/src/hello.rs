@@ -115,8 +115,8 @@ pub fn verify_hello(hello_msg: &Hello) -> Result<(), String> {
     );
 
     // Verify cryptographic signature
-    let signature_bytes = hex::decode(&hello_msg.sig)
-        .map_err(|e| format!("Signature hex decoding failed: {e}"))?;
+    let signature_bytes =
+        hex::decode(&hello_msg.sig).map_err(|e| format!("Signature hex decoding failed: {e}"))?;
 
     let signature_array: [u8; 64] = signature_bytes
         .try_into()

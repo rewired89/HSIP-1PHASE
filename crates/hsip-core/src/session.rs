@@ -320,8 +320,7 @@ impl ManagedSession {
         let padded = self.decrypt(counter, ciphertext, aad)?;
 
         // Remove padding
-        crate::traffic_shaping::remove_padding(&padded)
-            .map_err(|e| SessionError::Crypto(e))
+        crate::traffic_shaping::remove_padding(&padded).map_err(|e| SessionError::Crypto(e))
     }
 
     /// Expose basic stats for monitoring / logging.

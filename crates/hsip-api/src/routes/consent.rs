@@ -1,15 +1,23 @@
-use axum::{extract::{Path, Query, State}, Json};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use axum::{
+    extract::{Path, Query, State},
+    Json,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{auth::TenantId, db::now_ms, errors::{ApiError, ApiResult}, state::AppState};
+use crate::{
+    auth::TenantId,
+    db::now_ms,
+    errors::{ApiError, ApiResult},
+    state::AppState,
+};
 
 #[derive(Deserialize)]
 pub struct GrantRequest {
     pub peer_verify_key: String,
-    pub ttl_ms:          Option<i64>,
+    pub ttl_ms: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -26,18 +34,20 @@ pub struct PaginationParams {
     pub offset: i64,
 }
 
-fn default_limit() -> i64 { 50 }
+fn default_limit() -> i64 {
+    50
+}
 
 #[derive(Serialize, Clone)]
 pub struct ConsentRecord {
-    pub id:              String,
+    pub id: String,
     pub peer_verify_key: String,
     /// Effective status: "granted", "expired", or "revoked"
-    pub status:          String,
-    pub granted_at:      Option<i64>,
-    pub expires_at:      Option<i64>,
-    pub revoked_at:      Option<i64>,
-    pub created_at:      i64,
+    pub status: String,
+    pub granted_at: Option<i64>,
+    pub expires_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+    pub created_at: i64,
 }
 
 /// M2: Validate that peer_verify_key is a valid Base64-encoded 32-byte Ed25519 public key.
@@ -45,11 +55,12 @@ fn validate_peer_key(peer_verify_key: &str) -> ApiResult<()> {
     if peer_verify_key.len() > 128 {
         return Err(ApiError::BadRequest("peer_verify_key too long".into()));
     }
-    let decoded = BASE64.decode(peer_verify_key)
+    let decoded = BASE64
+        .decode(peer_verify_key)
         .map_err(|_| ApiError::BadRequest("peer_verify_key must be Base64-encoded".into()))?;
     if decoded.len() != 32 {
         return Err(ApiError::BadRequest(
-            "peer_verify_key must decode to exactly 32 bytes (Ed25519 public key)".into()
+            "peer_verify_key must decode to exactly 32 bytes (Ed25519 public key)".into(),
         ));
     }
     Ok(())
@@ -76,10 +87,10 @@ pub async fn grant(
     // M2: validate peer key format
     validate_peer_key(&req.peer_verify_key)?;
 
-    let now  = now_ms();
-    let ttl  = req.ttl_ms.unwrap_or(3_600_000);
-    let exp  = now + ttl;
-    let id   = Uuid::new_v4().to_string();
+    let now = now_ms();
+    let ttl = req.ttl_ms.unwrap_or(3_600_000);
+    let exp = now + ttl;
+    let id = Uuid::new_v4().to_string();
 
     sqlx::query(
         "INSERT INTO consents (id, tenant_id, peer_verify_key, status, granted_at, expires_ms, created_at)
@@ -142,7 +153,10 @@ pub async fn revoke(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(ApiError::NotFound(format!("No consent for peer {}", req.peer_verify_key)));
+        return Err(ApiError::NotFound(format!(
+            "No consent for peer {}",
+            req.peer_verify_key
+        )));
     }
 
     let row = sqlx::query(
@@ -167,13 +181,13 @@ pub async fn revoke(
     .await?;
 
     Ok(Json(ConsentRecord {
-        id:              row.try_get(0)?,
+        id: row.try_get(0)?,
         peer_verify_key: req.peer_verify_key,
-        status:          "revoked".into(),
-        granted_at:      row.try_get(1)?,
-        expires_at:      row.try_get(2)?,
-        revoked_at:      Some(now),
-        created_at:      row.try_get(3)?,
+        status: "revoked".into(),
+        granted_at: row.try_get(1)?,
+        expires_at: row.try_get(2)?,
+        revoked_at: Some(now),
+        created_at: row.try_get(3)?,
     }))
 }
 
@@ -183,9 +197,9 @@ pub async fn list(
     tenant: TenantId,
     Query(params): Query<PaginationParams>,
 ) -> ApiResult<Json<Vec<ConsentRecord>>> {
-    let limit  = params.limit.clamp(1, 200);
+    let limit = params.limit.clamp(1, 200);
     let offset = params.offset.max(0);
-    let now    = now_ms();
+    let now = now_ms();
 
     let rows = sqlx::query(
         "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at
@@ -197,20 +211,23 @@ pub async fn list(
     .fetch_all(&state.db)
     .await?;
 
-    let records = rows.iter().map(|r| -> Result<ConsentRecord, sqlx::Error> {
-        let db_status: String    = r.try_get(2)?;
-        let expires_ms: Option<i64> = r.try_get(4)?;
-        Ok(ConsentRecord {
-            id:              r.try_get(0)?,
-            peer_verify_key: r.try_get(1)?,
-            // H5: compute effective status at query time
-            status:          effective_status(&db_status, expires_ms, now),
-            granted_at:      r.try_get(3)?,
-            expires_at:      expires_ms,
-            revoked_at:      r.try_get(5)?,
-            created_at:      r.try_get(6)?,
+    let records = rows
+        .iter()
+        .map(|r| -> Result<ConsentRecord, sqlx::Error> {
+            let db_status: String = r.try_get(2)?;
+            let expires_ms: Option<i64> = r.try_get(4)?;
+            Ok(ConsentRecord {
+                id: r.try_get(0)?,
+                peer_verify_key: r.try_get(1)?,
+                // H5: compute effective status at query time
+                status: effective_status(&db_status, expires_ms, now),
+                granted_at: r.try_get(3)?,
+                expires_at: expires_ms,
+                revoked_at: r.try_get(5)?,
+                created_at: r.try_get(6)?,
+            })
         })
-    }).collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(records))
 }
@@ -233,17 +250,17 @@ pub async fn get(
     .await?
     .ok_or_else(|| ApiError::NotFound(format!("No consent for peer {peer_key}")))?;
 
-    let db_status: String       = row.try_get(2)?;
+    let db_status: String = row.try_get(2)?;
     let expires_ms: Option<i64> = row.try_get(4)?;
 
     Ok(Json(ConsentRecord {
-        id:              row.try_get(0)?,
+        id: row.try_get(0)?,
         peer_verify_key: row.try_get(1)?,
         // H5: effective status considers expiry
-        status:          effective_status(&db_status, expires_ms, now),
-        granted_at:      row.try_get(3)?,
-        expires_at:      expires_ms,
-        revoked_at:      row.try_get(5)?,
-        created_at:      row.try_get(6)?,
+        status: effective_status(&db_status, expires_ms, now),
+        granted_at: row.try_get(3)?,
+        expires_at: expires_ms,
+        revoked_at: row.try_get(5)?,
+        created_at: row.try_get(6)?,
     }))
 }

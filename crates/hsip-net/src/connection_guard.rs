@@ -13,10 +13,10 @@
 //! This module remains for potential future use in Phase 2 when more sophisticated
 //! connection management is needed. See `guard.rs` for the **active** protection layer.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
 use parking_lot::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Connection limits and timeouts
 #[derive(Debug, Clone)]
