@@ -18,7 +18,7 @@ full = ["postgres", "ntp-sync", "geolocation"]
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 toml = "0.8"
 winres = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread","macros"] }
@@ -53,7 +53,7 @@ rand = "0.8"
 rpassword = "7"
 dirs = "5"
 x25519-dalek = "2"
-reqwest = { version = "0.12.24", features = ["json"] }
+reqwest = { version = "0.12.24", features = ["json", "blocking"] }
 tray-icon = { version = "0.21", optional = true }
 
 [build-dependencies]

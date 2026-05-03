@@ -389,6 +389,30 @@ enum Commands {
     /// Print HSIP diagnostic info (identity, config, env, endpoints)
     Diag,
 
+    // ===== AI Agent governance =====
+    /// Start HSIP server if needed and print a welcome summary
+    Up(commands::up::UpArgs),
+
+    /// Manage AI agents: register, list, revoke, discover
+    Agent {
+        #[command(subcommand)]
+        cmd: commands::agent::AgentCmd,
+    },
+
+    /// Manage trusted peers for federated signature verification
+    Trust {
+        #[command(subcommand)]
+        cmd: commands::trust::TrustCmd,
+    },
+
+    /// Show HSIP server status: identity, active agents, recent audit events
+    Status {
+        #[arg(long, env = "HSIP_API_URL")]
+        api_url: Option<String>,
+        #[arg(long, env = "HSIP_API_KEY")]
+        key: Option<String>,
+    },
+
     // --- Audit Logs (DFF Compliance) ---
     /// Export audit logs as court-ready JSON evidence
     #[command(name = "audit-export")]
@@ -1638,6 +1662,35 @@ fn main() {
         Commands::Diag => {
             if let Err(e) = commands::diag::run_diag() {
                 eprintln!("[DIAG] error: {e:?}");
+            }
+        }
+
+        // ===== AI Agent governance =====
+        Commands::Up(args) => {
+            if let Err(e) = commands::up::run(args) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Agent { cmd } => {
+            if let Err(e) = commands::agent::run(cmd) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Trust { cmd } => {
+            if let Err(e) = commands::trust::run(cmd) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Status { api_url, key } => {
+            if let Err(e) = commands::agent::status(api_url, key) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
             }
         }
 

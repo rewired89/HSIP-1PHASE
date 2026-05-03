@@ -7,6 +7,7 @@ pub mod identity;
 pub mod keys;
 pub mod messages;
 pub mod tenant;
+pub mod trust;
 
 use crate::state::AppState;
 use axum::{
@@ -44,6 +45,11 @@ pub fn router() -> Router<AppState> {
         .route("/v1/agents", get(agents::list))
         .route("/v1/agents/discover", get(agents::discover))
         .route("/v1/agent/capabilities", get(agents::capabilities))
+        // Federated trust
+        .route("/v1/trust/peers", get(trust::list))
+        .route("/v1/trust/peer", post(trust::add))
+        .route("/v1/trust/peers/:id", delete(trust::remove))
+        .route("/v1/trust/verify", post(trust::verify))
         // Tenant
         .route("/v1/tenant", get(tenant::info))
         .route("/v1/tenant/erase", post(tenant::erase))
