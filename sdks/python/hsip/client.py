@@ -116,9 +116,9 @@ class HSIPClient:
 
     # ── API Keys ──────────────────────────────────────────────────────────────
 
-    def create_key(self, name: str = "default") -> Dict:
+    def create_key(self, name: str = "default", agent_type: str = "human") -> Dict:
         """Create a new API key. Returns key (shown once only)."""
-        return self._request("POST", "/v1/keys", {"name": name})
+        return self._request("POST", "/v1/keys", {"name": name, "agent_type": agent_type})
 
     def list_keys(self) -> List[Dict]:
         """List all API keys (hashes only)."""
@@ -127,3 +127,44 @@ class HSIPClient:
     def revoke_key(self, key_id: str) -> Dict:
         """Revoke an API key by ID."""
         return self._request("DELETE", f"/v1/keys/{key_id}")
+
+    # ── AI Agent governance ───────────────────────────────────────────────────
+
+    def register_agent(self, name: str, expires_days: Optional[int] = None) -> Dict:
+        """
+        Register an AI agent and get its API key (shown once).
+        Returns: { id, key, name, agent_type, created_at, expires_at }
+        """
+        body: Dict[str, Any] = {"name": name, "agent_type": "ai_agent"}
+        if expires_days is not None:
+            body["expires_in_days"] = expires_days
+        return self._request("POST", "/v1/keys", body)
+
+    def list_agents(self) -> List[Dict]:
+        """
+        List registered AI agents with live velocity stats.
+        Returns: [{ key_id, name, active, request_count, anomaly_count }]
+        """
+        return self._request("GET", "/v1/agents")
+
+    def revoke_agent(self, key_id: str) -> Dict:
+        """Immediately revoke an AI agent's access. key_id is the UUID from register_agent."""
+        return self._request("DELETE", f"/v1/keys/{key_id}")
+
+    def log_action(self, action: str, detail: Optional[str] = None) -> Dict:
+        """
+        Write a signed, tamper-proof action record to the audit log.
+        action: short verb, e.g. "file.read", "email.send"
+        Returns: { id, content, signature, timestamp }
+        """
+        content = f"[ACTION:{action}]"
+        if detail:
+            content += f" {detail}"
+        return self._request("POST", "/v1/messages/sign", {"content": content})
+
+    def discover_agents(self) -> List[Dict]:
+        """
+        Probe localhost for running AI agents / MCP servers.
+        Returns candidates with port, hint, description, and already_registered flag.
+        """
+        return self._request("GET", "/v1/agents/discover")

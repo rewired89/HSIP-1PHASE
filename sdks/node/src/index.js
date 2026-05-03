@@ -100,9 +100,44 @@ class HSIPClient {
   }
 
   // API Keys
-  createKey(name = 'default') { return this._request('POST', '/v1/keys', { name }); }
-  listKeys()                  { return this._request('GET', '/v1/keys'); }
-  revokeKey(keyId)            { return this._request('DELETE', `/v1/keys/${keyId}`); }
+  createKey(name = 'default', agentType = 'human') {
+    return this._request('POST', '/v1/keys', { name, agent_type: agentType });
+  }
+  listKeys()       { return this._request('GET', '/v1/keys'); }
+  revokeKey(keyId) { return this._request('DELETE', `/v1/keys/${keyId}`); }
+
+  // AI Agent governance
+
+  /**
+   * Register an AI agent and receive its API key (shown once).
+   * @param {string} name
+   * @param {number|null} [expiresDays]
+   * @returns {Promise<{id:string, key:string, name:string, agent_type:string, created_at:number, expires_at:number|null}>}
+   */
+  registerAgent(name, expiresDays = null) {
+    const body = { name, agent_type: 'ai_agent' };
+    if (expiresDays !== null) body.expires_in_days = expiresDays;
+    return this._request('POST', '/v1/keys', body);
+  }
+
+  /** List AI agents with live velocity stats. */
+  listAgents() { return this._request('GET', '/v1/agents'); }
+
+  /** Immediately revoke an AI agent's access by key ID. */
+  revokeAgent(keyId) { return this._request('DELETE', `/v1/keys/${keyId}`); }
+
+  /**
+   * Write a signed, tamper-proof action record to the audit log.
+   * @param {string} action  - Short verb, e.g. "file.read", "email.send"
+   * @param {string|null} [detail]
+   */
+  logAction(action, detail = null) {
+    const content = detail ? `[ACTION:${action}] ${detail}` : `[ACTION:${action}]`;
+    return this._request('POST', '/v1/messages/sign', { content });
+  }
+
+  /** Probe localhost for running AI agents / MCP servers. */
+  discoverAgents() { return this._request('GET', '/v1/agents/discover'); }
 }
 
 module.exports = { HSIPClient, HSIPError };

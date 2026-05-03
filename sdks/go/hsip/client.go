@@ -128,16 +128,113 @@ func (c *Client) VerifyMessage(content, signature, peerVerifyKey string) (*Verif
 	}, &r)
 }
 
+// Messages (list)
+
+type MessageRecord struct {
+	ID        string `json:"id"`
+	Content   string `json:"content"`
+	Signature string `json:"signature"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+func (c *Client) ListMessages() ([]MessageRecord, error) {
+	var r []MessageRecord
+	return r, c.do("GET", "/v1/messages", nil, &r)
+}
+
 // Audit
 
 type AuditEntry struct {
-	ID             string  `json:"id"`
-	Action         string  `json:"action"`
-	PeerVerifyKey  *string `json:"peer_verify_key"`
-	Details        *string `json:"details"`
-	Timestamp      int64   `json:"timestamp"`
+	ID            string  `json:"id"`
+	Action        string  `json:"action"`
+	PeerVerifyKey *string `json:"peer_verify_key"`
+	Details       *string `json:"details"`
+	Timestamp     int64   `json:"timestamp"`
 }
+
 func (c *Client) GetAuditLog(limit int) ([]AuditEntry, error) {
 	var r []AuditEntry
 	return r, c.do("GET", fmt.Sprintf("/v1/audit?limit=%d", limit), nil, &r)
+}
+
+// API Keys
+
+type CreateKeyResponse struct {
+	ID        string  `json:"id"`
+	Key       string  `json:"key"`
+	Name      string  `json:"name"`
+	AgentType string  `json:"agent_type"`
+	CreatedAt int64   `json:"created_at"`
+	ExpiresAt *int64  `json:"expires_at"`
+}
+
+func (c *Client) CreateKey(name, agentType string) (*CreateKeyResponse, error) {
+	var r CreateKeyResponse
+	return &r, c.do("POST", "/v1/keys", map[string]any{"name": name, "agent_type": agentType}, &r)
+}
+
+func (c *Client) ListKeys() ([]map[string]any, error) {
+	var r []map[string]any
+	return r, c.do("GET", "/v1/keys", nil, &r)
+}
+
+func (c *Client) RevokeKey(keyID string) (map[string]any, error) {
+	var r map[string]any
+	return r, c.do("DELETE", "/v1/keys/"+keyID, nil, &r)
+}
+
+// AI Agent governance
+
+type AgentStats struct {
+	KeyID        string `json:"key_id"`
+	Name         string `json:"name"`
+	Active       bool   `json:"active"`
+	RequestCount uint64 `json:"request_count"`
+	AnomalyCount uint64 `json:"anomaly_count"`
+	WindowStartMs int64 `json:"window_start_ms"`
+}
+
+type DiscoveredAgent struct {
+	Port              uint16 `json:"port"`
+	URL               string `json:"url"`
+	Hint              string `json:"hint"`
+	Description       string `json:"description"`
+	Reachable         bool   `json:"reachable"`
+	AlreadyRegistered bool   `json:"already_registered"`
+	SuggestedName     string `json:"suggested_name"`
+}
+
+// RegisterAgent creates an AI agent key. expires_days=0 means no expiry.
+func (c *Client) RegisterAgent(name string, expiresDays int) (*CreateKeyResponse, error) {
+	body := map[string]any{"name": name, "agent_type": "ai_agent"}
+	if expiresDays > 0 {
+		body["expires_in_days"] = expiresDays
+	}
+	var r CreateKeyResponse
+	return &r, c.do("POST", "/v1/keys", body, &r)
+}
+
+func (c *Client) ListAgents() ([]AgentStats, error) {
+	var r []AgentStats
+	return r, c.do("GET", "/v1/agents", nil, &r)
+}
+
+func (c *Client) RevokeAgent(keyID string) (map[string]any, error) {
+	return c.RevokeKey(keyID)
+}
+
+// LogAction writes a signed, tamper-proof action record to the audit log.
+// action is a short verb such as "file.read" or "email.send".
+func (c *Client) LogAction(action, detail string) (*SignResponse, error) {
+	content := "[ACTION:" + action + "]"
+	if detail != "" {
+		content += " " + detail
+	}
+	var r SignResponse
+	return &r, c.do("POST", "/v1/messages/sign", map[string]any{"content": content}, &r)
+}
+
+func (c *Client) DiscoverAgents() ([]DiscoveredAgent, error) {
+	var r []DiscoveredAgent
+	return r, c.do("GET", "/v1/agents/discover", nil, &r)
 }
