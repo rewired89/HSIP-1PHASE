@@ -2,6 +2,9 @@ use axum::{extract::State, Json};
 use serde::Serialize;
 use sqlx::Row;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 use crate::{auth::TenantId, errors::ApiResult, state::AppState};
 
@@ -142,4 +145,94 @@ pub async fn list(
         .collect();
 
     Ok(Json(stats))
+}
+
+// ── Agent discovery ────────────────────────────────────────────────────────────
+
+/// Well-known localhost ports where AI agents / MCP servers commonly listen.
+static PROBE_PORTS: &[(u16, &str, &str)] = &[
+    (11434, "ollama",      "Ollama local LLM server"),
+    (5173,  "vite",        "Vite dev server (MCP plugin likely)"),
+    (8787,  "wrangler",    "Cloudflare Workers (wrangler dev)"),
+    (8080,  "http-agent",  "Generic HTTP agent / proxy"),
+    (8000,  "uvicorn",     "FastAPI / Django / Python agent"),
+    (5000,  "flask",       "Flask API / Python agent"),
+    (4000,  "agent",       "Generic agent port"),
+    (3001,  "dashboard",   "Secondary dev server"),
+    (3000,  "dev-api",     "Generic dev API / Next.js"),
+    (9000,  "agent",       "Generic agent port"),
+    (1234,  "lmstudio",    "LM Studio local LLM API"),
+    (8888,  "jupyter",     "Jupyter notebook server"),
+];
+
+const PROBE_TIMEOUT_MS: u64 = 150;
+
+#[derive(Serialize)]
+pub struct DiscoveredAgent {
+    pub port: u16,
+    pub url: String,
+    pub hint: String,
+    pub description: String,
+    pub reachable: bool,
+    pub already_registered: bool,
+    pub suggested_name: String,
+}
+
+/// GET /v1/agents/discover
+/// Probes well-known localhost ports for MCP / AI agent servers.
+/// Returns all ports that accepted a TCP connection, annotated with hints and
+/// whether an agent with that name is already registered.
+pub async fn discover(
+    State(state): State<AppState>,
+    tenant: TenantId,
+) -> ApiResult<Json<Vec<DiscoveredAgent>>> {
+    // Fetch registered agent names once so we can flag duplicates.
+    let rows = sqlx::query(
+        "SELECT name FROM api_keys WHERE tenant_id = ? AND agent_type = 'ai_agent' AND active = 1",
+    )
+    .bind(&tenant.0)
+    .fetch_all(&state.db)
+    .await?;
+
+    let registered_names: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.try_get::<String, _>(0).ok())
+        .map(|s| s.to_lowercase())
+        .collect();
+
+    // Probe each port concurrently.
+    let dur = Duration::from_millis(PROBE_TIMEOUT_MS);
+    let mut handles = Vec::with_capacity(PROBE_PORTS.len());
+    for &(port, hint, description) in PROBE_PORTS {
+        handles.push(tokio::spawn(async move {
+            let addr = format!("127.0.0.1:{port}");
+            let reachable = timeout(dur, TcpStream::connect(&addr)).await.is_ok();
+            (port, hint, description, reachable)
+        }));
+    }
+
+    let mut results = Vec::new();
+    for handle in handles {
+        if let Ok((port, hint, description, reachable)) = handle.await {
+            if !reachable {
+                continue;
+            }
+            let already_registered = registered_names
+                .iter()
+                .any(|n| n == hint || n.starts_with(hint));
+            results.push(DiscoveredAgent {
+                port,
+                url: format!("http://127.0.0.1:{port}"),
+                hint: hint.to_string(),
+                description: description.to_string(),
+                reachable: true,
+                already_registered,
+                suggested_name: hint.to_string(),
+            });
+        }
+    }
+
+    // Sort by port for deterministic output.
+    results.sort_by_key(|r| r.port);
+    Ok(Json(results))
 }
