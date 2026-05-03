@@ -15,8 +15,6 @@ use clap::Subcommand;
 use serde::Deserialize;
 use std::time::Duration;
 
-use super::util::load_admin_key;
-
 const DEFAULT_API_URL: &str = "http://127.0.0.1:7474";
 
 // ── Clap types ────────────────────────────────────────────────────────────────
@@ -53,14 +51,6 @@ pub enum AgentCmd {
         #[arg(long, env = "HSIP_API_KEY")]
         key: Option<String>,
     },
-
-    /// Scan localhost for running AI agents / MCP servers and suggest registering them
-    Discover {
-        #[arg(long, env = "HSIP_API_URL")]
-        api_url: Option<String>,
-        #[arg(long, env = "HSIP_API_KEY")]
-        key: Option<String>,
-    },
 }
 
 // ── API response types ────────────────────────────────────────────────────────
@@ -82,16 +72,6 @@ struct AgentStats {
     active: bool,
     request_count: u64,
     anomaly_count: u64,
-}
-
-#[derive(Deserialize, Debug)]
-struct DiscoveredAgent {
-    port: u16,
-    url: String,
-    hint: String,
-    description: String,
-    already_registered: bool,
-    suggested_name: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -201,7 +181,6 @@ pub fn run(cmd: AgentCmd) -> Result<()> {
         }
         AgentCmd::List { api_url, key } => list(api_url, key),
         AgentCmd::Revoke { target, api_url, key } => revoke(target, api_url, key),
-        AgentCmd::Discover { api_url, key } => discover(api_url, key),
     }
 }
 
@@ -324,66 +303,6 @@ fn revoke(target: String, api_url: Option<String>, key: Option<String>) -> Resul
     Ok(())
 }
 
-// ── `hsip agent discover` ─────────────────────────────────────────────────────
-
-fn discover(api_url: Option<String>, key: Option<String>) -> Result<()> {
-    let client = ApiClient::new(api_url, key)?;
-    let candidates: Vec<DiscoveredAgent> = client.get("/v1/agents/discover")?;
-
-    if candidates.is_empty() {
-        println!();
-        println!("No AI agents or MCP servers detected on localhost.");
-        println!();
-        println!("Start an agent (e.g. Ollama, Claude Desktop, LM Studio) and run this again.");
-        return Ok(());
-    }
-
-    println!();
-    println!("Discovered agents on localhost:");
-    println!("{}", "─".repeat(72));
-    println!("{:<6}  {:<18}  {:<30}  {}", "Port", "Name hint", "Description", "Status");
-    println!("{}", "─".repeat(72));
-
-    for c in &candidates {
-        let status = if c.already_registered {
-            "✓ registered".to_string()
-        } else {
-            "not registered".to_string()
-        };
-        println!(
-            "{:<6}  {:<18}  {:<30}  {}",
-            c.port,
-            truncate(&c.hint, 18),
-            truncate(&c.description, 30),
-            status,
-        );
-    }
-
-    println!("{}", "─".repeat(72));
-    println!();
-
-    let unregistered: Vec<&DiscoveredAgent> =
-        candidates.iter().filter(|c| !c.already_registered).collect();
-
-    if unregistered.is_empty() {
-        println!("All discovered agents are already registered with HSIP.");
-    } else {
-        println!(
-            "{} agent(s) found, {} not yet registered.",
-            candidates.len(),
-            unregistered.len()
-        );
-        println!();
-        println!("To register them, run:");
-        for c in &unregistered {
-            println!("  hsip agent register \"{}\"   # {}", c.suggested_name, c.url);
-        }
-    }
-
-    println!();
-    Ok(())
-}
-
 // ── `hsip status` ─────────────────────────────────────────────────────────────
 
 pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
@@ -462,6 +381,34 @@ pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+fn load_admin_key() -> Result<String> {
+    let home = dirs::home_dir().context("cannot resolve home directory")?;
+    let key_path = home.join(".hsip").join("admin.key");
+
+    if !key_path.exists() {
+        bail!(
+            "No API key found.\n\
+             Provide one with --key or HSIP_API_KEY env var,\n\
+             or check that HSIP has been started at least once (key saved to {}).",
+            key_path.display()
+        );
+    }
+
+    let key = std::fs::read_to_string(&key_path)
+        .with_context(|| format!("failed to read {}", key_path.display()))?;
+
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        bail!(
+            "Admin key file is empty: {}\n\
+             Start HSIP once to generate the key, or provide --key manually.",
+            key_path.display()
+        );
+    }
+
+    Ok(key)
+}
 
 fn format_timestamp(ms: i64) -> String {
     use std::time::SystemTime;

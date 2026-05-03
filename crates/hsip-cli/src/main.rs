@@ -460,6 +460,21 @@ enum Commands {
         #[arg(long)]
         db: Option<String>,
     },
+
+    // --- AI Agent governance ---
+    /// Manage AI agents: register, list, revoke
+    Agent {
+        #[command(subcommand)]
+        cmd: commands::agent::AgentCmd,
+    },
+
+    /// Show HSIP server status: identity, active agents, recent audit events
+    Status {
+        #[arg(long, env = "HSIP_API_URL")]
+        api_url: Option<String>,
+        #[arg(long, env = "HSIP_API_KEY")]
+        key: Option<String>,
+    },
 }
 
 fn main() {
@@ -1922,6 +1937,21 @@ fn main() {
             eprintln!("[AUDIT] PostgreSQL audit logs not enabled");
             eprintln!("[AUDIT] Rebuild with: cargo build --features postgres");
             std::process::exit(1);
+        }
+
+        // ===== AI Agent governance =====
+        Commands::Agent { cmd } => {
+            if let Err(e) = commands::agent::run(cmd) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Status { api_url, key } => {
+            if let Err(e) = commands::agent::status(api_url, key) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
         }
     }
 }
