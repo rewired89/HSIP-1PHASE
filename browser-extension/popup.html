@@ -25,24 +25,18 @@
       gap: 12px;
     }
 
-    .shield-icon {
-      width: 36px;
-      height: 36px;
-      flex-shrink: 0;
-    }
-
+    .shield-icon { width: 36px; height: 36px; flex-shrink: 0; }
     .header-text { flex: 1; }
     .header-title { font-size: 15px; font-weight: 700; color: #f7fafc; }
     .header-sub   { font-size: 11px; color: #718096; margin-top: 1px; }
 
-    /* Status dot */
     .status-dot {
       width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
     }
     .status-dot.connected    { background: #48bb78; box-shadow: 0 0 6px #48bb78; }
     .status-dot.disconnected { background: #4a5568; }
 
-    /* Main counter */
+    /* Tracker counter */
     .counter-section {
       padding: 20px 18px 16px;
       text-align: center;
@@ -65,15 +59,15 @@
       letter-spacing: 0.08em;
     }
 
-    /* Domain list */
+    /* Blocked domain list */
     .domain-section {
       padding: 12px 18px;
       border-bottom: 1px solid #2d3748;
-      max-height: 160px;
+      max-height: 120px;
       overflow-y: auto;
     }
 
-    .domain-section-title {
+    .section-title {
       font-size: 10px;
       font-weight: 600;
       color: #4a5568;
@@ -86,28 +80,20 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 5px 0;
+      padding: 4px 0;
       font-size: 12px;
       color: #a0aec0;
       border-bottom: 1px solid #1a202c;
     }
     .domain-item:last-child { border-bottom: none; }
 
-    .domain-dot {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: #e53e3e; flex-shrink: 0;
-    }
+    .dot-red  { width: 6px; height: 6px; border-radius: 50%; background: #e53e3e; flex-shrink: 0; }
+    .dot-blue { width: 6px; height: 6px; border-radius: 50%; background: #4299e1; flex-shrink: 0; }
 
-    .domain-name { flex: 1; font-family: monospace; }
+    .domain-name { flex: 1; font-family: monospace; font-size: 11px; }
+    .no-items { font-size: 12px; color: #4a5568; text-align: center; padding: 6px 0; }
 
-    .no-trackers {
-      font-size: 12px;
-      color: #4a5568;
-      text-align: center;
-      padding: 8px 0;
-    }
-
-    /* HSIP connection status */
+    /* HSIP status row */
     .hsip-section {
       padding: 12px 18px;
       border-bottom: 1px solid #2d3748;
@@ -120,40 +106,48 @@
       gap: 8px;
     }
 
-    .hsip-label {
-      font-size: 12px;
-      color: #718096;
-    }
+    .hsip-label { font-size: 12px; color: #718096; }
 
-    .hsip-status-text {
-      font-size: 12px;
-      font-weight: 600;
-    }
+    .hsip-status-text { font-size: 12px; font-weight: 600; }
     .hsip-status-text.connected    { color: #48bb78; }
     .hsip-status-text.disconnected { color: #718096; }
 
-    .btn-connect {
-      font-size: 11px;
-      padding: 4px 10px;
-      border-radius: 4px;
-      border: 1px solid #4a5568;
-      background: #2d3748;
-      color: #a0aec0;
-      cursor: pointer;
-      transition: all 0.15s;
+    /* AI agent activity */
+    .activity-section {
+      padding: 12px 18px;
+      border-bottom: 1px solid #2d3748;
+      display: none;
     }
-    .btn-connect:hover { border-color: #68d391; color: #68d391; }
+
+    .activity-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 5px 0;
+      border-bottom: 1px solid #1a202c;
+    }
+    .activity-item:last-child { border-bottom: none; }
+
+    .activity-action {
+      flex: 1;
+      font-size: 11px;
+      color: #a0aec0;
+      font-family: monospace;
+    }
+
+    .activity-time {
+      font-size: 10px;
+      color: #4a5568;
+      white-space: nowrap;
+      padding-top: 1px;
+    }
 
     /* API key input */
     .key-section {
       padding: 12px 18px;
       border-bottom: 1px solid #2d3748;
     }
-    .key-label {
-      font-size: 11px;
-      color: #718096;
-      margin-bottom: 6px;
-    }
+    .key-label { font-size: 11px; color: #718096; margin-bottom: 6px; }
     .key-row { display: flex; gap: 6px; }
     .key-input {
       flex: 1;
@@ -208,7 +202,6 @@
     }
     .btn-open-hsip:hover { background: #2b6cb0; color: #fff; }
 
-    /* Scrollbar */
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 4px; }
@@ -231,19 +224,19 @@
     <div class="status-dot disconnected" id="statusDot"></div>
   </div>
 
-  <!-- Counter -->
+  <!-- Tracker counter -->
   <div class="counter-section">
     <div class="counter-number zero" id="blockedCount">0</div>
     <div class="counter-label">trackers blocked on this page</div>
   </div>
 
-  <!-- Blocked domains list -->
+  <!-- Blocked domains -->
   <div class="domain-section" id="domainSection" style="display:none">
-    <div class="domain-section-title">Blocked on this page</div>
+    <div class="section-title">Blocked on this page</div>
     <div id="domainList"></div>
   </div>
 
-  <!-- HSIP connection -->
+  <!-- HSIP server status -->
   <div class="hsip-section">
     <div class="hsip-row">
       <span class="hsip-label">HSIP server</span>
@@ -251,9 +244,15 @@
     </div>
   </div>
 
-  <!-- API key input (shown when not connected) -->
+  <!-- AI agent activity (visible only when HSIP connected) -->
+  <div class="activity-section" id="activitySection">
+    <div class="section-title">Recent AI agent activity</div>
+    <div id="activityList"></div>
+  </div>
+
+  <!-- API key input (visible only when no key saved) -->
   <div class="key-section" id="keySection">
-    <div class="key-label">Enter your HSIP API key to connect (found in ~/.hsip/admin.key)</div>
+    <div class="key-label">Enter your HSIP API key (found in ~/.hsip/admin.key)</div>
     <div class="key-row">
       <input type="password" class="key-input" id="keyInput" placeholder="hsip_...">
       <button class="btn-save" id="saveKeyBtn">Save</button>
