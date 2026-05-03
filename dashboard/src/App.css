@@ -94,6 +94,34 @@ button.danger:hover { background: #63171b; }
 }
 .mode-switch-btn:hover { background: #2d3748; color: #e2e8f0; border-color: #718096; }
 
+/* ── Advanced tab toggle / advanced tabs ────────────────────────────── */
+.adv-toggle {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid #2d3748;
+  border-radius: 6px;
+  color: #718096;
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin-left: 0.25rem;
+  white-space: nowrap;
+}
+.adv-toggle:hover     { background: #1a1d27; color: #a0aec0; border-color: #4a5568; }
+.adv-toggle--open     { border-color: #4a5568; color: #a0aec0; background: #1a1d27; }
+.adv-toggle.active    { background: #4a5568; border-color: #4a5568; color: #e2e8f0; }
+
+.adv-tab {
+  padding: 0.5rem 1rem;
+  background: #13161f;
+  border: 1px solid #252836;
+  border-radius: 6px;
+  color: #718096;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.adv-tab:hover        { background: #1e2030; color: #a0aec0; border-color: #4a5568; }
+.adv-tab.active       { background: #4a5568; border-color: #718096; color: #e2e8f0; }
+
 /* ── Consumer hero ──────────────────────────────────────────────────── */
 .consumer-hero {
   text-align: center;
