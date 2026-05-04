@@ -227,22 +227,58 @@ async fn run() -> Result<()> {
         tracing::warn!("   Configure [server.tls] in config.toml to enable HTTPS");
 
         let url = format!("http://{}", addr);
+
+        // Check whether HSIP is already running on this port before attempting to
+        // bind.  This applies to both desktop (embed-dashboard) and dev builds so
+        // that every build mode gives a clear, actionable message instead of a
+        // confusing "already in use" error after the "listening on …" log line.
+        {
+            use std::net::TcpStream;
+            if TcpStream::connect(&addr as &str).is_ok() {
+                #[cfg(feature = "embed-dashboard")]
+                {
+                    tracing::info!("HSIP already running — opening browser to existing session");
+                    let _ = webbrowser::open(&url);
+                    return Ok(());
+                }
+                #[cfg(not(feature = "embed-dashboard"))]
+                return Err(anyhow::anyhow!(
+                    "Port {} is already in use. \
+                     An HSIP instance may already be running — check Task Manager / ps. \
+                     Stop the other process or change the port in config.toml.",
+                    config.server.port
+                ));
+            }
+        }
+
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            // Race condition: something grabbed the port between the check above and bind.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                #[cfg(feature = "embed-dashboard")]
+                {
+                    tracing::info!("Port taken — opening browser to existing HSIP session");
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    let _ = webbrowser::open(&url);
+                    return Ok(());
+                }
+                #[cfg(not(feature = "embed-dashboard"))]
+                return Err(anyhow::anyhow!(
+                    "Port {} is already in use. \
+                     An HSIP instance may already be running — check Task Manager / ps. \
+                     Stop the other process or change the port in config.toml.",
+                    config.server.port
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        // Log *after* a successful bind so the "listening on" message is only
+        // ever printed when the server is actually ready to accept connections.
         tracing::info!("🚀 HSIP API listening on {}", url);
         tracing::info!("   Docs:    http://{}/docs", addr);
         tracing::info!("   Metrics: http://{}/metrics", addr);
         tracing::info!("   Health:  http://{}/health", addr);
-
-        // Desktop builds: if HSIP is already running on this port, open the
-        // existing session in the browser and exit cleanly instead of crashing.
-        #[cfg(feature = "embed-dashboard")]
-        {
-            use std::net::TcpStream;
-            if TcpStream::connect(&addr as &str).is_ok() {
-                tracing::info!("HSIP already running — opening browser to existing session");
-                let _ = webbrowser::open(&url);
-                return Ok(());
-            }
-        }
 
         // Auto-open the dashboard in the default browser (desktop/release builds)
         #[cfg(feature = "embed-dashboard")]
@@ -257,26 +293,6 @@ async fn run() -> Result<()> {
             });
         }
 
-        let listener = match tokio::net::TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            // Race condition: something grabbed the port between check and bind.
-            // Open browser to existing instance and exit cleanly.
-            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                #[cfg(feature = "embed-dashboard")]
-                {
-                    tracing::info!("Port taken — opening browser to existing HSIP session");
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                    let _ = webbrowser::open(&url);
-                    return Ok(());
-                }
-                #[cfg(not(feature = "embed-dashboard"))]
-                return Err(anyhow::anyhow!(
-                    "Port {} is already in use. Stop the other process or change the port in config.toml.",
-                    config.server.port
-                ));
-            }
-            Err(e) => return Err(e.into()),
-        };
         axum::serve(listener, app).await?;
     }
 

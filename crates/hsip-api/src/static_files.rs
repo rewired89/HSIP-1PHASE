@@ -36,18 +36,11 @@ pub async fn serve(uri: Uri) -> impl IntoResponse {
         match embedded::Assets::get(path) {
             Some(file) => {
                 let mime = mime_guess::from_path(path).first_or_octet_stream();
+                let cache = if path == "index.html" { "no-cache" } else { "public, max-age=31536000, immutable" };
                 Response::builder()
                     .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, mime.as_ref())
-                    // Cache fingerprinted assets aggressively; index.html never
-                    .header(
-                        header::CACHE_CONTROL,
-                        if path == "index.html" {
-                            "no-cache"
-                        } else {
-                            "public, max-age=31536000, immutable"
-                        },
-                    )
+                    .header("content-type", mime.as_ref())
+                    .header("cache-control", cache)
                     .body(Body::from(file.data))
                     .unwrap_or_else(|_| not_found())
             }
@@ -57,8 +50,8 @@ pub async fn serve(uri: Uri) -> impl IntoResponse {
                     .expect("index.html must be present in dashboard/dist/");
                 Response::builder()
                     .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, "text/html")
-                    .header(header::CACHE_CONTROL, "no-cache")
+                    .header("content-type", "text/html")
+                    .header("cache-control", "no-cache")
                     .body(Body::from(index.data))
                     .unwrap_or_else(|_| not_found())
             }
