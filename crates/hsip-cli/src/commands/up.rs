@@ -3,6 +3,8 @@ use clap::Args;
 use serde::Deserialize;
 use std::time::Duration;
 
+use super::util::{admin_key_path, load_admin_key};
+
 const DEFAULT_API_URL: &str = "http://127.0.0.1:7474";
 const HEALTH_RETRIES: u32 = 20; // 20 × 500 ms = 10 s
 
@@ -101,9 +103,7 @@ pub fn run(args: UpArgs) -> Result<()> {
         Err(_) => "(identity not found — run: hsip agent register <name>)".to_string(),
     };
 
-    let key_path = dirs::home_dir()
-        .map(|h| h.join(".hsip").join("admin.key").display().to_string())
-        .unwrap_or_else(|| "~/.hsip/admin.key".to_string());
+    let key_path = admin_key_path().display().to_string();
 
     println!();
     println!("  ┌───────────────────────────────────────────────────────────────┐");
@@ -184,20 +184,6 @@ fn get_identity(
         anyhow::bail!("identity request failed: {}", res.status());
     }
     res.json::<IdentityResponse>().context("parse identity response")
-}
-
-fn load_admin_key() -> Result<String> {
-    let home = dirs::home_dir().context("cannot resolve home directory")?;
-    let path = home.join(".hsip").join("admin.key");
-    if !path.exists() {
-        anyhow::bail!(
-            "Admin key not found at {}.\nIs HSIP running? It writes the key on first start.",
-            path.display()
-        );
-    }
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    Ok(raw.trim().to_string())
 }
 
 fn open_in_browser(url: &str) {

@@ -25,6 +25,7 @@ fn derive_encryption_key(master_key: &[u8]) -> [u8; 32] {
 
 /// Load the master key from the HSIP_MASTER_KEY environment variable.
 /// Panics at startup if not set — do not call after startup.
+#[allow(dead_code)]
 pub fn load_master_key() -> Vec<u8> {
     let val = std::env::var("HSIP_MASTER_KEY").unwrap_or_default();
     if val.is_empty() {

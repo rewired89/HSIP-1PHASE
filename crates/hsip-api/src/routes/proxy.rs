@@ -13,8 +13,7 @@
 //! GET  /v1/proxy/setup   → SetupInstructions  (platform-specific)
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
-use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::Ordering;

@@ -3,6 +3,8 @@ use clap::Subcommand;
 use serde::Deserialize;
 use std::time::Duration;
 
+use super::util::load_admin_key;
+
 const DEFAULT_API_URL: &str = "http://127.0.0.1:7474";
 
 // ── Clap types ────────────────────────────────────────────────────────────────
@@ -184,11 +186,12 @@ fn list(api_url: Option<String>, key: Option<String>) -> Result<()> {
     }
 
     println!();
-    println!("{:<36}  {:<20}  {}", "ID", "Label", "Verify key (truncated)");
-    println!("{}", "─".repeat(80));
+    println!("{:<36}  {:<20}  {:<26}  {}", "ID", "Label", "Verify key (truncated)", "Added");
+    println!("{}", "─".repeat(94));
     for p in &peers {
         let vk_short = format!("{}…", &p.verify_key[..p.verify_key.len().min(24)]);
-        println!("{:<36}  {:<20}  {}", p.id, truncate(&p.label, 20), vk_short);
+        let ago = format_ago(p.added_at);
+        println!("{:<36}  {:<20}  {:<26}  {}", p.id, truncate(&p.label, 20), vk_short, ago);
     }
     println!();
     println!("{} trusted peer(s).  Remove: hsip trust remove <id>", peers.len());
@@ -231,20 +234,17 @@ fn verify(
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
-fn load_admin_key() -> Result<String> {
-    let home = dirs::home_dir().context("cannot resolve home directory")?;
-    let path = home.join(".hsip").join("admin.key");
-    if !path.exists() {
-        bail!(
-            "No API key found.\nProvide --key or HSIP_API_KEY, or start HSIP first (key saved to {}).",
-            path.display()
-        );
-    }
-    let key = std::fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
-    Ok(key.trim().to_string())
-}
-
 fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max { s } else { &s[..max] }
+}
+
+fn format_ago(ms: i64) -> String {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let dt = UNIX_EPOCH + Duration::from_millis(ms as u64);
+    let elapsed = SystemTime::now().duration_since(dt).unwrap_or_default();
+    let s = elapsed.as_secs();
+    if s < 60       { "just now".to_string() }
+    else if s < 3600  { format!("{}m ago", s / 60) }
+    else if s < 86400 { format!("{}h ago", s / 3600) }
+    else              { format!("{}d ago", s / 86400) }
 }

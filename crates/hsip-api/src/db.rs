@@ -6,6 +6,7 @@ pub type Db = AnyPool;
 
 static DRIVERS: Once = Once::new();
 
+#[allow(dead_code)]
 pub async fn init(database_url: &str) -> anyhow::Result<Db> {
     DRIVERS.call_once(|| {
         sqlx::any::install_default_drivers();

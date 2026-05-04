@@ -15,6 +15,8 @@ use clap::Subcommand;
 use serde::Deserialize;
 use std::time::Duration;
 
+use super::util::load_admin_key;
+
 const DEFAULT_API_URL: &str = "http://127.0.0.1:7474";
 
 // ── Clap types ────────────────────────────────────────────────────────────────
@@ -460,34 +462,6 @@ pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-
-fn load_admin_key() -> Result<String> {
-    let home = dirs::home_dir().context("cannot resolve home directory")?;
-    let key_path = home.join(".hsip").join("admin.key");
-
-    if !key_path.exists() {
-        bail!(
-            "No API key found.\n\
-             Provide one with --key or HSIP_API_KEY env var,\n\
-             or check that HSIP has been started at least once (key saved to {}).",
-            key_path.display()
-        );
-    }
-
-    let key = std::fs::read_to_string(&key_path)
-        .with_context(|| format!("failed to read {}", key_path.display()))?;
-
-    let key = key.trim().to_string();
-    if key.is_empty() {
-        bail!(
-            "Admin key file is empty: {}\n\
-             Start HSIP once to generate the key, or provide --key manually.",
-            key_path.display()
-        );
-    }
-
-    Ok(key)
-}
 
 fn format_timestamp(ms: i64) -> String {
     use std::time::SystemTime;

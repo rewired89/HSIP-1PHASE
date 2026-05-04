@@ -6,7 +6,7 @@
 
 use axum::{
     body::Body,
-    http::{header, Response, StatusCode, Uri},
+    http::{Response, StatusCode, Uri},
     response::IntoResponse,
 };
 
@@ -26,6 +26,7 @@ mod embedded {
 
 // ── Handler ──────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub async fn serve(uri: Uri) -> impl IntoResponse {
     #[cfg(feature = "embed-dashboard")]
     {
@@ -74,6 +75,7 @@ pub async fn serve(uri: Uri) -> impl IntoResponse {
     }
 }
 
+#[allow(dead_code)]
 fn not_found() -> Response<Body> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
