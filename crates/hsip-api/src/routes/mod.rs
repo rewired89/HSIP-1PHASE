@@ -1,13 +1,15 @@
 pub mod agents;
 pub mod audit;
 pub mod consent;
+pub mod contacts;
 pub mod credentials;
 pub mod dns;
 pub mod identity;
 pub mod keys;
 pub mod messages;
+pub mod proxy;
 pub mod tenant;
-pub mod trust;
+pub mod uploads;
 
 use crate::state::AppState;
 use axum::{
@@ -41,15 +43,13 @@ pub fn router() -> Router<AppState> {
         .route("/v1/keys", get(keys::list))
         .route("/v1/keys", post(keys::create))
         .route("/v1/keys/:id", delete(keys::revoke))
+        // Contacts
+        .route("/v1/contacts", get(contacts::list))
+        .route("/v1/contacts", post(contacts::add))
+        .route("/v1/contacts/:id", delete(contacts::remove))
         // AI Agents
         .route("/v1/agents", get(agents::list))
-        .route("/v1/agents/discover", get(agents::discover))
         .route("/v1/agent/capabilities", get(agents::capabilities))
-        // Federated trust
-        .route("/v1/trust/peers", get(trust::list))
-        .route("/v1/trust/peer", post(trust::add))
-        .route("/v1/trust/peers/:id", delete(trust::remove))
-        .route("/v1/trust/verify", post(trust::verify))
         // Tenant
         .route("/v1/tenant", get(tenant::info))
         .route("/v1/tenant/erase", post(tenant::erase))
@@ -58,4 +58,13 @@ pub fn router() -> Router<AppState> {
         .route("/v1/dns/enable", post(dns::enable))
         .route("/v1/dns/disable", post(dns::disable))
         .route("/v1/dns/log", get(dns::log))
+        // HTTP/HTTPS Proxy traffic monitor
+        .route("/v1/proxy/status", get(proxy::status))
+        .route("/v1/proxy/enable", post(proxy::enable))
+        .route("/v1/proxy/disable", post(proxy::disable))
+        .route("/v1/proxy/log", get(proxy::log))
+        .route("/v1/proxy/setup", get(proxy::setup))
+        // Image uploads — POST requires auth, GET is public (shareable URL)
+        .route("/v1/uploads", post(uploads::upload))
+        .route("/v1/uploads/:id", get(uploads::serve))
 }

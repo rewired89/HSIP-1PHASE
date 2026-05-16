@@ -6,7 +6,6 @@ pub type Db = AnyPool;
 
 static DRIVERS: Once = Once::new();
 
-#[allow(dead_code)]
 pub async fn init(database_url: &str) -> anyhow::Result<Db> {
     DRIVERS.call_once(|| {
         sqlx::any::install_default_drivers();
@@ -187,13 +186,14 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .await?;
 
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS trusted_peers (
-            id         TEXT PRIMARY KEY,
-            tenant_id  TEXT NOT NULL,
-            label      TEXT NOT NULL,
-            verify_key TEXT NOT NULL,
-            added_at   INTEGER NOT NULL,
-            UNIQUE(tenant_id, verify_key)
+        "CREATE TABLE IF NOT EXISTS uploads (
+            id           TEXT PRIMARY KEY,
+            tenant_id    TEXT NOT NULL,
+            filename     TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            data         BLOB NOT NULL,
+            size         INTEGER NOT NULL,
+            created_at   INTEGER NOT NULL
         )",
     )
     .execute(pool)
@@ -208,6 +208,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_credentials_tenant ON credentials (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_audit_tenant       ON audit_entries (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON audit_entries (timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_uploads_tenant     ON uploads (tenant_id)",
     ];
     for idx in &indexes {
         sqlx::query(idx).execute(pool).await?;

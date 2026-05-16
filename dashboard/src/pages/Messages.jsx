@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { request } from '../api';
+import { request, uploadImage } from '../api';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -175,9 +175,16 @@ function ReceiveDialog({ apiKey, contacts, onClose }) {
 
 // ── Message bubble ────────────────────────────────────────────────────────────
 
+function isImageUrl(content) {
+  const s = content.trim();
+  return s.match(/\/v1\/uploads\/[a-f0-9-]+$/i) ||
+         s.match(/^https?:\/\/.+\/v1\/uploads\/[a-f0-9-]+$/i);
+}
+
 function Bubble({ msg, myKey, contacts }) {
   const [open, setOpen] = useState(false);
   const isOut  = msg.direction === 'outbound';
+  const isImg  = isImageUrl(msg.content);
   const proof  = {
     hsip_proof:    1,
     content:       msg.content,
@@ -195,9 +202,18 @@ function Bubble({ msg, myKey, contacts }) {
         </div>
       )}
       <div className="bubble-col">
-        <div className={`bubble ${isOut ? 'bubble--out' : 'bubble--in'}`}
+        <div className={`bubble ${isOut ? 'bubble--out' : 'bubble--in'}${isImg ? ' bubble--img' : ''}`}
              onClick={() => setOpen(v => !v)}>
-          <p className="bubble-text">{msg.content}</p>
+          {isImg ? (
+            <img
+              src={msg.content.trim()}
+              className="bubble-image"
+              alt="shared image"
+              onClick={e => { e.stopPropagation(); window.open(msg.content.trim(), '_blank'); }}
+            />
+          ) : (
+            <p className="bubble-text">{msg.content}</p>
+          )}
           <div className="bubble-footer">
             <span className="bubble-time">{fmtTime(msg.timestamp)}</span>
             {isOut && <span className="bubble-status">{msg.verified ? '✓' : '○'}</span>}
@@ -241,10 +257,12 @@ function Bubble({ msg, myKey, contacts }) {
 // ── Thread ────────────────────────────────────────────────────────────────────
 
 function Thread({ contact, messages, myKey, apiKey, contacts, onSent }) {
-  const [text,   setText]   = useState('');
-  const [busy,   setBusy]   = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [text,      setText]      = useState('');
+  const [busy,      setBusy]      = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [copied,    setCopied]    = useState(false);
   const bottomRef = useRef(null);
+  const fileRef   = useRef(null);
 
   const thread = messages
     .filter(m => m.peer_verify_key === contact.verify_key)
@@ -266,6 +284,24 @@ function Thread({ contact, messages, myKey, apiKey, contacts, onSent }) {
       onSent();
     } catch (e) { alert(e.message); }
     setBusy(false);
+  }
+
+  async function handleImagePick(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const { url } = await uploadImage(file, apiKey);
+      // Build a full URL so the recipient can paste it in any browser
+      const fullUrl = window.location.origin + url;
+      await request('POST', '/v1/messages/sign', {
+        content:         fullUrl,
+        peer_verify_key: contact.verify_key,
+      }, apiKey);
+      onSent();
+    } catch (e) { alert(e.message); }
+    setUploading(false);
+    if (fileRef.current) fileRef.current.value = '';
   }
 
   const lastSent = [...thread].reverse().find(m => m.direction === 'outbound');
@@ -312,6 +348,21 @@ function Thread({ contact, messages, myKey, apiKey, contacts, onSent }) {
           </button>
         )}
         <div className="compose-row">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleImagePick}
+          />
+          <button
+            className="compose-attach"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading || busy}
+            title="Send an image"
+          >
+            {uploading ? '⏳' : '📎'}
+          </button>
           <textarea className="compose-input"
             placeholder={`Message ${contact.nickname}…`}
             value={text} rows={2}
