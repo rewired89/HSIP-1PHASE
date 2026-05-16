@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HSIP (High Security Internet Protocol) is a self-hosted, single-binary local identity server. It provides cryptographic identity (Ed25519), consent management, message signing, verifiable credentials, AI agent governance, DNS tracker blocking, and a tamper-proof audit trail.
 
-**Strategic direction:** Own the "AI agent identity" niche — local-first, zero-config, the tool that gives every AI agent a cryptographic identity and consent-gated audit trail. Think Tailscale for AI agent security. See `KIMI_ANALYSIS.md` for full analysis.
+**Strategic direction:** Own the "AI agent identity" niche — local-first, zero-config, the tool that gives every AI agent a cryptographic identity and consent-gated audit trail. Think Tailscale for AI agent security.
 
 **The server runs at:**
 - `http://127.0.0.1:7474` — desktop mode (no `config.toml` present)
@@ -336,7 +336,7 @@ Extension targets `http://127.0.0.1:7474` (desktop default). `manifest.json` als
 
 ## Dashboard
 
-`dashboard/` — React + Vite. **This is the active production dashboard.** `dashboard_src_only/` is a legacy artifact — do not touch it.
+`dashboard/` — React + Vite. **This is the active production dashboard.**
 
 - Dev server: port 3001, proxies `/v1/*` → `http://localhost:3000`
 - `npm run build` → `dashboard/dist/` → embedded via `rust-embed` with `--features embed-dashboard`
@@ -381,7 +381,6 @@ Go: `sdks/go/hsip/client.go`
 - **Audit entries must be written** for all state-changing operations (identity creation, credential issuance/revocation, consent grant/revoke, key events, trust peer add/remove/verify).
 - **In-memory SQLite tests require `max_connections = 1`** — each connection is a separate DB instance.
 - **`crates/hsip-verify` stays excluded from workspace** — do not add to root `Cargo.toml` members.
-- **`dashboard_src_only/` is not the active dashboard** — never update it. Active dashboard is `dashboard/`.
 - **No migration files** — all schema is inline in `db::run_migrations()`. Add new tables/columns there.
 - **CLI key resolution must use `commands::util::load_admin_key()`** — never write a local `load_admin_key()` in a command file.
 - **`config.toml` must not be committed** — it forces server mode and breaks desktop-mode testing.
@@ -395,7 +394,6 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | What | Key files |
 |---|---|
 | Initial `CLAUDE.md` | `CLAUDE.md` |
-| Kimi strategic analysis | `KIMI_ANALYSIS.md` |
 | `hsip agent register/list/revoke` + `hsip status` | `crates/hsip-cli/src/commands/agent.rs`, `main.rs` |
 | `hsip-mcp` full MCP server crate | `crates/hsip-mcp/` |
 | Browser extension: `manifest.json`, port fix, AI audit panel | `browser-extension/` |
