@@ -175,7 +175,8 @@ async fn run() -> Result<()> {
     // Request ID header
     let x_request_id = HeaderName::from_static("x-request-id");
 
-    let app = Router::new()
+    #[allow(unused_mut)]
+    let mut app = Router::new()
         .merge(routes::router())
         .route("/metrics", get(metrics_handler))
         .route("/health", get(health_handler))
