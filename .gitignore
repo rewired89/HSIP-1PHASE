@@ -101,3 +101,6 @@ hsip_admin_key.txt
 # Formal verification traces
 .z3-trace
 
+# Claude Code agent working directories
+.claude/
+
