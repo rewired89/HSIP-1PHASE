@@ -119,6 +119,11 @@ export default function App() {
               <code>~/.hsip/admin.key</code>
             </div>
           </div>
+          <div className="login-features">
+            {['🔒 Local-only', '✍️ Ed25519 signing', '🤖 AI governance', '🏦 Finance-ready'].map(f => (
+              <span key={f} className="login-feature">{f}</span>
+            ))}
+          </div>
         </div>
       </div>
     );
