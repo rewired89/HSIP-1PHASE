@@ -246,6 +246,22 @@ export default function HomeDashboard({ onNavigate }) {
         </p>
       </div>
 
+      {/* Finance CTA */}
+      <div className="card fin-home-cta" onClick={() => onNavigate('finance')}>
+        <div className="fin-home-cta-left">
+          <span className="fin-home-cta-icon">🏦</span>
+          <div className="fin-home-cta-inner">
+            <span className="fin-home-cta-badge">Financial Services</span>
+            <strong>Building for banks, fintechs, or trading desks?</strong>
+            <p>
+              HSIP provides cryptographic AI agent identity, tamper-proof audit trails,
+              and open banking consent management — SOX, FINRA, MiFID II, and PSD2 ready.
+            </p>
+          </div>
+        </div>
+        <button className="fin-home-cta-btn">See Finance Overview →</button>
+      </div>
+
       {/* What is HSIP */}
       <div className="card" style={{ marginBottom: '1rem' }}>
         <h2>What is HSIP?</h2>

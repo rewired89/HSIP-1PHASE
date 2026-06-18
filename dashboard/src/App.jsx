@@ -10,14 +10,16 @@ import HomeDashboard   from './pages/HomeDashboard';
 import ProveIt         from './pages/ProveIt';
 import ConsentWallet   from './pages/ConsentWallet';
 import AIWatch         from './pages/AIWatch';
-import TrackerInspector from './pages/TrackerInspector';
-import ProtectionSetup  from './pages/ProtectionSetup';
-import NetworkMonitor   from './pages/NetworkMonitor';
-import Onboarding       from './pages/Onboarding';
+import TrackerInspector  from './pages/TrackerInspector';
+import ProtectionSetup   from './pages/ProtectionSetup';
+import NetworkMonitor    from './pages/NetworkMonitor';
+import Onboarding        from './pages/Onboarding';
+import FinanceDashboard  from './pages/FinanceDashboard';
 import './App.css';
 
 const SIMPLE_TABS = [
   { id: 'home',              icon: '🏠', label: 'Home' },
+  { id: 'finance',           icon: '🏦', label: 'Finance' },
   { id: 'messages',          icon: '💬', label: 'Messages' },
   { id: 'network',           icon: '🌐', label: 'Traffic' },
   { id: 'prove-it',          icon: '✍️',  label: 'Alibi' },
@@ -175,6 +177,7 @@ export default function App() {
           {mode === 'simple' ? (
             <>
               {tab === 'home'              && <HomeDashboard    onNavigate={setTab} />}
+              {tab === 'finance'           && <FinanceDashboard apiKey={apiKey} />}
               {tab === 'messages'          && <Messages         apiKey={apiKey} />}
               {tab === 'network'           && <NetworkMonitor   apiKey={apiKey} />}
               {tab === 'prove-it'          && <ProveIt          apiKey={apiKey} />}
