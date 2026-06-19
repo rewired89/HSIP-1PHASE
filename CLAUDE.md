@@ -439,3 +439,17 @@ All commits on branch `claude/create-claude-md-pBtap`:
 3. Add `pub mod <name>;` to `commands/mod.rs`
 4. Use `use super::util::load_admin_key;` — never write a local copy
 5. Wire the match arm in `fn main()`
+
+---
+
+## CodeMap Protocol
+
+**On session start:** Read `CODEMAP.md` before touching any code.
+
+**After any function or variable change:** Update its entry in `CODEMAP.md` — `purpose`, `calls`, `called_by`, `mutates` fields as needed.
+
+**After adding anything new:** Add its entry to `CODEMAP.md` under the correct file section.
+
+**After deleting anything:** Remove its entry from `CODEMAP.md`.
+
+**CODEMAP.md must be committed in the same commit as the code change** — never let the two diverge.
