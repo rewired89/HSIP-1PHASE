@@ -132,6 +132,12 @@ impl Config {
         if let Ok(port) = std::env::var("PORT") {
             config.server.port = port.parse().context("PORT must be a valid u16")?;
         }
+        if let Ok(host) = std::env::var("HOST") {
+            config.server.host = host;
+        }
+        if std::env::var("CORS_ALLOW_ALL").is_ok() {
+            config.cors.allowed_origins = vec!["*".to_string()];
+        }
 
         Ok(config)
     }
@@ -248,10 +254,24 @@ impl Config {
             format!("sqlite:{}?mode=rwc", path_fwd)
         });
 
+        let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port: u16 = std::env::var("PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(7474);
+        let cors_origins = if std::env::var("CORS_ALLOW_ALL").is_ok() {
+            vec!["*".to_string()]
+        } else {
+            vec![
+                format!("http://localhost:{}", port),
+                format!("http://127.0.0.1:{}", port),
+            ]
+        };
+
         Ok(Config {
             server: ServerConfig {
-                host: "127.0.0.1".to_string(),
-                port: 7474,
+                host,
+                port,
                 tls: None,
             },
             database: DatabaseConfig {
@@ -265,10 +285,7 @@ impl Config {
                 rate_limit_per_minute: 300,
             },
             cors: CorsConfig {
-                allowed_origins: vec![
-                    "http://localhost:7474".to_string(),
-                    "http://127.0.0.1:7474".to_string(),
-                ],
+                allowed_origins: cors_origins,
             },
             metrics: MetricsConfig { token: None },
             logging: LoggingConfig {

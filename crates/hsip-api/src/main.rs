@@ -351,6 +351,21 @@ fn build_cors_layer(cors_config: &config::CorsConfig) -> CorsLayer {
         return CorsLayer::new();
     }
 
+    if cors_config.allowed_origins.iter().any(|o| o == "*") {
+        tracing::info!("CORS: allowing all origins (CORS_ALLOW_ALL)");
+        return CorsLayer::new()
+            .allow_origin(AllowOrigin::any())
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::DELETE,
+            ])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+            ]);
+    }
+
     let origins: Vec<axum::http::HeaderValue> = cors_config
         .allowed_origins
         .iter()
