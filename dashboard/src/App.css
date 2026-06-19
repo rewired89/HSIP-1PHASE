@@ -1332,14 +1332,14 @@ button.danger:hover { background: var(--c-red-bg); }
 /* ── Hero ── */
 .fin-hero {
   text-align: center;
-  padding: 2.5rem 1.5rem 2rem;
+  padding: 3rem 1.5rem 2.25rem;
   margin-bottom: 1rem;
   background:
-    radial-gradient(ellipse 95% 70% at 50% -5%, rgba(245,158,11,0.2) 0%, transparent 62%),
-    radial-gradient(ellipse 45% 35% at 90% 80%, rgba(245,158,11,0.06) 0%, transparent 55%);
-  border: 1px solid rgba(245,158,11,0.15);
-  border-radius: var(--r);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    radial-gradient(ellipse 100% 80% at 50% -5%, rgba(249,115,22,0.25) 0%, rgba(245,158,11,0.08) 35%, transparent 65%),
+    radial-gradient(ellipse 60% 45% at 80% 90%, rgba(77,128,255,0.1) 0%, transparent 55%);
+  border: 1px solid rgba(245,158,11,0.18);
+  border-radius: var(--r-lg);
+  box-shadow: 0 1px 6px rgba(0,0,0,0.35), 0 0 60px rgba(249,115,22,0.06);
 }
 
 .fin-hero-badge {
@@ -1357,10 +1357,10 @@ button.danger:hover { background: var(--c-red-bg); }
 }
 
 .fin-hero h2 {
-  font-size: 1.75rem;
-  font-weight: 700;
+  font-size: 2.1rem;
+  font-weight: 800;
   letter-spacing: -0.03em;
-  line-height: 1.25;
+  line-height: 1.2;
   margin-bottom: 0.75rem;
   color: var(--c-text);
 }
@@ -1816,6 +1816,7 @@ button.danger:hover { background: var(--c-red-bg); }
   flex-wrap: wrap;
   cursor: pointer;
   transition: border-color 0.15s;
+  box-shadow: 0 0 40px rgba(245,158,11,0.04);
 }
 
 .fin-home-cta:hover {
