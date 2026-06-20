@@ -82,7 +82,7 @@ HSIP's audit log is designed to be exportable for legal proceedings:
 
 ```bash
 # Export the full audit log as JSON
-curl http://127.0.0.1:7777/v1/audit \
+curl http://127.0.0.1:7474/v1/audit \
   -H "Authorization: Bearer $KEY"
 
 # Verify audit log integrity (detects tampering)
@@ -121,7 +121,7 @@ HSIP already includes optional post-quantum cryptography support:
 - **ML-DSA-65** (NIST FIPS 204) — post-quantum digital signatures
 - **ML-KEM-768** (NIST FIPS 203) — post-quantum key encapsulation
 
-Enable it in `hsip.toml`:
+Enable it in `config.toml`:
 
 ```toml
 [crypto]
@@ -137,10 +137,10 @@ A document signed with ML-DSA-65 today will remain cryptographically sound again
 
 ```bash
 # Start HSIP
-hsip
+./hsip-api
 
 # Sign a message via the API
-curl -X POST http://127.0.0.1:7777/v1/messages/sign \
+curl -X POST http://127.0.0.1:7474/v1/messages/sign \
   -H "Authorization: Bearer $(cat ~/.hsip/admin.key)" \
   -H "Content-Type: application/json" \
   -d '{"content": "I confirm the terms agreed in our meeting today."}'
