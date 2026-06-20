@@ -10,8 +10,8 @@ RUN npm run build
 FROM rust:1.83-slim AS rust-builder
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-# Cache dependencies first
-COPY Cargo.toml Cargo.lock ./
+# Copy full workspace (Cargo.toml, Cargo.lock, all crates)
+COPY Cargo.toml ./
 COPY crates/ ./crates/
 # Copy built dashboard so the embed feature can find it
 COPY --from=dashboard-builder /dashboard/dist ./dashboard/dist
