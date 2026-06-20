@@ -1,8 +1,8 @@
 # Contributing to HSIP
 
-HSIP is an open-source privacy project. Contributions are welcome — whether that is fixing a bug, improving documentation, adding a new tracker to the blocklist, or building a new integration.
+HSIP is a proprietary privacy product. Contributions are welcome — whether that is fixing a bug, improving documentation, adding a new tracker to the blocklist, or building a new integration.
 
-HSIP is open source because **closed-source privacy is an oxymoron.** Every contribution helps users trust the tool more.
+By contributing you assign your rights to Dayana Sanchez (see License section below). Every contribution helps users trust the tool more.
 
 ---
 
@@ -171,4 +171,4 @@ This project is built by people who believe in privacy as a fundamental right. C
 
 ## License
 
-By contributing to HSIP, you agree that your contributions will be licensed under the MIT License.
+By contributing to HSIP, you irrevocably assign all intellectual property rights in your contribution to Dayana Sanchez. Contributions may be used under proprietary commercial terms. See [LICENSE](LICENSE) for full details.

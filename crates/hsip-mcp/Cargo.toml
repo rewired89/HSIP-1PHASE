@@ -3,7 +3,7 @@ name = "hsip-mcp"
 version = "0.1.0"
 edition = "2021"
 description = "HSIP MCP server — gives AI agents cryptographic identity, consent checks, and a tamper-proof audit trail"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 
 [[bin]]
 name = "hsip-mcp"

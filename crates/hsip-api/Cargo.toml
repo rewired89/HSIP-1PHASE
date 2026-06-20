@@ -3,7 +3,7 @@ name = "hsip-api"
 version = "0.2.0"
 edition = "2021"
 description = "HSIP REST API - Multi-tenant identity, consent, and message verification service"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 
 [[bin]]
 name = "hsip-api"

@@ -1,21 +1,74 @@
-MIT License
+HSIP COMMERCIAL LICENSE
 
-Copyright (c) 2025-2026 Dayana Sanchez
+Copyright (c) 2025–2026 Dayana Sanchez. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+DEFINITIONS
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+"Software" means the HSIP source code, compiled binaries, documentation,
+and any associated files in this repository.
+
+"Commercial Use" means any use of the Software — directly or indirectly —
+in a product, service, internal tool, or workflow that generates revenue,
+is used in a business context, is deployed in a production environment, or
+is made available to end users whether or not a fee is charged.
+
+"Personal Use" means use of the Software solely for personal, non-commercial
+evaluation, learning, or research by a private individual, with no revenue
+generation and no business or organisational deployment of any kind.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+GRANT OF RIGHTS
+
+1. Personal & Evaluation Use
+   You may use, copy, and modify the Software at no charge, solely for
+   Personal Use as defined above.
+
+2. Commercial Use — License Required
+   Any Commercial Use of the Software requires a separate, paid commercial
+   license granted in writing by Dayana Sanchez.
+
+   To obtain a commercial license, contact:
+       sanchezleal1989@gmail.com
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RESTRICTIONS
+
+Without a valid written commercial license from Dayana Sanchez, you
+may NOT:
+
+  • Deploy the Software in any production or staging environment
+  • Use the Software to provide services, SaaS, or APIs to third parties
+  • Incorporate the Software into a commercial product or offering
+  • Use the Software within any organisation, company, or institution
+  • Sub-license, resell, or redistribute the Software
+  • Remove or alter this license notice or any copyright notices
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CONTRIBUTIONS
+
+By submitting a pull request, patch, or any other contribution to this
+repository, you irrevocably assign all intellectual property rights in
+that contribution to Dayana Sanchez. Your contribution may be used under
+any terms, including proprietary commercial terms, without restriction or
+compensation to you.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL
+DAYANA SANCHEZ BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT
+OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Commercial licensing inquiries: sanchezleal1989@gmail.com

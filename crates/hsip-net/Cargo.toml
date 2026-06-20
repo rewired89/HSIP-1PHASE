@@ -2,7 +2,7 @@
 name = "hsip-net"
 version = "0.1.2"
 edition = "2021"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 description = "HSIP networking (UDP control plane: HELLO + CONSENT)"
 rust-version = "1.87"
 

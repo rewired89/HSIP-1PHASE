@@ -92,14 +92,108 @@ const USE_CASES = [
 ];
 
 const REGULATIONS = [
-  { code: 'SOX §404',          label: 'Audit trail integrity',   status: 'covered' },
-  { code: 'FINRA Rule 4511',   label: 'Books & records',         status: 'covered' },
-  { code: 'MiFID II Art. 25',  label: 'Algo documentation',      status: 'covered' },
-  { code: 'PSD2 / Open Finance', label: 'Consent management',    status: 'covered' },
-  { code: 'GDPR Art. 7',       label: 'Consent withdrawal',      status: 'covered' },
-  { code: 'DORA',              label: 'AI system resilience',    status: 'partial'  },
-  { code: 'SWIFT CSCF',        label: 'Access controls',         status: 'partial'  },
-  { code: 'ISO 20022',         label: 'Structured payments',     status: 'roadmap'  },
+  { code: 'SOX §404',            label: 'Audit trail integrity',  status: 'covered' },
+  { code: 'FINRA Rule 4511',     label: 'Books & records',        status: 'covered' },
+  { code: 'MiFID II Art. 25',    label: 'Algo documentation',     status: 'covered' },
+  { code: 'PSD2 / Open Finance', label: 'Consent management',     status: 'covered' },
+  { code: 'GDPR Art. 7',         label: 'Consent withdrawal',     status: 'covered' },
+  { code: 'DORA',                label: 'AI system resilience',   status: 'covered' },
+  { code: 'SWIFT CSCF',          label: 'Access controls',        status: 'covered' },
+  { code: 'ISO 20022',           label: 'Structured payments',    status: 'roadmap' },
+];
+
+const COMPLIANCE_MAP = [
+  {
+    reg: 'SOX §404',
+    full: 'Sarbanes-Oxley Act — Section 404',
+    domain: 'Internal Controls',
+    requirement: 'Management must assess the effectiveness of internal controls over financial reporting. Audit records must be maintained in tamper-proof form, preserved for 7 years, and accessible to external auditors on demand.',
+    gap: 'Standard database audit tables are rewritable by any privileged DBA. There is no cryptographic proof that a record has not been altered since it was written.',
+    features: [
+      { label: 'Signed audit log', desc: 'Every state-changing event writes an Ed25519-signed, append-only entry. A signature mismatch immediately reveals retroactive tampering — no forensic analysis required.', api: 'GET /v1/audit' },
+      { label: 'Non-repudiation', desc: 'Each log entry is cryptographically tied to the API key that performed the action — establishing an unambiguous, verifiable chain of accountability.', api: 'GET /v1/audit?action=key.create' },
+    ],
+  },
+  {
+    reg: 'FINRA Rule 4511',
+    full: 'FINRA Rule 4511 — General Requirements for Books and Records',
+    domain: 'Record Keeping',
+    requirement: 'Member firms must make and preserve books and records as required by FINRA rules. Electronic records must be preserved in a non-rewritable, non-erasable format for a minimum of 3 years (6 years for certain records).',
+    gap: 'SQL audit tables are rewritable. No standard mechanism proves that a record has not been modified since it was first written, making audit trails vulnerable to silent manipulation.',
+    features: [
+      { label: 'Append-only audit store', desc: 'The HSIP audit table is insert-only by design. Existing entries are never updated or deleted — only new rows are added. The database schema enforces this at the application level.', api: 'GET /v1/audit?limit=500' },
+      { label: 'Ed25519 signature on every entry', desc: 'Every audit record carries an Ed25519 signature. The signature provides cryptographic proof of record integrity at any future point in time — satisfying the non-rewritable requirement.', api: null },
+    ],
+  },
+  {
+    reg: 'MiFID II Art. 25',
+    full: 'Markets in Financial Instruments Directive II — Article 25',
+    domain: 'Algorithmic Trading',
+    requirement: 'Investment firms using algorithmic trading must document their systems, risk controls, and the algorithm responsible for each order. Records must identify the specific algorithm version and be available to the competent authority within 72 hours.',
+    gap: 'AI trading agents are anonymous at the message level — no mechanism links a specific model version or agent instance to a specific order in a cryptographically verifiable way. Log files are mutable.',
+    features: [
+      { label: 'Agent passport (Ed25519 keypair)', desc: 'Each AI trading model version is registered as an HSIP agent with a unique Ed25519 keypair. The private key is held by the agent; the public key is the permanent identifier. Every order the agent signs is irrevocably linked to that key.', api: 'POST /v1/keys  { agent_type: "ai_agent", name: "EquityBot-v3.1" }' },
+      { label: 'Per-agent velocity monitoring', desc: 'HSIP tracks per-agent request velocity in a 60-second sliding window. Anomalies above 100 req/min are logged immediately. Agents exceeding 1,000 req/min are auto-revoked — satisfying the risk controls requirement.', api: 'GET /v1/agents' },
+      { label: '72-hour audit retrieval', desc: 'The complete signed audit trail is queryable by agent ID, action type, and time range in a single API call. Regulators receive a cryptographically verifiable record of every decision.', api: 'GET /v1/audit?limit=500' },
+    ],
+  },
+  {
+    reg: 'PSD2 / Open Finance',
+    full: 'Payment Services Directive 2 — Strong Customer Authentication & Consent',
+    domain: 'Open Banking',
+    requirement: 'Third Party Providers must obtain explicit, granular, time-bounded, revocable consent before accessing account data. The consent event must be recorded and auditable. Revocation must be effective immediately.',
+    gap: 'OAuth consent flows produce access tokens with no cryptographic binding to the consent event. Token revocation relies on TTL expiry — not immediate. There is no signed proof of the consent event itself.',
+    features: [
+      { label: 'Cryptographic consent issuance', desc: 'Consent is issued as a signed, time-bounded record binding the grantor identity, grantee identity, scope, and expiry timestamp. The signature makes the consent event cryptographically provable.', api: 'POST /v1/consent/grant  { peer_verify_key, expires_ms }' },
+      { label: 'Instant revocation', desc: 'Revocation is applied in-memory before the async database write — blocking further access within the current request lifecycle, not after a token TTL. This satisfies the "immediate effect" requirement.', api: 'POST /v1/consent/revoke  { peer_verify_key }' },
+      { label: 'Auditable consent lifecycle', desc: 'Every grant and revocation writes a signed audit entry. The full consent lifecycle — who granted what, when, and when it was revoked — is demonstrably provable to regulators.', api: 'GET /v1/consent/:peer_verify_key' },
+    ],
+  },
+  {
+    reg: 'GDPR Art. 7',
+    full: 'General Data Protection Regulation — Article 7: Conditions for Consent',
+    domain: 'Consent & Data Rights',
+    requirement: 'The controller must be able to demonstrate that the data subject has consented. Consent must be as easy to withdraw as to give. The data subject must be informed before giving consent.',
+    gap: 'Most consent records are plain database rows with no cryptographic proof of when or how consent was obtained. Revocation may require manual processes or propagation delays across systems.',
+    features: [
+      { label: 'Demonstrable consent with timestamp', desc: 'Each consent grant is Ed25519-signed at a specific timestamp — providing cryptographic proof of exactly who consented, to what, and when. This directly satisfies the "controller must demonstrate" requirement.', api: 'POST /v1/consent/grant' },
+      { label: 'One-call withdrawal', desc: 'A single API call revokes consent with immediate effect — as easy as granting it. The revocation is signed, timestamped, and logged — making the withdrawal demonstrably provable as well.', api: 'POST /v1/consent/revoke' },
+    ],
+  },
+  {
+    reg: 'DORA',
+    full: 'Digital Operational Resilience Act (EU) 2022/2554',
+    domain: 'AI System Resilience',
+    requirement: 'Financial entities must implement ICT risk management, monitor third-party dependencies, and maintain operational resilience of AI systems. Rogue or compromised AI must be detected and contained. Incident records must be preserved.',
+    gap: 'No standard mechanism exists to detect when an AI agent is behaving anomalously due to prompt injection, adversarial attack, or runaway loops — and contain it in real time before damage occurs.',
+    features: [
+      { label: 'Real-time velocity monitoring', desc: 'HSIP tracks per-agent request velocity in a sliding 60-second window. An anomaly above 100 req/min is logged immediately as a signed incident record.', api: 'GET /v1/agents' },
+      { label: 'Auto-revocation circuit breaker', desc: 'Agents exceeding 1,000 req/min are auto-revoked in-memory before the database write — containing the incident within the current request. This is a zero-configuration preventive control, not a reactive SIEM alert.', api: null },
+      { label: 'Signed incident timeline', desc: 'Every anomaly detection and revocation event writes a signed audit entry — creating an immutable, cryptographically verifiable incident timeline that satisfies DORA reporting requirements.', api: 'GET /v1/audit?action=anomaly' },
+      { label: 'Zero cloud dependency', desc: 'HSIP runs entirely on-premises. No third-party SLA, no vendor lock-in, no cloud outage risk — directly addressing DORA\'s third-party ICT concentration risk requirements.', api: null },
+    ],
+  },
+  {
+    reg: 'SWIFT CSCF',
+    full: 'SWIFT Customer Security Controls Framework',
+    domain: 'Messaging Security',
+    requirement: 'Financial institutions must implement strong access controls, multi-factor authentication, and message integrity verification for all systems connecting to or transmitting over SWIFT infrastructure.',
+    gap: 'API keys and shared secrets provide no message-level integrity proof. A compromised intermediary or insider can alter a payment instruction after it leaves the originator — with no detectable trace.',
+    features: [
+      { label: 'Message-level Ed25519 signing', desc: 'Wire transfer and settlement instructions are signed with Ed25519 before entering the payments rail. The signature proves the message originated from the authorised keyholder and was not altered in transit — satisfying CSCF Control 1.2.', api: 'POST /v1/messages/sign' },
+      { label: 'Federated counterparty trust', desc: 'Exchange Ed25519 verify keys with correspondent banks out-of-band. Verify any incoming instruction locally against the stored key — no round trip to a central registry, no SLA dependency, no single point of failure.', api: 'POST /v1/trust/peer  →  POST /v1/trust/verify' },
+    ],
+  },
+  {
+    reg: 'ISO 20022',
+    full: 'ISO 20022 — Universal Financial Industry Message Scheme',
+    domain: 'Structured Payments',
+    requirement: 'Standardised XML/JSON message format for payments, securities, and trade finance. Institutions migrating from SWIFT MT to ISO 20022 must preserve full message integrity and traceability end-to-end.',
+    gap: 'ISO 20022 defines message structure but not cryptographic integrity. Messages can be altered after the sender hands them off to the rail without detection.',
+    features: [
+      { label: 'Signature layer over ISO 20022 body', desc: 'HSIP signs any ISO 20022 message body before submission. The Ed25519 signature travels alongside the message and can be verified at any hop in the settlement chain — adding integrity guarantees the standard itself does not provide.', api: 'POST /v1/messages/sign  { content: "<ISO20022 payload>" }' },
+    ],
+  },
 ];
 
 const COMPARISON_ROWS = [
@@ -110,7 +204,7 @@ const COMPARISON_ROWS = [
   { feature: 'Instant consent revocation',                  hsip: true,  central: true,  chain: false, nothing: false },
   { feature: 'Federated inter-institution trust',           hsip: true,  central: false, chain: true,  nothing: false },
   { feature: 'Zero-config single binary',                   hsip: true,  central: false, chain: false, nothing: true  },
-  { feature: 'Open source / auditable',                     hsip: true,  central: false, chain: false, nothing: true  },
+  { feature: 'Auditable implementation (no black-box vendor)', hsip: true,  central: false, chain: false, nothing: true  },
 ];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -380,6 +474,141 @@ function LiveSignDemo({ apiKey }) {
   );
 }
 
+// ── Compliance Mapper ─────────────────────────────────────────────────────────
+
+const STATUS_STYLE = {
+  covered: { bg: 'rgba(34,197,94,0.1)',   color: '#22c55e', label: 'COVERED' },
+  roadmap: { bg: 'rgba(99,102,241,0.1)', color: '#818cf8', label: 'ROADMAP' },
+};
+
+function ComplianceCard({ item }) {
+  const [open, setOpen] = useState(false);
+  const s = STATUS_STYLE[item.status] || STATUS_STYLE.covered;
+
+  return (
+    <div
+      className={`fin-gap-card${open ? ' fin-gap-card--open' : ''}`}
+      style={{ borderColor: open ? s.color + '55' : undefined }}
+      onClick={() => setOpen(o => !o)}
+    >
+      <div className="fin-gap-header">
+        <div style={{
+          fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.1em',
+          padding: '0.18rem 0.5rem', borderRadius: '4px',
+          background: s.bg, color: s.color, flexShrink: 0, whiteSpace: 'nowrap',
+        }}>
+          {s.label}
+        </div>
+        <div className="fin-gap-title-block">
+          <span className="fin-gap-title">{item.reg}</span>
+          <div style={{ fontSize: '0.75rem', color: 'var(--c-text-3)', marginTop: '0.15rem' }}>
+            {item.full}
+          </div>
+        </div>
+        <span style={{
+          fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em',
+          padding: '0.15rem 0.55rem', borderRadius: '4px',
+          background: 'rgba(67,97,255,0.1)', color: 'var(--c-accent-l)', flexShrink: 0,
+        }}>
+          {item.domain}
+        </span>
+        <span className="fin-gap-toggle">{open ? '▲' : '▼'}</span>
+      </div>
+
+      {open && (
+        <div style={{ padding: '0 1rem 1.25rem' }}>
+          {/* Requirement */}
+          <div style={{
+            background: 'rgba(67,97,255,0.05)', border: '1px solid rgba(67,97,255,0.14)',
+            borderRadius: 'var(--r-sm)', padding: '0.875rem', marginBottom: '0.875rem',
+          }}>
+            <div style={{
+              fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.1em',
+              color: 'var(--c-accent-l)', textTransform: 'uppercase', marginBottom: '0.45rem',
+            }}>
+              What the regulation requires
+            </div>
+            <p style={{ fontSize: '0.83rem', color: 'var(--c-text-2)', lineHeight: 1.65, margin: 0 }}>
+              {item.requirement}
+            </p>
+          </div>
+
+          {/* Gap */}
+          <div style={{
+            background: 'rgba(244,63,94,0.05)', border: '1px solid rgba(244,63,94,0.14)',
+            borderRadius: 'var(--r-sm)', padding: '0.875rem', marginBottom: '0.875rem',
+          }}>
+            <div style={{
+              fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.1em',
+              color: 'var(--c-red)', textTransform: 'uppercase', marginBottom: '0.45rem',
+            }}>
+              The gap in current systems
+            </div>
+            <p style={{ fontSize: '0.83rem', color: 'var(--c-text-2)', lineHeight: 1.65, margin: 0 }}>
+              {item.gap}
+            </p>
+          </div>
+
+          {/* Features */}
+          <div style={{
+            fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.1em',
+            color: s.color, textTransform: 'uppercase', marginBottom: '0.55rem',
+          }}>
+            How HSIP satisfies it
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {item.features.map((f, i) => (
+              <div key={i} style={{
+                background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.14)',
+                borderRadius: 'var(--r-sm)', padding: '0.875rem',
+              }}>
+                <div style={{
+                  fontSize: '0.82rem', fontWeight: 700, color: 'var(--c-text)',
+                  marginBottom: '0.3rem',
+                }}>
+                  {f.label}
+                </div>
+                <p style={{ fontSize: '0.8rem', color: 'var(--c-text-2)', lineHeight: 1.65, margin: 0 }}>
+                  {f.desc}
+                </p>
+                {f.api && (
+                  <code style={{
+                    display: 'block', marginTop: '0.5rem', fontSize: '0.72rem',
+                    color: 'var(--c-accent-l)', background: 'var(--c-bg)',
+                    padding: '0.3rem 0.6rem', borderRadius: '4px',
+                    border: '1px solid rgba(67,97,255,0.13)', wordBreak: 'break-all',
+                  }}>
+                    {f.api}
+                  </code>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ComplianceMapper() {
+  return (
+    <div className="card">
+      <h2>Compliance Technical Mapping</h2>
+      <p className="fin-section-desc">
+        For each regulation: the exact requirement text, the gap in current systems,
+        and the specific HSIP feature and API call that satisfies it.
+        Click any row to expand. This is the documentation your legal and compliance
+        team needs for a vendor evaluation.
+      </p>
+      <div className="fin-gaps">
+        {COMPLIANCE_MAP.map((item, i) => (
+          <ComplianceCard key={i} item={item} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function FinanceDashboard({ apiKey }) {
@@ -464,6 +693,9 @@ export default function FinanceDashboard({ apiKey }) {
           <span><span className="fin-reg-dot" style={{ background: '#818cf8' }} /> Roadmap</span>
         </div>
       </div>
+
+      {/* ── Compliance technical mapping ── */}
+      <ComplianceMapper />
 
       {/* ── Live demo ── */}
       <LiveSignDemo apiKey={apiKey} />

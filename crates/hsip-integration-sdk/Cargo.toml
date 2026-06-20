@@ -2,7 +2,7 @@
 name = "hsip-integration-sdk"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 description = "HSIP Integration SDK - stable extension points for third-party adapters"
 repository = "https://github.com/nyxsystems/HSIP-1PHASE-1"
 

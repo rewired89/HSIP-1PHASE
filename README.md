@@ -2,12 +2,12 @@
 
 **One binary. No cloud. No subscription. Your data never leaves your machine.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-Commercial-red.svg)](LICENSE)
 [![Build](https://github.com/rewired89/HSIP-1PHASE/actions/workflows/release.yml/badge.svg)](https://github.com/rewired89/HSIP-1PHASE/actions)
 
 ### [🌐 hsip.rewired89.github.io/HSIP-1PHASE](https://rewired89.github.io/HSIP-1PHASE/) — Landing page with one-click downloads
 
-> HSIP is open source because *closed-source privacy is an oxymoron.* Every key is yours. Every byte is auditable. [Read the threat model →](THREAT_MODEL.md)
+> Every key is yours. Every byte runs locally. No cloud. No subscription. Commercial use requires a license — contact [sanchezleal1989@gmail.com](mailto:sanchezleal1989@gmail.com). [Read the threat model →](THREAT_MODEL.md)
 
 ## Quick install
 
@@ -305,9 +305,13 @@ To report a vulnerability: **sanchezleal1989@gmail.com**
 
 ## License
 
-MIT © 2025–2026 Dayana Sanchez — use it freely. See [LICENSE](LICENSE).
+© 2025–2026 Dayana Sanchez. All rights reserved.
 
-HSIP is open source because trust requires auditability. You should be able to verify that your identity key never leaves your machine. Now you can.
+HSIP is **proprietary software**. Personal and evaluation use is free. Commercial use — including production deployments, business use, and integrations — requires a paid license.
+
+**Commercial licensing:** [sanchezleal1989@gmail.com](mailto:sanchezleal1989@gmail.com)
+
+See [LICENSE](LICENSE) for full terms.
 
 ---
 
