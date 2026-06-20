@@ -1,7 +1,7 @@
 # Rust
 target/
 **/target/
-Cargo.lock
+# Cargo.lock is committed — required for reproducible Docker builds of binary crates
 
 # Local Windows build dirs you used
 hsip_target*/
