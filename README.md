@@ -1,6 +1,6 @@
 # HSIP — Local Identity Server
 
-**One binary. No cloud. No subscription. Your data never leaves your machine.**
+**One binary. No cloud. No subscription. Cryptographic identity and tamper-proof audit trail for individuals, AI agents, and financial institutions.**
 
 [![License: Proprietary](https://img.shields.io/badge/License-Commercial-red.svg)](LICENSE)
 [![Build](https://github.com/rewired89/HSIP-1PHASE/actions/workflows/release.yml/badge.svg)](https://github.com/rewired89/HSIP-1PHASE/actions)
@@ -46,6 +46,7 @@ HSIP is the answer to all three. It runs on your hardware, signs everything with
 | **Control my AI agents** — see exactly what my AI did, revoke access instantly | [AI Watch + Consent Wallet](#3-ai-watch--know-exactly-what-your-ai-did) |
 | **Build privacy-respecting software** — add consent infrastructure to my app or AI agent | [Developer SDK →](#for-developers) |
 | **Enterprise audit compliance** — GDPR, court records, legal-grade evidence chains | [Enterprise deployment →](#for-enterprises) |
+| **Financial services infrastructure** — MiFID II, FINRA 4511, SOX §404, DORA, SWIFT CSCF compliance | [Financial Services →](#financial-services) |
 
 ---
 
@@ -128,22 +129,170 @@ Export the log at any time for legal proceedings, compliance audits, or personal
 
 ---
 
+## Financial Services
+
+HSIP is cryptographic infrastructure for banks, trading desks, fintechs, and any regulated institution that needs a tamper-proof audit trail, AI agent governance, and cross-institution identity verification — without a central cloud vendor in the middle.
+
+**The client is the institution, not the retail investor.** HSIP runs inside your data center (or on-premise), signs every action with your Ed25519 keypair, and produces legally defensible evidence that your systems, analysts, and AI agents did exactly what the audit trail says they did.
+
+---
+
+### Why financial institutions need this now
+
+**1. AI agents act on behalf of your institution** — and regulators are going to ask who authorized each action. Without a cryptographic identity attached to each agent and an append-only log of every request, you cannot answer that question. HSIP assigns every AI agent its own Ed25519 keypair, logs every action it takes, and lets you revoke its access in milliseconds.
+
+**2. MiFID II Article 25 and FINRA Rule 4511 require you to prove** what your systems did, when, and on whose authority. A log in a database is not proof — it can be altered. A BLAKE3 hash-chained audit log is proof. Tamper with any entry and the chain breaks, detectable by any party.
+
+**3. Open Banking (PSD2) mandates machine-readable, time-bounded consent.** HSIP's Consent Wallet generates exactly that: a cryptographically signed grant scoped to a specific action, automatically expiring, revocable in real time. No more cookie banners your compliance team can't evidence.
+
+**4. Inter-institution trust is broken.** When a message arrives from a counterparty, how do you verify it wasn't altered in transit? HSIP's Federated Trust layer lets institutions exchange Ed25519 verify keys out-of-band (email, secure channel) and then verify any future message cryptographically — no central registry, no PKI vendor, no single point of failure.
+
+**5. DORA and SWIFT CSCF require you to detect and respond to anomalous AI or automated system behavior.** HSIP's velocity monitoring flags agents exceeding 100 requests/minute and auto-revokes access at 1,000 requests/minute — with a signed audit entry at every step.
+
+---
+
+### Compliance coverage
+
+| Regulation | What HSIP covers |
+|---|---|
+| **SOX §404** | Append-only BLAKE3 hash-chained audit log. Every control action signed with Ed25519. Exportable for auditors. |
+| **FINRA Rule 4511** | Six-year tamper-evident record retention. API endpoint for bulk audit export. Signature chain proves no entry was altered. |
+| **MiFID II Art. 25** | Per-trade authorization signed with institutional Ed25519 key. Timestamp + signature = defensible suitability record. |
+| **PSD2 / Open Banking** | Machine-readable consent grants with scope, expiry, and revocation. `POST /v1/consent/grant` with `expires_in_seconds`. |
+| **GDPR Art. 7** | Cryptographically signed consent with documented scope. `DELETE /v1/tenant/erase` for right-to-erasure. Audit log proves consent was active at time of processing. |
+| **DORA** | AI agent velocity monitoring, anomaly detection, auto-revocation. Incident response via `DELETE /v1/keys/:id`. All events in signed audit trail. |
+| **SWIFT CSCF** | Ed25519 message authentication prevents unauthorized instruction injection. Federated trust keys verified per counterparty. No shared secrets. |
+| **ISO 20022** | Signed payment messages with Ed25519. Verifiable by any counterparty holding the institution's public key. Non-repudiation by construction. |
+
+---
+
+### AI agent governance for financial institutions
+
+Every AI system your institution deploys — trading algorithms, document processors, customer-facing chatbots, internal assistants — gets its own Ed25519 keypair registered in HSIP.
+
+```bash
+# Register a trading algorithm as a governed AI agent
+hsip agent register "algo-trading-v2" --expires-days 90
+
+# List all active agents and their request velocity
+hsip agent list
+
+# Immediately revoke an agent that's behaving unexpectedly
+hsip agent revoke "algo-trading-v2"
+```
+
+What you get for each agent:
+- **Unique Ed25519 keypair** — every action it signs is traceable to that specific agent, not just "the system"
+- **Velocity monitoring** — requests > 100/min trigger an anomaly audit entry; > 1,000/min triggers automatic revocation
+- **Full signed audit trail** — every API call the agent made, timestamped and chained
+- **Instant revocation** — `DELETE /v1/keys/:id` takes effect in memory before the DB write completes; in-flight requests are blocked immediately via `pending_revocation` set
+
+This is the "black box recorder" regulators and your own risk team need when an AI agent does something unexpected.
+
+---
+
+### Federated trust — cross-institution Ed25519 verification
+
+When your trading desk needs to verify that a message from a counterparty bank is authentic, you have two options: trust a central certificate authority (single point of failure, vendor lock-in) or exchange Ed25519 verify keys directly and verify locally.
+
+HSIP implements the second approach:
+
+```bash
+# Your counterparty sends you their Ed25519 verify key out-of-band
+hsip trust add "Deutsche Bank Desk A" "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
+# Verify any message they send you — locally, no network call
+hsip trust verify --from "Deutsche Bank Desk A" \
+  "Trade confirmation: AAPL 1000 @ 182.50" \
+  "signature_hex_here"
+```
+
+No central registry. No PKI vendor. No single point of failure. Each institution holds the other's public key directly. Verification happens in `<1ms` locally.
+
+API:
+```
+POST   /v1/trust/peer          Add a trusted counterparty's verify key
+GET    /v1/trust/peers         List all trusted counterparties
+DELETE /v1/trust/peers/:id     Remove a counterparty
+POST   /v1/trust/verify        Verify a signed message from a named counterparty
+```
+
+---
+
+### Financial services API examples
+
+```bash
+export KEY="hsip_your_institutional_key_here"
+export BASE="http://127.0.0.1:7474"
+
+# Sign a trade authorization — creates non-repudiable, timestamped proof
+curl -X POST $BASE/v1/messages/sign \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "AUTHORIZED: Sell 500 TSLA @ market. Analyst: J.Smith. 2026-06-20T14:32:00Z"}'
+
+# Grant time-bounded PSD2 consent to a payment processor
+curl -X POST $BASE/v1/consent/grant \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"peer_verify_key": "counterparty_pubkey_hex", "scope": "payment_initiation", "expires_in_seconds": 3600}'
+
+# Export full audit trail for regulators (last 500 entries)
+curl "$BASE/v1/audit?limit=500" \
+  -H "Authorization: Bearer $KEY"
+
+# GDPR right-to-erasure (Article 17)
+curl -X DELETE $BASE/v1/tenant/erase \
+  -H "Authorization: Bearer $KEY"
+```
+
+---
+
 ## Cryptography — what's under the hood
 
-HSIP uses audited [RustCrypto](https://github.com/RustCrypto) libraries throughout. No custom cryptography.
+HSIP uses audited [RustCrypto](https://github.com/RustCrypto) libraries throughout. **No custom cryptography.** Every primitive is a published standard, independently audited, and used by systems you already trust.
 
-| What | Algorithm | Why |
-|------|-----------|-----|
-| Identity & signatures | Ed25519 | Same as Signal, Tor, SSH. Battle-tested. |
-| Key encryption at rest | ChaCha20-Poly1305 | RFC 8439 compliant. Constant-time. |
-| Key derivation | HKDF-SHA-256 | Standard, audited. |
-| Audit chain integrity | BLAKE3 | Fast, secure, tamper-evident. |
-| Session exchange | X25519 ephemeral | Perfect forward secrecy per session. |
-| **Post-quantum (optional)** | **ML-KEM-768 + ML-DSA-65** | **NIST-standardized. "Harvest now, decrypt later" resistant.** |
+| What | Algorithm | Standard | Why |
+|------|-----------|----------|-----|
+| Identity & signatures | Ed25519 | RFC 8032 | Used by Signal, Tor, SSH, TLS 1.3, OpenSSH, and most modern HSMs. 128-bit security level. Deterministic — no randomness failure mode. |
+| Key encryption at rest | ChaCha20-Poly1305 | RFC 8439 | Constant-time implementation. No timing side-channels. Used in TLS 1.3, WireGuard, Signal. AEAD — encryption and authentication in one operation. |
+| Key derivation | HKDF-SHA-256 | RFC 5869 | Derives encryption keys from the master key. Standard, audited, used in TLS 1.3 and Signal Protocol. |
+| Audit chain integrity | BLAKE3 | — | Each audit entry includes the hash of the previous entry. Tamper with any entry and every subsequent hash breaks. 3× faster than SHA-256. |
+| Session key exchange | X25519 ephemeral | RFC 7748 | Elliptic-curve Diffie-Hellman on Curve25519. New session key per connection = perfect forward secrecy. Past sessions cannot be decrypted if long-term keys are compromised. |
+| **Post-quantum identity** | **ML-DSA-65 (Dilithium)** | **NIST FIPS 204** | **"Harvest now, decrypt later" resistant. A quantum computer cannot forge signatures even with the public key.** |
+| **Post-quantum key exchange** | **ML-KEM-768 (Kyber)** | **NIST FIPS 203** | **Encapsulation mechanism secure against Shor's algorithm. Enable for long-lived key material that must survive 2030+.** |
+
+### Why these choices matter for financial institutions
+
+**Ed25519 vs RSA-2048:** RSA requires randomness — a flawed RNG produces a forgeable signature. Ed25519 is deterministic: same message + same key = same signature, always. No randomness failure mode. Hardware security modules (HSMs) used in banking already support Ed25519 natively (PKCS#11, AWS CloudHSM, Azure Dedicated HSM).
+
+**ChaCha20-Poly1305 vs AES-GCM:** AES-GCM is vulnerable to nonce reuse. ChaCha20-Poly1305 degrades gracefully. More importantly, ChaCha20 has no timing side-channel — AES on CPUs without hardware acceleration leaks key material through cache timing. HSIP uses constant-time implementations throughout.
+
+**BLAKE3 audit chain vs append-only database:** A database marked "append-only" can still be altered by a DBA or compromised backup. A BLAKE3 hash chain cannot: each entry's hash covers its own content plus the previous entry's hash. Alteration of any entry produces a hash mismatch detectable by any party holding the chain. This is the same construction used in blockchain systems, without the distributed consensus overhead.
+
+**Post-quantum timeline:** NIST finalized ML-KEM and ML-DSA in 2024. The NSA's CNSA 2.0 suite requires post-quantum algorithms for TOP SECRET material by 2030 and recommends migration now. HSIP builds in both algorithms today, disabled by default, enabled with one config flag — so institutions can begin PQ migration on their own timeline without a software upgrade.
+
+### Key storage architecture
+
+```
+Master key → never touches disk
+    ↓ HKDF-SHA-256 derivation
+Wrapping key
+    ↓ ChaCha20-Poly1305 encryption
+Encrypted Ed25519 private key → stored in SQLite
+```
+
+The master key lives only in memory (or at a configured path with filesystem permissions). Compromise of the database file does not expose private keys — an attacker also needs the master key. API keys are stored as SHA-256 hashes only; the raw key is shown once at creation and never stored.
+
+### Formal verification
+
+HSIP includes an optional Z3 SMT solver module (`crates/hsip-verify`) for machine-checked security proofs. Not just tests — mathematical guarantees that specific security properties hold. Build separately (requires Z3 system library):
+
+```bash
+cargo build -p hsip-verify
+```
 
 Post-quantum support is built in today, not a future promise. Enable it with a config flag when you need it.
-
-**Formal verification:** HSIP includes an optional Z3 SMT solver module for machine-checked security proofs — not just tests, but mathematical guarantees of security properties.
 
 ---
 
@@ -216,10 +365,20 @@ docker compose up
 ```
 
 **Compliance built in:**
-- GDPR Article 17 right-to-erasure endpoint (`DELETE /v1/tenant/erase`)
-- Tamper-evident audit trail exportable for legal proceedings
-- Rate limiting per API key
-- No telemetry, no phone-home, no licensing server
+- **SOX / FINRA 4511** — Append-only BLAKE3 hash-chained audit log. Every entry signed with Ed25519. Bulk export via `GET /v1/audit`. No vendor can alter your records.
+- **MiFID II Art. 25** — Per-action Ed25519 signature proves authorization, identity, and timestamp for every trade, instruction, or consent action.
+- **PSD2 Open Banking** — Machine-readable consent grants: scoped, time-bounded, revocable. `POST /v1/consent/grant` with `expires_in_seconds`.
+- **GDPR Art. 17** — Right-to-erasure endpoint: `DELETE /v1/tenant/erase`. Signed consent records prove lawful basis at time of processing.
+- **DORA** — AI agent velocity monitoring, anomaly detection, auto-revocation at configurable thresholds. All events written to the signed audit trail.
+- **SWIFT CSCF** — Ed25519 message authentication. No shared secrets between counterparties. Federated trust key exchange prevents instruction injection.
+- **No telemetry, no phone-home, no licensing server** — your keys and your audit trail never leave your infrastructure.
+
+**Deployment architecture:**
+- Single binary for on-premise or private cloud
+- PostgreSQL for production HA (`DATABASE_URL` env var)
+- Multi-tenancy: isolated keypairs, audit logs, and API keys per tenant
+- Kubernetes: Helm chart in `DEPLOYMENT.md` with TLS termination and secret management
+- Air-gapped deployment supported — no outbound network required
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for production setup, TLS, PostgreSQL, and disaster recovery.
 
@@ -272,30 +431,38 @@ cargo test --workspace
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────┐
-│  hsip-api     Rust / Axum / Tokio — REST API        │
-│  hsip-dns     UDP :5300 — DNS tracker blocker       │
-│  hsip-core    Ed25519, X25519, ChaCha20, ML-KEM     │
-│  hsip-session Ephemeral sessions, forward secrecy   │
-│  SQLite        Local storage — no cloud required    │
-│  React         Embedded dashboard — single binary   │
-└────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  hsip-api       Rust / Axum / Tokio — REST API + auth      │
+│  hsip-core      Ed25519, X25519, ChaCha20-Poly1305,        │
+│                 ML-KEM-768, ML-DSA-65, HKDF-SHA-256        │
+│  hsip-dns       UDP :5300 — DNS tracker blocker            │
+│  hsip-session   Ephemeral sessions, X25519 forward secrecy │
+│  hsip-auth      Identity and authentication primitives     │
+│  hsip-telemetry-guard  Telemetry + anomaly detection       │
+│  hsip-mcp       MCP server — AI agent integration          │
+│  hsip-cli       hsip agent / trust / up CLI                │
+│  SQLite / PostgreSQL  Local or HA storage                  │
+│  React          Embedded dashboard — single binary         │
+└────────────────────────────────────────────────────────────┘
 ```
 
-Everything runs in a single binary. No Docker required to get started. No external services. The entire system fits in your pocket.
+Everything runs in a single binary for desktop/on-premise use. Switch to PostgreSQL and multi-tenancy for production financial deployments with no code changes — just a `config.toml`.
 
-16 specialized crates. 238 tests. RFC 8439 compliance verified. Audited RustCrypto primitives throughout.
+16 specialized crates. 238 tests. RFC 8032 (Ed25519) + RFC 8439 (ChaCha20-Poly1305) + RFC 5869 (HKDF) + RFC 7748 (X25519) compliance verified. NIST FIPS 203 + 204 post-quantum algorithms built in. Audited RustCrypto primitives throughout — no custom cryptography.
 
 ---
 
 ## Security
 
-- Private keys encrypted with ChaCha20-Poly1305 + HKDF before storage — master key never touches disk
-- API keys stored as SHA-256 hashes, never plaintext
-- Rate limiting on all endpoints
-- Append-only BLAKE3 hash-chained audit trail — tampering is detectable
-- Replay attack prevention via monotonic nonce counters
-- No telemetry, no analytics, no phone-home — ever
+- **Private keys encrypted at rest** — ChaCha20-Poly1305 + HKDF-SHA-256. Master key never touches disk. Compromise of the database file does not expose private keys.
+- **API keys stored as SHA-256 hashes only** — raw key shown once at creation, never stored. Compromise of the database does not expose API credentials.
+- **Rate limiting on all endpoints** — 300 req/min default per key, configurable via `RATE_LIMIT_RPM`.
+- **AI agent velocity monitoring** — anomaly logged at >100 req/min; key auto-revoked at >1,000 req/min with immediate in-memory block before DB write.
+- **Append-only BLAKE3 hash-chained audit trail** — each entry covers the previous entry's hash. Tamper with any entry and the chain breaks, detectable by any verifier.
+- **Replay attack prevention** — monotonic nonce counters. Replayed requests are rejected even if the signature is valid.
+- **Instant revocation** — `pending_revocation` DashSet blocks in-flight requests in memory before the async DB write completes. No race window.
+- **No telemetry, no analytics, no phone-home** — ever. Verified by code review: no outbound connections except DNS forwarding (1.1.1.1:53) when the DNS blocker is enabled.
+- **Formal verification available** — optional Z3 SMT solver module (`hsip-verify`) provides machine-checked proofs of security properties, not just tests.
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) for a full breakdown of what HSIP protects against and what it does not.
 
@@ -307,9 +474,12 @@ To report a vulnerability: **sanchezleal1989@gmail.com**
 
 © 2025–2026 Dayana Sanchez. All rights reserved.
 
-HSIP is **proprietary software**. Personal and evaluation use is free. Commercial use — including production deployments, business use, and integrations — requires a paid license.
+HSIP is **proprietary software**. Source code is available for review.
 
-**Commercial licensing:** [sanchezleal1989@gmail.com](mailto:sanchezleal1989@gmail.com)
+- **Personal and evaluation use** — free. Run it, read the code, evaluate it.
+- **Commercial use** — requires a paid license. This includes production deployments, business use, integrations, SaaS products built on HSIP, and any use inside an organization.
+
+**To license HSIP for commercial or institutional use:** [sanchezleal1989@gmail.com](mailto:sanchezleal1989@gmail.com)
 
 See [LICENSE](LICENSE) for full terms.
 
