@@ -7,7 +7,7 @@ COPY dashboard/ ./
 RUN npm run build
 
 # ── Stage 2: Build Rust API with embedded dashboard ───────────────────────────
-FROM rust:1.87-slim AS rust-builder
+FROM rust:1.88-slim AS rust-builder
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # Copy full workspace (Cargo.toml, Cargo.lock, all crates)
