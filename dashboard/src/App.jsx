@@ -56,9 +56,11 @@ export default function App() {
 
   async function handleLogin(e) {
     e.preventDefault();
+    const trimmedKey = apiKey.trim();
     try {
-      await request('POST', '/v1/identity', null, apiKey);
-      localStorage.setItem('hsip_api_key', apiKey);
+      await request('POST', '/v1/identity', null, trimmedKey);
+      localStorage.setItem('hsip_api_key', trimmedKey);
+      setApiKey(trimmedKey);
       setAuthed(true);
       setError('');
       if (!localStorage.getItem('hsip_onboarding_done') && mode === 'simple') {
