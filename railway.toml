@@ -7,3 +7,13 @@ healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
+
+# Sandbox demo deployment — set these in Railway environment variables:
+#
+#   HSIP_SANDBOX=true          enables POST /v1/sandbox/provision
+#   HSIP_PUBLIC_URL=https://demo.hsip.io   returned in provision response
+#   CORS_ALLOW_ALL=1           already set in Dockerfile
+#   HOST=0.0.0.0               already set in Dockerfile
+#   PORT=8080                  already set in Dockerfile
+#
+# For production (non-sandbox) deployments, leave HSIP_SANDBOX unset.

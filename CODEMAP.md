@@ -596,7 +596,7 @@
 ### `AppState`
 - **type**: struct
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: Axum shared state: DB pool, config, master key, rate limiter, agent tracker, pending revocations, DNS state, proxy shared buffer.
+- **purpose**: Axum shared state: DB pool, config, master key, rate limiter, agent tracker, pending revocations, DNS state, proxy shared buffer, sandbox provision rate limiter.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -606,12 +606,18 @@
 ### `AppState::new`
 - **type**: function
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: Constructs `AppState` from DB pool, config, and master key.
+- **purpose**: Constructs `AppState` from DB pool, config, and master key. Initialises all DashMaps including `sandbox_rate`.
 - **inputs**: `db: Db`, `config: Config`, `master_key: [u8; 32]`
 - **outputs**: `Self`
 - **calls**: `DashMap::new`, `DashSet::new`, `ProxyShared::new`
 - **called_by**: `run`
 - **mutates**: nothing
+
+### `SandboxRate`
+- **type**: type alias
+- **file**: `crates/hsip-api/src/state.rs`
+- **purpose**: `Arc<DashMap<String, RateWindow>>` — IP-keyed rate limiter for `POST /v1/sandbox/provision`. Limits to 5 provisions per IP per hour.
+- **called_by**: `sandbox::check_provision_rate`
 
 
 ---
@@ -1775,6 +1781,59 @@
 - **calls**: `sqlx::query`
 - **called_by**: Axum router
 - **mutates**: nothing
+
+---
+
+## `crates/hsip-api/src/routes/sandbox.rs`
+
+### `ProvisionResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/sandbox.rs`
+- **purpose**: Response body for `POST /v1/sandbox/provision` — contains the trial API key, expiry, base URL, and ready-to-run curl quickstart commands.
+- **inputs**: none
+- **outputs**: serialised JSON
+
+### `Quickstart`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/sandbox.rs`
+- **purpose**: Nested field in `ProvisionResponse`; five ready-to-paste curl commands covering sign, identity, audit, consent, and capabilities.
+- **inputs**: none
+- **outputs**: serialised JSON
+
+### `provision`
+- **type**: function (async handler)
+- **file**: `crates/hsip-api/src/routes/sandbox.rs`
+- **purpose**: `POST /v1/sandbox/provision` — no auth required. Creates an isolated tenant + 24-hour trial API key. Returns credentials with embedded quickstart curl commands. Only active when `HSIP_SANDBOX=true` env var is set. Rate-limited to 5 provisions per source IP per hour.
+- **inputs**: `State<AppState>`, `HeaderMap`
+- **outputs**: `ApiResult<Json<ProvisionResponse>>`
+- **calls**: `client_ip`, `check_provision_rate`, `now_ms`, `hash_key`, `ms_to_iso`, sqlx queries (INSERT tenants, INSERT api_keys, INSERT audit_entries)
+- **called_by**: Axum router (`POST /v1/sandbox/provision`)
+- **mutates**: DB (tenants, api_keys, audit_entries), `state.sandbox_rate`
+
+### `client_ip`
+- **type**: function
+- **file**: `crates/hsip-api/src/routes/sandbox.rs`
+- **purpose**: Extracts client IP from `X-Forwarded-For` header (Railway/proxy) or returns "unknown".
+- **inputs**: `&HeaderMap`
+- **outputs**: `String`
+- **called_by**: `provision`
+
+### `check_provision_rate`
+- **type**: function
+- **file**: `crates/hsip-api/src/routes/sandbox.rs`
+- **purpose**: IP-keyed rate limiter: max 5 provisions per IP per 60-minute window using `state.sandbox_rate` DashMap. Returns `TooManyRequests` if exceeded.
+- **inputs**: `ip: &str`, `state: &AppState`
+- **outputs**: `Result<(), ApiError>`
+- **called_by**: `provision`
+- **mutates**: `state.sandbox_rate`
+
+### `ms_to_iso`
+- **type**: function
+- **file**: `crates/hsip-api/src/routes/sandbox.rs`
+- **purpose**: Converts Unix millisecond timestamp to ISO 8601 UTC string without chrono dependency.
+- **inputs**: `ms: i64`
+- **outputs**: `String` (e.g. `"2026-06-21T14:32:00Z"`)
+- **called_by**: `provision`
 
 ---
 

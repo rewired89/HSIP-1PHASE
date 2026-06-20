@@ -84,6 +84,9 @@ pub type PendingRevocation = Arc<DashSet<String>>;
 /// Shared DNS resolver handle — None when the resolver is stopped.
 pub type DnsState = Arc<Mutex<Option<hsip_dns::DnsHandle>>>;
 
+/// IP-keyed provision rate limiter for the sandbox endpoint (5/hour per IP).
+pub type SandboxRate = Arc<DashMap<String, RateWindow>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db:                 Db,
@@ -96,6 +99,8 @@ pub struct AppState {
     pub dns:                DnsState,
     /// HTTP/HTTPS proxy traffic state.
     pub proxy:              ProxyState,
+    /// Sandbox provision rate limiter — keyed by source IP.
+    pub sandbox_rate:       SandboxRate,
 }
 
 impl AppState {
@@ -108,6 +113,7 @@ impl AppState {
             master_key:         Arc::new(master_key),
             dns:                Arc::new(Mutex::new(None)),
             proxy:              ProxyShared::new(),
+            sandbox_rate:       Arc::new(DashMap::new()),
         }
     }
 }

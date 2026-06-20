@@ -8,7 +8,9 @@ pub mod identity;
 pub mod keys;
 pub mod messages;
 pub mod proxy;
+pub mod sandbox;
 pub mod tenant;
+pub mod trust;
 pub mod uploads;
 
 use crate::state::AppState;
@@ -67,4 +69,11 @@ pub fn router() -> Router<AppState> {
         // Image uploads — POST requires auth, GET is public (shareable URL)
         .route("/v1/uploads", post(uploads::upload))
         .route("/v1/uploads/:id", get(uploads::serve))
+        // Federated trust
+        .route("/v1/trust/peer", post(trust::add))
+        .route("/v1/trust/peers", get(trust::list))
+        .route("/v1/trust/peers/:id", delete(trust::remove))
+        .route("/v1/trust/verify", post(trust::verify))
+        // Sandbox self-provision (active only when HSIP_SANDBOX=true)
+        .route("/v1/sandbox/provision", post(sandbox::provision))
 }
