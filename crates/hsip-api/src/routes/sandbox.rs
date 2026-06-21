@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::hash_key,
-    db::now_ms,
+    db::{now_ms, Db},
     errors::{ApiError, ApiResult},
     state::{AppState, RateWindow},
 };
@@ -15,6 +15,9 @@ use crate::{
 const PROVISIONS_PER_HOUR: u64 = 5;
 const HOUR_MS: i64 = 3_600_000;
 const TRIAL_DURATION_MS: i64 = 86_400_000; // 24 h
+/// Hard cap on simultaneously-live sandbox tenants. Prevents DB/memory bloat if
+/// many people hit the demo at the same time.
+const MAX_ACTIVE_SANDBOXES: i64 = 300;
 
 #[derive(Serialize)]
 pub struct ProvisionResponse {
@@ -53,10 +56,24 @@ pub async fn provision(
     let ip = client_ip(&headers);
     check_provision_rate(&ip, &state)?;
 
+    // Run expired-sandbox cleanup in the background so it doesn't slow the response.
+    let db_clone = state.db.clone();
+    tokio::spawn(async move {
+        cleanup_expired_sandboxes(&db_clone).await;
+    });
+
+    // Enforce active-tenant cap after cleanup has run (best-effort; races are fine).
+    let active = count_active_sandboxes(&state.db).await;
+    if active >= MAX_ACTIVE_SANDBOXES {
+        return Err(ApiError::TooManyRequests(
+            "Demo capacity temporarily full. Try again in a few minutes.".into(),
+        ));
+    }
+
     let now = now_ms();
     let expires_at_ms = now + TRIAL_DURATION_MS;
 
-    // Isolated tenant per trial user
+    // Isolated tenant per trial user.
     let tenant_id = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, ?, ?)")
         .bind(&tenant_id)
@@ -65,7 +82,7 @@ pub async fn provision(
         .execute(&state.db)
         .await?;
 
-    // Trial key — expires in 24 hours
+    // Trial key — expires in 24 hours.
     let mut raw_bytes = [0u8; 32];
     OsRng.fill_bytes(&mut raw_bytes);
     let raw_key = format!("hsip_{}", hex::encode(raw_bytes));
@@ -85,7 +102,7 @@ pub async fn provision(
     .execute(&state.db)
     .await?;
 
-    // Audit trail entry for this provision event
+    // Audit trail entry for this provision event.
     sqlx::query(
         "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
          VALUES (?, ?, 'sandbox.provision', ?, ?)",
@@ -135,11 +152,85 @@ pub async fn provision(
         expires_at: ms_to_iso(expires_at_ms),
         expires_at_ms,
         base_url,
-        note: "Trial key expires in 24 hours. Production licensing: sanchezleal1989@gmail.com"
+        note: "Trial key expires in 24 hours. Each visitor gets their own isolated environment."
             .into(),
         quickstart: qs,
     }))
 }
+
+// ── Cleanup ───────────────────────────────────────────────────────────────────
+
+/// Delete all sandbox tenants whose trial key has expired. Runs on every
+/// provision call (in the background) so the DB never accumulates stale rows.
+async fn cleanup_expired_sandboxes(db: &Db) {
+    let now = now_ms();
+
+    // Collect expired sandbox tenant IDs first so we can safely delete api_keys
+    // without the subquery reference breaking mid-transaction.
+    let rows = sqlx::query(
+        "SELECT t.id FROM tenants t
+         WHERE t.name LIKE 'sandbox-%'
+         AND NOT EXISTS (
+           SELECT 1 FROM api_keys k
+           WHERE k.tenant_id = t.id
+           AND k.active = 1
+           AND (k.expires_at IS NULL OR k.expires_at > ?)
+         )",
+    )
+    .bind(now)
+    .fetch_all(db)
+    .await;
+
+    let ids: Vec<String> = match rows {
+        Ok(r) => r
+            .iter()
+            .filter_map(|row| {
+                use sqlx::Row;
+                row.try_get::<String, _>(0).ok()
+            })
+            .collect(),
+        Err(_) => return,
+    };
+
+    if ids.is_empty() {
+        return;
+    }
+
+    // Delete all tenant data in dependency order. Errors are silently ignored
+    // (cleanup is best-effort; the next provision call will retry).
+    for id in &ids {
+        let _ = sqlx::query("DELETE FROM messages      WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM consents      WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM identities    WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM contacts      WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM credentials   WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM audit_entries WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM trusted_peers WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM uploads       WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM api_keys      WHERE tenant_id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM tenants       WHERE id = ?").bind(id).execute(db).await;
+    }
+}
+
+/// Count sandbox tenants that still have an active, non-expired trial key.
+async fn count_active_sandboxes(db: &Db) -> i64 {
+    use sqlx::Row;
+    let now = now_ms();
+    sqlx::query(
+        "SELECT COUNT(DISTINCT t.id) FROM tenants t
+         JOIN api_keys k ON k.tenant_id = t.id
+         WHERE t.name LIKE 'sandbox-%'
+         AND k.active = 1
+         AND k.expires_at > ?",
+    )
+    .bind(now)
+    .fetch_one(db)
+    .await
+    .and_then(|r| r.try_get::<i64, _>(0))
+    .unwrap_or(0)
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn client_ip(headers: &HeaderMap) -> String {
     headers
