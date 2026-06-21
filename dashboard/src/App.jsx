@@ -18,24 +18,24 @@ import FinanceDashboard  from './pages/FinanceDashboard';
 import './App.css';
 
 const SIMPLE_TABS = [
-  { id: 'home',              icon: '🏠', label: 'Home' },
-  { id: 'finance',           icon: '🏦', label: 'Finance' },
-  { id: 'messages',          icon: '💬', label: 'Messages' },
-  { id: 'network',           icon: '🌐', label: 'Traffic' },
-  { id: 'prove-it',          icon: '✍️',  label: 'Alibi' },
-  { id: 'consent-wallet',    icon: '🛡️',  label: 'Consents' },
-  { id: 'ai-watch',          icon: '🤖', label: 'AI Watch' },
-  { id: 'tracker-inspector', icon: '🔍', label: 'Trackers' },
-  { id: 'protection',        icon: '🔒', label: 'Protection' },
+  { id: 'home',              icon: '🏠', label: 'Home',       subtitle: 'Your security overview' },
+  { id: 'finance',           icon: '🏦', label: 'Finance',    subtitle: 'Verified records for payments' },
+  { id: 'messages',          icon: '💬', label: 'Messages',   subtitle: 'Tamper-proof signed messages' },
+  { id: 'network',           icon: '🌐', label: 'Traffic',    subtitle: 'See what your device connects to' },
+  { id: 'prove-it',          icon: '✍️',  label: 'Alibi',      subtitle: 'Prove something happened when' },
+  { id: 'consent-wallet',    icon: '🛡️',  label: 'Consents',   subtitle: 'Control who acts on your behalf' },
+  { id: 'ai-watch',          icon: '🤖', label: 'AI Watch',   subtitle: 'Monitor AI agents in real time' },
+  { id: 'tracker-inspector', icon: '🔍', label: 'Trackers',   subtitle: 'See who's tracking you online' },
+  { id: 'protection',        icon: '🔒', label: 'Protection', subtitle: 'Block ads, trackers & malware' },
 ];
 
 const EXPERT_TABS = [
-  { id: 'identity',    icon: '🆔', label: 'Identity' },
-  { id: 'consent',     icon: '✅', label: 'Consent' },
-  { id: 'messages',    icon: '💬', label: 'Messages' },
-  { id: 'credentials', icon: '🏅', label: 'Credentials' },
-  { id: 'audit',       icon: '📋', label: 'Audit' },
-  { id: 'keys',        icon: '🔑', label: 'Keys' },
+  { id: 'identity',    icon: '🆔', label: 'Identity',    subtitle: 'Your Ed25519 keypair' },
+  { id: 'consent',     icon: '✅', label: 'Consent',     subtitle: 'Grant & revoke peer access' },
+  { id: 'messages',    icon: '💬', label: 'Messages',    subtitle: 'Sign & verify signatures' },
+  { id: 'credentials', icon: '🏅', label: 'Credentials', subtitle: 'Issue verifiable credentials' },
+  { id: 'audit',       icon: '📋', label: 'Audit',       subtitle: 'Append-only action log' },
+  { id: 'keys',        icon: '🔑', label: 'Keys',        subtitle: 'Manage API keys' },
 ];
 
 export default function App() {
@@ -186,7 +186,10 @@ export default function App() {
               onClick={() => setTab(t.id)}
             >
               <span className="nav-icon">{t.icon}</span>
-              <span className="nav-label">{t.label}</span>
+              <span className="nav-text">
+                <span className="nav-label">{t.label}</span>
+                {t.subtitle && <span className="nav-sub">{t.subtitle}</span>}
+              </span>
             </button>
           ))}
         </nav>
