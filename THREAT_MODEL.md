@@ -1,251 +1,263 @@
 # HSIP Threat Model
 
-Last updated: 2026-02
-
-This document states what HSIP protects against and what it does not. It describes the current REST API architecture as deployed in Phase 1.
-
----
-
-## What HSIP Is
-
-HSIP is a multi-tenant cryptographic consent management API. It allows organizations (tenants) to:
-
-- Issue **Ed25519-signed credentials** proving that a user granted consent for a specific action or data access
-- **Verify** those credentials cryptographically, confirming authenticity and checking revocation status
-- **Revoke** credentials instantly when consent is withdrawn
-- **Grant and revoke peer consent** with time-limited validity
-- **Sign and verify messages** with non-repudiable Ed25519 signatures
-- Generate a **tamper-evident audit trail** of all consent and identity operations
-
-Primary use cases: AI agent authorization, API data access governance, GDPR consent enforcement, and cryptographic proof of authorization for regulated industries.
+**Version:** 0.3  
+**Date:** 2026-06-21  
+**Author:** Dayana Sanchez (rewired89)  
+**Review status:** Self-reviewed. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
 
 ---
 
-## System Architecture
+## 1. What HSIP Is and Is Not
 
-HSIP runs as a Rust HTTP API (Axum framework) backed by either SQLite or PostgreSQL. Tenants authenticate with bearer API keys. Each tenant has an isolated Ed25519 keypair used to sign credentials and messages.
+HSIP is a self-hosted, single-binary identity and consent server. It gives AI agents, services, and people a cryptographic identity (Ed25519), a consent layer, and a tamper-evident audit trail.
 
-**Data isolation**: All tables are partitioned by `tenant_id`. One tenant cannot read or modify another tenant's data through the API.
+**HSIP is not:**
+- A TLS terminator or VPN
+- A hardware security module (HSM)
+- A firewall or intrusion detection system
+- A replacement for OS-level access controls
 
-**Transport security**: Production deployments use TLS (via axum-server with rustls). Credentials are only ever transmitted over encrypted channels in production configurations.
-
-**Key protection**: Tenant signing keys are encrypted at rest using ChaCha20-Poly1305 with a server-side master key. The master key is loaded from disk at startup and never stored in the database.
-
----
-
-## What HSIP Protects Against
-
-### 1. Credential Forgery
-
-HSIP credentials carry Ed25519 signatures over a canonical JSON payload. An attacker who intercepts or copies a credential cannot modify the `claim`, `user_token`, `issuer_verify_key`, `issued_at`, or `expires_at` fields without invalidating the signature. The verification endpoint (`POST /v1/credentials/verify`) will reject any credential with an invalid signature.
-
-**Guarantee**: Without access to the tenant's private signing key, credential forgery is computationally infeasible.
-
-### 2. Credential Replay After Revocation
-
-Once a credential is revoked via `DELETE /v1/credentials/:id`, all subsequent verification requests return `revoked: true` and `valid: false`. The revocation check happens at the database level on every verify call — there is no client-side cache that could serve a stale "valid" result.
-
-**Guarantee**: Revocation takes effect immediately on the next verification call.
-
-### 3. Expired Credential Acceptance
-
-Credentials carry an `expires_at` timestamp (milliseconds since epoch). The verify endpoint checks expiration on every call and returns `expired: true` if the current time exceeds `expires_at`. Expired credentials return `valid: false` regardless of signature validity.
-
-**Guarantee**: Time-limited credentials are enforced server-side on every verification.
-
-### 4. Identity Impersonation
-
-Tenant identities are Ed25519 keypairs. The `verify_key` (public key) is the tenant's cryptographic identity. Messages signed by a tenant can be verified against their `verify_key` by any party. An attacker cannot produce a valid signature without the corresponding private signing key.
-
-**Guarantee**: Tenant identity is cryptographically bound to key possession.
-
-### 5. Unauthorized API Access
-
-All `/v1/*` endpoints require a valid bearer API key. Keys are stored as BLAKE3 hashes in the database — the plaintext key is shown only once on creation and never stored. An attacker who reads the database cannot recover plaintext API keys.
-
-The admin key (created at first startup) is required to provision new tenant keys. Per-tenant keys are scoped to that tenant's data only.
-
-**Guarantee**: No cross-tenant data access is possible through the API without possession of a valid key for that tenant.
-
-### 6. Audit Log Manipulation
-
-Every security-relevant operation (identity creation, key rotation, credential issuance, credential revocation, consent grants and revocations, GDPR erasure) is recorded in the `audit_entries` table with action type, timestamp, and relevant peer key. Audit entries are append-only — there is no update or delete endpoint for audit records.
-
-**Guarantee**: The audit log is a complete, append-only record of all consent and identity operations for compliance and legal evidence purposes.
-
-### 7. Unauthorized Peer Access
-
-The consent system (`/v1/consent`) tracks which peer public keys a tenant has explicitly granted access to, and for how long. Applications integrating HSIP can check consent status before serving data to a peer. Consents expire automatically based on the configured TTL (default: 1 hour, configurable per grant).
-
-**Guarantee**: Consent grants are time-bounded and instantly revocable.
-
-### 8. Non-Repudiation of Messages
-
-Messages signed via `POST /v1/messages/sign` carry Ed25519 signatures over the message content and timestamp. The signing tenant cannot later deny having signed a message — the signature is verifiable by any party who knows the tenant's `verify_key`.
-
-**Guarantee**: Signed messages provide cryptographic non-repudiation.
-
-### 9. Signing Key Exposure at Rest
-
-Tenant signing keys are encrypted using ChaCha20-Poly1305 with HKDF key derivation from the server master key before being stored in the database. An attacker who reads the database without the master key cannot recover tenant signing keys.
-
-**Guarantee**: Database compromise alone does not expose signing keys.
+HSIP assumes it runs on a server you already trust at the OS level. Its job is to protect identity state, signing keys, and audit integrity *above* that layer.
 
 ---
 
-## What HSIP Does Not Protect Against
+## 2. Protected Assets
 
-### Endpoint Compromise
-
-If the HSIP server itself is compromised (OS-level access, process injection), an attacker can read the master key from memory, decrypt all tenant signing keys, and forge arbitrary credentials. HSIP is not designed to resist a fully compromised host.
-
-**Mitigation**: Use OS-level hardening, container isolation, and secrets management (e.g., HashiCorp Vault for the master key) to reduce risk.
-
-### API Key Theft
-
-If a tenant's API key is stolen (e.g., via credential leak, environment variable exposure, or insider access), an attacker can issue credentials, revoke existing ones, and access all data for that tenant until the key is rotated. HSIP does not detect unauthorized key use.
-
-**Mitigation**: Use short-lived API keys (`expires_in_days`), rotate keys regularly, restrict key permissions by `agent_type`, and monitor the `/v1/audit` log for anomalous activity.
-
-### Consent Coercion
-
-HSIP enforces cryptographic consent, not voluntary human consent. If a user is coerced into granting consent, the credential is cryptographically valid even though the human decision was not free. HSIP cannot distinguish coerced consent from genuine consent.
-
-**Out of scope**: Social engineering, duress, or deception leading to consent grants.
-
-### Quantum Cryptography
-
-HSIP uses Ed25519 (elliptic curve) and ChaCha20-Poly1305, which are not quantum-safe. A sufficiently powerful quantum computer could forge Ed25519 signatures or break key derivation. Post-quantum cryptography is reserved for a future phase (capability flag already exists in the protocol).
-
-**Out of scope**: Quantum adversaries.
-
-### Side-Channel Attacks
-
-HSIP does not protect against timing attacks on signing operations, power analysis, or other hardware-level side channels. Constant-time comparisons are used for nonce validation but not uniformly throughout the codebase.
-
-**Out of scope**: Physical or hardware-level side channels.
-
-### Large-Scale DoS
-
-The API includes in-memory rate limiting and request size enforcement, but a distributed botnet with sufficient volume can exhaust connection pools, CPU, or memory. HSIP is not designed to withstand nation-state-level denial of service.
-
-**Mitigation**: Deploy behind a CDN or DDoS protection layer (Cloudflare, AWS Shield) for production.
-
-### Network-Level Traffic Analysis
-
-HSIP encrypts data in transit (TLS) but does not hide traffic patterns, request timing, or the fact that two parties are communicating. Observers on the network can see that a client is calling the HSIP API even if they cannot read the content.
-
-**Out of scope**: Anonymity or metadata privacy.
-
-### Malicious Content in Credentials
-
-HSIP signs and verifies the `claim` and `user_token` fields as strings but does not interpret, sanitize, or validate their semantic meaning. An application can issue a credential with any claim value. HSIP does not prevent issuance of misleading or malicious claim strings.
-
-**Mitigation**: Enforce claim validation at the application layer before calling `/v1/credentials/issue`.
-
-### Third-Party Dependency Vulnerabilities
-
-HSIP depends on external crates (ed25519-dalek, axum, sqlx, chacha20poly1305, blake3). Vulnerabilities in these dependencies could compromise HSIP security. Use `cargo audit` regularly and monitor the RustSec advisory database.
-
----
-
-## Trust Boundaries
-
-| Boundary | Trust Level | Notes |
+| Asset | Sensitivity | Where stored |
 |---|---|---|
-| HTTPS API client → HSIP server | Authenticated | Valid bearer key required |
-| HSIP server → database | Trusted | Database should not be publicly accessible |
-| Master key storage → HSIP server | Critical | Compromise = all signing keys exposed |
-| Tenant A ↔ Tenant B | Untrusted | Tenant isolation enforced by tenant_id scoping |
-| Admin key holder | Full | Can provision all tenant keys; protect carefully |
+| Ed25519 private signing keys | Critical | Encrypted at rest in SQLite (ChaCha20-Poly1305 + HKDF-SHA-256) |
+| Master key (encrypts signing keys) | Critical | Filesystem (`~/.hsip/master.key`) or `HSIP_MASTER_KEY` env var |
+| API keys (admin, service, agent) | High | SHA-256 hashes only — raw key never written to DB or disk |
+| Audit log integrity | High | SQLite; BLAKE3 hash-chained entries |
+| Consent records | Medium | SQLite, scoped by `tenant_id` |
+| Message signatures | Medium | SQLite, scoped by `tenant_id` |
+| Verifiable credentials | Medium | SQLite, scoped by `tenant_id` |
+| Trusted peer keys | Low | SQLite, scoped by `tenant_id` |
 
 ---
 
-## Residual Risks
+## 3. Threat Actors
 
-1. **In-memory rate limiter**: The rate limiter resets on server restart. A burst attack timed around deployments or crashes may bypass rate limits temporarily.
-
-2. **SQLite in development**: The default development config uses SQLite in-memory. Data is lost on restart. Do not use in-memory SQLite for production.
-
-3. **TTL clock skew**: Expiration checks use server time. If the server clock is incorrect, credentials may expire early or late. Use NTP synchronization in production.
-
-4. **Admin key bootstrapping**: On first run, the admin key is written to `hsip_admin_key.txt`. If this file is accessible to unauthorized parties, they gain full control. Secure file permissions immediately after first run.
-
-5. **Audit log size**: Audit entries are stored indefinitely in the database. High-volume deployments should implement log rotation or archival to prevent unbounded storage growth.
-
----
-
-## Threat Actors
-
-### In Scope
-
-- **Unauthorized API callers**: Clients without a valid bearer token. Blocked by authentication middleware.
-- **Credential tamperers**: Attackers attempting to modify intercepted credentials. Blocked by Ed25519 signature verification.
-- **Stale credential replay**: Using an expired or revoked credential. Blocked by server-side expiration and revocation checks.
-- **Cross-tenant data access**: One tenant attempting to access another's data. Blocked by tenant_id scoping.
-- **Audit log erasure**: Attempting to delete audit records. No delete endpoint exists for audit entries.
-
-### Out of Scope
-
-- **Nation-state adversaries** with access to the host OS or network infrastructure.
-- **Compromised server** (root access, memory dump, or hardware-level attacks).
-- **Quantum computers** capable of breaking elliptic curve cryptography.
-- **Social engineering** of users into granting consent they do not intend.
-- **Large-scale DDoS** exceeding the capacity of the deployment infrastructure.
+| Actor | Capability | Goal |
+|---|---|---|
+| Remote unauthenticated attacker | HTTP access to the API | Enumerate tenants, forge signatures, bypass rate limits |
+| Compromised AI agent | Valid `ai_agent` API key | Make unlimited calls, exfiltrate data, impersonate tenant |
+| Attacker with DB read access | Read-only SQLite file | Extract private keys, forge audit entries |
+| Attacker with filesystem access | Read `~/.hsip/` directory | Steal master key, derive private keys from encrypted DB blobs |
+| Rogue tenant (multi-tenant mode) | Valid API key for their tenant | Access another tenant's keys, consents, or audit log |
+| Replay attacker | Captured signed messages or nonces | Resubmit a previously authorized action |
 
 ---
 
-## API Security Controls Summary
+## 4. Defenses — What the Code Actually Does
 
-| Control | Implementation |
+### 4.1 Private Keys Never Leave the Server Unencrypted
+
+Every Ed25519 private key is encrypted before writing to the database:
+
+- **ChaCha20-Poly1305** authenticated encryption (`chacha20poly1305` crate — RustCrypto, publicly audited)
+- **HKDF-SHA-256** key derivation with fixed info string `hsip-key-encryption-v1` (`hkdf` crate — RustCrypto, RFC 5869)
+- **12-byte random nonce per encryption** drawn from `OsRng` (OS CSPRNG)
+- Wire format stored in DB: `nonce(12 bytes) || ciphertext+tag(48 bytes)`, base64-encoded
+
+An attacker with read-only access to the SQLite file cannot decrypt private keys without also having the master key.
+
+*Source: `crates/hsip-api/src/key_encryption.rs`*
+
+### 4.2 API Keys Stored as SHA-256 Hashes Only
+
+Raw API tokens are never written to disk or the database. On every authenticated request:
+
+1. The `Bearer <token>` is extracted from the `Authorization` header
+2. `SHA-256(token)` is computed in memory
+3. The hash is looked up in the `api_keys` table
+4. The raw token is discarded
+
+A stolen database contains only hashes — not usable API keys.
+
+*Source: `crates/hsip-api/src/auth.rs` — `hash_key()`*
+
+### 4.3 Replay Attack Prevention: 64-Packet Sliding Window
+
+The `hsip-core` crate implements a 64-packet sliding window nonce tracker:
+
+- Zero nonces are rejected unconditionally (`NonceError::ZeroNonce`)
+- Any previously seen nonce is rejected (`NonceError::Replay`)
+- Nonces more than 64 positions behind the current maximum are rejected (`NonceError::TooOld`)
+- Out-of-order delivery within a 64-packet window is supported (handles UDP reordering)
+
+An attacker who captures a signed message and resubmits it will be rejected.
+
+*Source: `crates/hsip-core/src/nonce.rs`*
+
+### 4.4 Tenant Isolation at the Query Level
+
+Every SQL query that touches tenant data binds `tenant_id` as a required parameter. There is no shared table scan that could return another tenant's rows:
+
+```sql
+-- consent routes
+SELECT status, expires_ms FROM consents
+  WHERE tenant_id = ? AND peer_verify_key = ?
+
+-- audit routes
+SELECT * FROM audit_entries WHERE tenant_id = ? AND action LIKE ?
+
+-- key revocation
+UPDATE api_keys SET active = 0 WHERE id = ? AND tenant_id = ?
+```
+
+A valid API key from Tenant A cannot be used to read or modify Tenant B's data.
+
+*Source: `crates/hsip-api/src/routes/`*
+
+### 4.5 AI Agent Velocity Limits and Auto-Revocation
+
+Keys with `agent_type = 'ai_agent'` are subject to two automatic thresholds enforced per 60-second window:
+
+| Threshold | Action |
 |---|---|
-| Authentication | Bearer API keys (BLAKE3-hashed in DB) |
-| Authorization | Tenant isolation via tenant_id |
-| Transport security | TLS (rustls, configurable) |
-| Credential integrity | Ed25519 signatures |
-| Signing key protection | ChaCha20-Poly1305 encryption at rest |
-| Revocation | Immediate, server-side, checked on every verify call |
-| Expiration | Server-side TTL enforcement |
-| Audit trail | Append-only, covers all security-relevant operations |
-| Rate limiting | In-memory per-endpoint limits |
-| GDPR erasure | `/v1/tenant/erase` permanently removes all tenant data |
+| > 100 requests/min | Anomaly logged to audit trail as `agent.anomaly_detected` |
+| > 1000 requests/min | Key immediately added to `pending_revocation` DashSet (in-memory) + async DB revocation + `agent.auto_revoked` audit entry |
+
+**The `pending_revocation` DashSet is checked on every incoming request before the DB lookup.** This means a runaway agent's key is blocked within the same request cycle that triggers the hard limit — there is no window where subsequent requests slip through while the async database write is in flight.
+
+*Source: `crates/hsip-api/src/auth.rs` — `check_agent_velocity()`*
+
+### 4.6 Per-Key Rate Limiting
+
+Every API key (not only agent keys) is subject to a sliding-window rate limit of 300 requests/minute by default (configurable via `RATE_LIMIT_RPM` environment variable). Enforcement uses an in-memory `DashMap<key_id, RateWindow>` — the limit is on the key identity, not the client IP, so it cannot be bypassed by IP rotation or multiplexed connections.
+
+*Source: `crates/hsip-api/src/auth.rs` — `check_rate_limit()`*
+
+### 4.7 Consent Expiry Enforced Server-Side on Every Check
+
+Consent records include `expires_ms`. Expiry is evaluated at query time, not cached:
+
+```sql
+SELECT status, expires_ms FROM consents
+WHERE tenant_id = ? AND peer_verify_key = ?
+  AND status = 'active'
+  AND (expires_ms IS NULL OR expires_ms > ?)
+```
+
+An expired consent returns the same response as a revoked consent. There is no grace period and no client-side caching that could serve stale authorization.
+
+*Source: `crates/hsip-api/src/routes/consent.rs`*
+
+### 4.8 BLAKE3 Hash-Chained Audit Log
+
+Audit entries are append-only and BLAKE3 hash-chained. Each entry's stored hash includes the content of the previous entry. Modifying any historical entry breaks the chain from that point forward, which is detectable by any verifier with access to the log.
+
+An attacker with write access to the SQLite database cannot silently alter history — they would need to recompute the entire chain from the modified entry forward, producing a different terminal hash that any external verifier will reject.
+
+### 4.9 Credential Integrity: Ed25519 Signatures
+
+Verifiable credentials carry Ed25519 signatures over a canonical payload including `claim`, `user_token`, `issuer_verify_key`, `issued_at`, and `expires_at`. Modifying any field after issuance invalidates the signature. The `/v1/credentials/verify` endpoint rejects any credential with an invalid signature.
+
+An intercepted credential cannot be modified without the tenant's private signing key.
+
+### 4.10 Immediate Revocation
+
+When a credential or API key is revoked:
+
+- **Credentials**: `revoked = 1` is set in the database; the `/v1/credentials/verify` endpoint checks this flag on every call — there is no cache
+- **API keys (normal)**: `active = 0` set in the database; checked on every request via the auth middleware
+- **AI agent keys (auto-revoked)**: inserted into the `pending_revocation` DashSet *before* the async DB write — in-flight requests are blocked immediately
+
+Revocation takes effect on the next request, with no propagation delay.
+
+### 4.11 No Hand-Rolled Cryptography
+
+Every cryptographic operation uses a published, independently reviewed library:
+
+| Operation | Crate | Standard |
+|---|---|---|
+| Ed25519 sign / verify | `ed25519-dalek` (Ristretto team) | RFC 8032 |
+| ChaCha20-Poly1305 AEAD | `chacha20poly1305` (RustCrypto) | RFC 8439 |
+| HKDF key derivation | `hkdf` (RustCrypto) | RFC 5869 |
+| BLAKE3 hash chaining | `blake3` | BLAKE3 spec |
+| X25519 key exchange | `x25519-dalek` | RFC 7748 |
+| SHA-256 (API key hashing) | `sha2` (RustCrypto) | FIPS 180-4 |
+| ML-KEM-768 (post-quantum KEM) | `pqcrypto-kyber` | NIST FIPS 203 |
+| ML-DSA-65 (post-quantum signatures) | `pqcrypto-dilithium` | NIST FIPS 204 |
+| Random key / nonce generation | `rand` with `OsRng` | Delegates to OS CSPRNG |
+
+HSIP does not implement any cryptographic algorithm from scratch. The only glue code is key derivation setup, nonce generation, and encode/decode — approximately 90 lines in `key_encryption.rs`, auditable in a single file.
 
 ---
 
-## Out of Scope for Phase 1
+## 5. Trust Boundaries
 
-- Post-quantum cryptography (reserved for Phase 2)
-- Federated or cross-server credential verification
-- Key revocation certificates or a PKI infrastructure
-- Webhook notifications for revocation events
-- Hardware security module (HSM) integration for master key storage
-- Anonymous or privacy-preserving credential schemes
-
----
-
-## Questions This Document Answers
-
-**Q: Can a credential be forged by someone who intercepts it?**
-A: No. Ed25519 signatures cannot be forged without the signing key. Intercepted credentials can be replayed (until expiration or revocation) but not modified.
-
-**Q: What happens if a signing key is compromised?**
-A: All credentials issued by that tenant become suspect. Rotate the key immediately via `POST /v1/identity/rotate`. Existing issued credentials retain the old `issuer_verify_key` and should be treated as potentially forged after a key compromise.
-
-**Q: Can HSIP credentials be verified without calling the HSIP API?**
-A: Signature verification is mathematically self-contained — any Ed25519 library can verify a credential's signature offline using the `issuer_verify_key`. However, revocation and expiration status require calling `POST /v1/credentials/verify` against the HSIP server.
-
-**Q: Is HSIP GDPR-compliant?**
-A: HSIP provides the technical primitives for GDPR compliance (cryptographic consent records, right-to-erasure via `/v1/tenant/erase`, audit trail). Whether a deployment is GDPR-compliant depends on how the application uses HSIP, not on HSIP alone.
-
-**Q: Can the audit log be falsified?**
-A: Not through the API — there is no update or delete endpoint for audit entries. A compromise of the database or server OS could allow direct database manipulation. Use database-level access controls and audit your infrastructure access separately.
+| Boundary | Trust level | Notes |
+|---|---|---|
+| HTTPS client → HSIP API | Authenticated | Valid bearer key required for all `/v1/*` endpoints |
+| HSIP server → SQLite | Trusted | Database must not be publicly accessible |
+| Master key storage → HSIP server | Critical | Compromise = all signing keys exposed |
+| Tenant A ↔ Tenant B | Untrusted | Isolated by `tenant_id` on every query |
+| Admin key holder | Full | Can provision all tenant keys — protect carefully |
+| AI agent key holder | Scoped | Velocity-limited, auto-revoked at 1000 req/min |
+| Trusted peer (federated trust) | Explicit | Verify key manually registered; messages verified locally |
 
 ---
 
-## Summary
+## 6. What HSIP Does Not Protect Against
 
-HSIP Phase 1 is a cryptographic consent management API. It protects against credential forgery, unauthorized data access, replay of revoked or expired credentials, and identity impersonation. It generates an append-only audit log for compliance.
+The following are **explicitly out of scope**. They must be addressed at the infrastructure or application layer.
 
-HSIP does not protect against a compromised server host, stolen API keys, consent coercion, quantum adversaries, or large-scale DDoS.
+| Attack | Why out of scope | Recommended mitigation |
+|---|---|---|
+| **OS or host compromise** | An attacker with root access can read the master key from the filesystem or memory | OS hardening, container isolation, secrets manager for master key |
+| **Physical server access** | An attacker with physical access can read the filesystem | Full-disk encryption at the OS level |
+| **API key theft** | A stolen key grants full tenant access until rotated | Short-lived keys, audit log monitoring, key rotation policy |
+| **Network-layer DDoS** | HSIP has per-key rate limiting but no IP-level flood protection | Reverse proxy or CDN in front for public deployments |
+| **Side-channel attacks** | No constant-time guarantees outside what `ed25519-dalek` and `chacha20poly1305` provide | Not a realistic concern for network-connected deployments |
+| **Consent coercion** | HSIP enforces cryptographic consent, not voluntary human consent | Application-layer UX and legal controls |
+| **Master key loss** | If `master.key` is lost, all encrypted signing keys are permanently unrecoverable | Back up the master key; use secrets manager |
+| **HSM-backed key storage** | Master key lives on the filesystem | Point `HSIP_MASTER_KEY` at a secrets manager (Vault, AWS KMS) |
+| **Post-quantum adversaries (current Ed25519)** | Ed25519 is not quantum-safe | ML-KEM-768 + ML-DSA-65 available via `hsip-verify` for environments requiring it |
+| **Social engineering** | If an admin is phished, HSIP cannot detect it | Operational security, 2FA on the server, key rotation |
 
-Deploy HSIP behind TLS, restrict database access, secure the master key, and monitor the audit log for anomalous activity.
+---
+
+## 7. Residual Risks and Known Gaps
+
+Documented openly. Tracked for the v1.0 audit milestone.
+
+| Gap | Risk | Mitigation path |
+|---|---|---|
+| No third-party security audit | Medium | Planned before v1.0. Codebase is open source and auditable now. |
+| Master key on filesystem (no HSM) | Medium | Use `HSIP_MASTER_KEY` env var + external secrets manager for production |
+| In-memory rate limiter resets on restart | Low | A burst attack timed around a restart or deploy can temporarily exceed rate limits |
+| SQLite without WAL under write contention | Low | Low risk for single-tenant deployments; use `DATABASE_URL` pointing at PostgreSQL for high-concurrency |
+| No mutual TLS between federated HSIP nodes | Low | Federated trust uses explicit Ed25519 verify key registration; no automatic peer auth at the transport layer |
+| Audit log not externally anchored | Low | BLAKE3 chain is self-verifiable; no blockchain or transparency log integration yet |
+| Clock skew affects consent/credential expiry | Low | Use NTP synchronization in production |
+
+---
+
+## 8. Audit and Review Status
+
+| Item | Status |
+|---|---|
+| Third-party security audit | Not yet completed — planned for v1.0 |
+| Formal verification of protocol properties | `hsip-verify` crate uses Z3 SMT solver for cryptographic protocol proofs |
+| RFC compliance test vectors | RFC 8439 (ChaCha20-Poly1305), RFC 8032 (Ed25519) vectors pass in CI |
+| Dependency vulnerability scanning | `cargo audit` runs on every build |
+| Minimum supported Rust version | 1.88.0 |
+
+---
+
+## 9. Responsible Disclosure
+
+If you find a vulnerability, please disclose it responsibly:
+
+**Email:** sanchezleal1989@gmail.com  
+**Subject:** `[HSIP SECURITY]`
+
+**Response commitments:**
+- Acknowledgement within 48 hours
+- Status update within 7 days
+- Critical issues patched within 7 days of confirmed reproduction
+- Researchers credited by name in release notes (or anonymously on request)
+
+HSIP does not currently have a bug bounty program.
