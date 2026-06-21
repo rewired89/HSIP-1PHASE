@@ -123,7 +123,7 @@ Third-party services that support HSIP can query your consent before acting. No 
 
 ### 5. Tamper-proof Audit Log
 
-Every operation in HSIP — message signed, consent granted, key created, AI action logged — writes to a BLAKE3 hash-chained audit log. Tamper with any entry and the chain breaks.
+Every operation in HSIP — message signed, consent granted, key created, AI action logged — writes to an append-only audit log. There is no delete or update endpoint for audit records.
 
 Export the log at any time for legal proceedings, compliance audits, or personal records.
 
@@ -141,7 +141,7 @@ HSIP is cryptographic infrastructure for banks, trading desks, fintechs, and any
 
 **1. AI agents act on behalf of your institution** — and regulators are going to ask who authorized each action. Without a cryptographic identity attached to each agent and an append-only log of every request, you cannot answer that question. HSIP assigns every AI agent its own Ed25519 keypair, logs every action it takes, and lets you revoke its access in milliseconds.
 
-**2. Regulated environments require you to prove** what your systems did, when, and on whose authority. A log in a database is not proof — it can be altered. A BLAKE3 hash-chained audit log is proof. Tamper with any entry and the chain breaks, detectable by any party.
+**2. Regulated environments require you to prove** what your systems did, when, and on whose authority. HSIP writes every action to an append-only audit log — no delete or update endpoints exist. Every entry is signed with the tenant's Ed25519 key, so the authorship of each record is cryptographically verifiable.
 
 **3. Time-bounded consent is a design requirement in many financial workflows.** HSIP's Consent Wallet generates exactly that: a cryptographically signed grant scoped to a specific action, automatically expiring, revocable in real time.
 
@@ -157,7 +157,7 @@ HSIP is not certified against any regulatory framework. It provides cryptographi
 
 | Capability | What it does |
 |---|---|
-| **Append-only hash-chained audit log** | BLAKE3-chained entries. Tamper with any entry and the chain breaks. Exportable for auditors. |
+| **Append-only audit log** | No delete or update endpoint exists. Every entry signed with Ed25519. Exportable for auditors. |
 | **Ed25519-signed actions** | Every control action signed with the institution's key. Timestamp + signature = non-repudiable record. |
 | **Time-bounded consent grants** | Machine-readable grants with scope, expiry, and revocation via `POST /v1/consent/grant`. |
 | **Right-to-erasure** | `DELETE /v1/tenant/erase` permanently removes all tenant data and logs the erasure event. |
@@ -260,7 +260,7 @@ HSIP uses audited [RustCrypto](https://github.com/RustCrypto) libraries througho
 | Identity & signatures | Ed25519 | RFC 8032 | Used by Signal, Tor, SSH, TLS 1.3, OpenSSH, and most modern HSMs. 128-bit security level. Deterministic — no randomness failure mode. |
 | Key encryption at rest | ChaCha20-Poly1305 | RFC 8439 | Constant-time implementation. No timing side-channels. Used in TLS 1.3, WireGuard, Signal. AEAD — encryption and authentication in one operation. |
 | Key derivation | HKDF-SHA-256 | RFC 5869 | Derives encryption keys from the master key. Standard, audited, used in TLS 1.3 and Signal Protocol. |
-| Audit chain integrity | BLAKE3 | — | Each audit entry includes the hash of the previous entry. Tamper with any entry and every subsequent hash breaks. 3× faster than SHA-256. |
+| Audit log integrity | BLAKE3 (identity hashing) | — | Used for identity and consent record fingerprinting. The HTTP API audit log is append-only by policy — no delete or update endpoints exist. Cryptographic hash chaining of the audit log is on the roadmap. |
 | Session key exchange | X25519 ephemeral | RFC 7748 | Elliptic-curve Diffie-Hellman on Curve25519. New session key per connection = perfect forward secrecy. Past sessions cannot be decrypted if long-term keys are compromised. |
 | **Post-quantum identity** | **ML-DSA-65 (Dilithium)** | **NIST FIPS 204** | **"Harvest now, decrypt later" resistant. A quantum computer cannot forge signatures even with the public key.** |
 | **Post-quantum key exchange** | **ML-KEM-768 (Kyber)** | **NIST FIPS 203** | **Encapsulation mechanism secure against Shor's algorithm. Enable for long-lived key material that must survive 2030+.** |
@@ -271,7 +271,7 @@ HSIP uses audited [RustCrypto](https://github.com/RustCrypto) libraries througho
 
 **ChaCha20-Poly1305 vs AES-GCM:** AES-GCM is vulnerable to nonce reuse. ChaCha20-Poly1305 degrades gracefully. More importantly, ChaCha20 has no timing side-channel — AES on CPUs without hardware acceleration leaks key material through cache timing. HSIP uses constant-time implementations throughout.
 
-**BLAKE3 audit chain vs append-only database:** A database marked "append-only" can still be altered by a DBA or compromised backup. A BLAKE3 hash chain cannot: each entry's hash covers its own content plus the previous entry's hash. Alteration of any entry produces a hash mismatch detectable by any party holding the chain. This is the same construction used in blockchain systems, without the distributed consensus overhead.
+**Append-only audit log:** The HTTP API has no delete or update endpoint for audit records — omission or alteration requires direct database access, which is an OS-level compromise. Every audit entry is Ed25519-signed, so authorship is cryptographically verifiable even if the entry is later copied to an external log sink. Cryptographic hash chaining of audit entries (linking each record to the hash of the previous one) is on the roadmap for v1.0.
 
 **Post-quantum timeline:** NIST finalized ML-KEM and ML-DSA in 2024. The NSA's CNSA 2.0 suite requires post-quantum algorithms for TOP SECRET material by 2030 and recommends migration now. HSIP builds in both algorithms today, disabled by default, enabled with one config flag — so institutions can begin PQ migration on their own timeline without a software upgrade.
 
@@ -368,7 +368,7 @@ docker compose up
 ```
 
 **Built for regulated environments:**
-- **Append-only hash-chained audit log** — BLAKE3-chained entries. Every action signed with Ed25519. Bulk export via `GET /v1/audit`. Tamper-evident by construction.
+- **Append-only audit log** — no delete or update endpoint. Every action signed with Ed25519. Bulk export via `GET /v1/audit`.
 - **Non-repudiable signed actions** — Ed25519 signature proves authorization, identity, and timestamp for every instruction or consent action.
 - **Time-bounded consent grants** — scoped, machine-readable, revocable. `POST /v1/consent/grant` with `expires_in_seconds`.
 - **Right-to-erasure** — `DELETE /v1/tenant/erase` permanently removes all tenant data and writes a signed erasure event to the audit log.
@@ -463,7 +463,7 @@ Everything runs in a single binary for desktop/on-premise use. Switch to Postgre
 - **API keys stored as SHA-256 hashes only** — raw key shown once at creation, never stored. Compromise of the database does not expose API credentials.
 - **Rate limiting on all endpoints** — 300 req/min default per key, configurable via `RATE_LIMIT_RPM`.
 - **AI agent velocity monitoring** — anomaly logged at >100 req/min; key auto-revoked at >1,000 req/min with immediate in-memory block before DB write.
-- **Append-only BLAKE3 hash-chained audit trail** — each entry covers the previous entry's hash. Tamper with any entry and the chain breaks, detectable by any verifier.
+- **Append-only audit trail** — no delete or update endpoint exists. Every entry signed with Ed25519. Tamper requires OS-level DB access, not just API access.
 - **Replay attack prevention** — monotonic nonce counters. Replayed requests are rejected even if the signature is valid.
 - **Instant revocation** — `pending_revocation` DashSet blocks in-flight requests in memory before the async DB write completes. No race window.
 - **No telemetry, no analytics, no phone-home** — ever. Verified by code review: no outbound connections except DNS forwarding (1.1.1.1:53) when the DNS blocker is enabled.

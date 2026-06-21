@@ -77,16 +77,15 @@ A stolen database contains only hashes — not usable API keys.
 
 *Source: `crates/hsip-api/src/auth.rs` — `hash_key()`*
 
-### 4.3 Replay Attack Prevention: 64-Packet Sliding Window
+### 4.3 Replay Prevention: Protocol Layer (UDP Sessions)
 
-The `hsip-core` crate implements a 64-packet sliding window nonce tracker:
+The `hsip-core` crate implements a 64-packet sliding window nonce tracker for the UDP consent and session protocol:
 
 - Zero nonces are rejected unconditionally (`NonceError::ZeroNonce`)
 - Any previously seen nonce is rejected (`NonceError::Replay`)
 - Nonces more than 64 positions behind the current maximum are rejected (`NonceError::TooOld`)
-- Out-of-order delivery within a 64-packet window is supported (handles UDP reordering)
 
-An attacker who captures a signed message and resubmits it will be rejected.
+**Scope limitation:** This nonce window is used in the UDP session layer (`hsip-core`). The HTTP REST API does not enforce per-request nonce replay prevention. An attacker who captures a valid HTTP request with a stolen API key can replay it until the key is revoked. The defense against this at the HTTP layer is the rate limiter (Section 4.6) and short-lived key expiry.
 
 *Source: `crates/hsip-core/src/nonce.rs`*
 
@@ -144,11 +143,13 @@ An expired consent returns the same response as a revoked consent. There is no g
 
 *Source: `crates/hsip-api/src/routes/consent.rs`*
 
-### 4.8 BLAKE3 Hash-Chained Audit Log
+### 4.8 Append-Only Audit Log
 
-Audit entries are append-only and BLAKE3 hash-chained. Each entry's stored hash includes the content of the previous entry. Modifying any historical entry breaks the chain from that point forward, which is detectable by any verifier with access to the log.
+The `audit_entries` table in the HTTP API is append-only by design: there is no `UPDATE` or `DELETE` endpoint for audit records, and no application code path removes entries. An attacker using only the API cannot erase or alter the audit history.
 
-An attacker with write access to the SQLite database cannot silently alter history — they would need to recompute the entire chain from the modified entry forward, producing a different terminal hash that any external verifier will reject.
+**Scope limitation:** The audit log is append-only by policy, not by cryptographic chain. An attacker with direct SQLite write access (i.e., OS-level compromise) can modify or delete rows without leaving a detectable fingerprint. BLAKE3 hash chaining exists in the `hsip-telemetry-guard` crate but is not currently wired into the HTTP API audit table.
+
+For environments requiring tamper-evidence against database-level compromise, the mitigation is filesystem-level immutability (append-only S3 bucket, WORM storage, or periodic signed export to an external log sink).
 
 ### 4.9 Credential Integrity: Ed25519 Signatures
 
