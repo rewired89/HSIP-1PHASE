@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { TRACKERS, RISK_LEVEL, TRACKER_STATS } from '../data/trackers';
 
 // ── 3D tilt on mouse move ─────────────────────────────────────────────────────
@@ -242,6 +242,83 @@ function WhatIsTile({ item }) {
   );
 }
 
+// ── MISE-style portrait fan carousel ─────────────────────────────────────────
+function AppShowcase({ onNavigate }) {
+  const [active, setActive] = useState(2);
+  const [tilt, setTilt]     = useState(0);
+  const stageRef = useRef(null);
+
+  const handleMouseMove = useCallback((e) => {
+    const el = stageRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setTilt(((e.clientX - r.left) / r.width - 0.5) * 7);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    setTilt(0);
+  }, []);
+
+  const getStyle = useMemo(() => (i) => {
+    const off    = i - active;
+    const absOff = Math.abs(off);
+    const x      = off * 148;
+    const ry     = -(off * 16) + tilt;
+    const z      = off === 0 ? 42 : -absOff * 42;
+    const scale  = off === 0 ? 1.06 : Math.max(0.71, 1 - absOff * 0.11);
+    const op     = off === 0 ? 1    : Math.max(0.32, 1 - absOff * 0.3);
+    return {
+      transform: `translateX(${x}px) rotateY(${ry}deg) translateZ(${z}px) scale(${scale})`,
+      opacity:   op,
+      zIndex:    10 - absOff,
+    };
+  }, [active, tilt]);
+
+  return (
+    <div className="showcase-wrap">
+      <div className="showcase-eyebrow">What do you want to do?</div>
+      <div
+        className="showcase-stage"
+        ref={stageRef}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+      >
+        <div className="showcase-bg-text" aria-hidden="true">YOUR DIGITAL<br/>BODYGUARD</div>
+        {ACTIONS.map((a, i) => {
+          const isActive = active === i;
+          return (
+            <div
+              key={a.tab}
+              className={`sc-card${isActive ? ' sc-card--active' : ''}`}
+              style={{ ...getStyle(i), '--sc-color': a.c.border, '--sc-glow': a.c.glow, '--sc-bg': a.c.bg }}
+              onClick={() => isActive ? onNavigate(a.tab) : setActive(i)}
+            >
+              <div className="sc-card-fill" />
+              {!isActive && <div className="sc-card-number">0{i + 1}</div>}
+              <div className="sc-card-icon">{a.icon}</div>
+              <div className="sc-card-body">
+                <div className="sc-card-title">{a.title}</div>
+                {isActive && <div className="sc-card-desc">{a.desc}</div>}
+                {isActive && <div className="sc-card-cta">Open →</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="showcase-dots">
+        {ACTIONS.map((_, i) => (
+          <button
+            key={i}
+            className={`sc-dot${active === i ? ' sc-dot--active' : ''}`}
+            onClick={() => setActive(i)}
+            aria-label={ACTIONS[i].title}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function HomeDashboard({ onNavigate }) {
   const criticalCount = TRACKERS.filter(t => t.risk === 'critical').length;
@@ -300,11 +377,8 @@ export default function HomeDashboard({ onNavigate }) {
       <CreepMeter />
       <WallOfShame />
 
-      {/* ── ATOMIC-style action cards ── */}
-      <p className="home-section-head">What do you want to do?</p>
-      <div className="ac-grid">
-        {ACTIONS.map(a => <ActionCard key={a.tab} {...a} onNavigate={onNavigate} />)}
-      </div>
+      {/* ── MISE-style app showcase ── */}
+      <AppShowcase onNavigate={onNavigate} />
     </div>
   );
 }
