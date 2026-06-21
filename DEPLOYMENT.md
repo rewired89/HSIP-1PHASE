@@ -6,20 +6,91 @@ This guide covers production deployment, high availability architecture, backup 
 
 ## Table of Contents
 
-1. [Quick Start](#quick-start)
-2. [Production Configuration](#production-configuration)
-3. [TLS/HTTPS Setup](#tlshttps-setup)
-4. [Database Configuration](#database-configuration)
-5. [High Availability Architecture](#high-availability-architecture)
-6. [Backup and Disaster Recovery](#backup-and-disaster-recovery)
-7. [Monitoring and Alerting](#monitoring-and-alerting)
-8. [Security Hardening](#security-hardening)
-9. [Performance Tuning](#performance-tuning)
-10. [Troubleshooting](#troubleshooting)
+1. [Desktop Mode — Zero Config](#desktop-mode--zero-config)
+2. [Deploy to Railway — Hosted Demo](#deploy-to-railway--hosted-demo)
+3. [Production Configuration](#production-configuration)
+4. [TLS/HTTPS Setup](#tlshttps-setup)
+5. [Database Configuration](#database-configuration)
+6. [High Availability Architecture](#high-availability-architecture)
+7. [Backup and Disaster Recovery](#backup-and-disaster-recovery)
+8. [Monitoring and Alerting](#monitoring-and-alerting)
+9. [Security Hardening](#security-hardening)
+10. [Performance Tuning](#performance-tuning)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
-## Quick Start
+## Desktop Mode — Zero Config
+
+The simplest way to run HSIP is desktop mode. No `config.toml` needed.
+
+```bash
+# Build
+cargo build --release -p hsip-api
+
+# Run — starts on port 7474, creates ~/.hsip/ automatically
+./target/release/hsip-api
+```
+
+On first boot the server prints your admin key:
+
+```
+Admin API key (save this): hsip_3bef3de24adf00194efb...
+Key written to: ~/.hsip/admin.key
+```
+
+Open `http://127.0.0.1:7474` in your browser to access the dashboard.
+
+Desktop mode stores everything in `~/.hsip/` (Linux/macOS) or `%APPDATA%\HSIP\` (Windows).  
+SQLite is used by default. For production, set `DATABASE_URL` to a PostgreSQL URL.
+
+---
+
+## Deploy to Railway — Hosted Demo
+
+Railway is the fastest path to a public HSIP instance. The repo ships a `Dockerfile` and `railway.toml` that are ready to use.
+
+### One-Time Setup
+
+1. **Push the repo** to GitHub (already done if you're reading this).
+2. **Create a Railway project** → New Project → Deploy from GitHub repo.
+3. **Set environment variables** in Railway → Variables:
+
+| Variable | Required | Example value | Notes |
+|---|---|---|---|
+| `PORT` | Yes | `7474` | Railway injects this automatically |
+| `HSIP_ADMIN_KEY` | **Yes** | `hsip_3bef3de24adf00194efb4dd4f625e9da828738c5f162d709a6adedafb084d12d` | Fixed admin key — survives restarts. Generate: `openssl rand -hex 32 \| sed 's/^/hsip_/'` |
+| `HSIP_PUBLIC_URL` | Yes | `https://hsip-1phase-production.up.railway.app` | Used for CORS and self-links |
+| `HSIP_SANDBOX` | Optional | `true` | Enables `POST /v1/sandbox/provision` — auto-creates 24-hour trial keys for visitors |
+| `CORS_ALLOW_ALL` | Optional | `true` | Opens CORS for all origins — fine for public demos, remove for production |
+| `DATABASE_URL` | Optional | `postgresql://...` | Defaults to SQLite at `/tmp/hsip.db`. Use a Railway Postgres addon for persistence. |
+
+> **Warning:** Railway containers use ephemeral storage. Without a `DATABASE_URL` pointing to a persistent database, all data (tenants, keys, audit log) resets on every redeploy. For a persistent demo, add a Railway PostgreSQL addon and set `DATABASE_URL`.
+
+### Generate a Persistent Admin Key
+
+```bash
+openssl rand -hex 32 | sed 's/^/hsip_/'
+# Output: hsip_3bef3de24adf00194efb4dd4f625e9da828738c5f162d709a6adedafb084d12d
+```
+
+Copy that value into `HSIP_ADMIN_KEY` in Railway Variables. Save it somewhere safe — this is your permanent admin credential for this deployment.
+
+### Verify the Deployment
+
+```bash
+# Health check
+curl https://your-app.up.railway.app/health
+# → {"status":"ok","version":"0.2.0"}
+
+# Sign in with your admin key
+curl -X POST https://your-app.up.railway.app/v1/identity \
+  -H "Authorization: Bearer hsip_<your-admin-key>"
+```
+
+---
+
+## Quick Start (Self-Hosted Server Mode)
 
 ### 1. Generate Configuration Files
 
@@ -92,9 +163,13 @@ The following environment variables override config file settings:
 |----------|-------------|---------|
 | `HSIP_CONFIG` | Path to config file | `config.toml` |
 | `DATABASE_URL` | Database connection string | `postgresql://...` |
-| `MASTER_KEY_PATH` | Path to master encryption key | `hsip_master_key.bin` |
-| `ADMIN_KEY_PATH` | Path to admin API key file | `hsip_admin_key.txt` |
-| `PORT` | Server port | `3000` |
+| `HSIP_ADMIN_KEY` | Fixed admin key that survives restarts (recommended for cloud deploys). Must start with `hsip_` and be ≥ 20 chars. | `hsip_3bef3de24a...` |
+| `HSIP_PUBLIC_URL` | Public base URL of this instance — used in CORS and self-links | `https://example.com` |
+| `HSIP_SANDBOX` | Set to `true` to enable `POST /v1/sandbox/provision` (24-hour trial key provisioning) | `true` |
+| `HSIP_MASTER_KEY` | Master encryption key as a hex string — alternative to key file | `a3f1...` (64 hex chars) |
+| `CORS_ALLOW_ALL` | Set to `true` to allow requests from any origin — use only for public demos | `true` |
+| `RATE_LIMIT_RPM` | Per-key rate limit in requests/minute (default: 300) | `300` |
+| `PORT` | Server port (default: 7474 desktop / 3000 server mode) | `7474` |
 | `RUST_LOG` | Log level override | `info,hsip_api=debug` |
 | `METRICS_TOKEN` | Bearer token for `/metrics` | `secret-token` |
 
@@ -627,13 +702,12 @@ sudo ufw allow from 127.0.0.1 to any port 3000
 
 ### Rate Limiting
 
-HSIP includes built-in rate limiting (default: 60 requests/minute per API key).
+HSIP includes built-in rate limiting (default: 300 requests/minute per API key, configurable via `RATE_LIMIT_RPM` env var). AI agent keys have an additional velocity layer: anomaly logged at >100 req/min, key auto-revoked at >1000 req/min.
 
-Adjust in `config.toml`:
+Adjust via environment variable (takes effect without restarting):
 
-```toml
-[security]
-rate_limit_per_minute = 100  # Increase for higher throughput
+```bash
+export RATE_LIMIT_RPM=100   # Lower for stricter public deployments
 ```
 
 For additional DDoS protection, use a reverse proxy or cloud WAF.
@@ -826,17 +900,18 @@ sudo systemctl restart hsip-api
 
 Before going live, verify:
 
-- [ ] TLS/HTTPS enabled with valid certificate
-- [ ] PostgreSQL database configured (not SQLite)
+- [ ] TLS/HTTPS enabled with valid certificate (or reverse proxy handles it)
+- [ ] PostgreSQL database configured (not SQLite) — or Railway Postgres addon
+- [ ] `HSIP_ADMIN_KEY` set to a fixed value and backed up securely
 - [ ] Master key backed up to encrypted off-site storage
 - [ ] Config file reviewed and secured (chmod 640)
 - [ ] Firewall rules configured
-- [ ] Systemd service installed and enabled
+- [ ] Systemd service installed and enabled (self-hosted) or Railway deploy active
 - [ ] Automated backups configured (daily)
 - [ ] Monitoring/alerting configured (Prometheus + Grafana)
-- [ ] Load balancer health checks configured
+- [ ] Load balancer health checks configured (multi-instance only)
 - [ ] Disaster recovery procedure documented and tested
-- [ ] Third-party security audit completed (recommended)
+- [ ] `cargo audit` running in CI (see `.github/workflows/security-audit.yml`)
 - [ ] Load testing performed with expected traffic patterns
 
 ---
@@ -845,9 +920,9 @@ Before going live, verify:
 
 For production deployment support:
 
-- **Documentation:** See `README.md`, `PROTOCOL_SPEC.md`, `SDK_INTEGRATION.md`
-- **Issues:** https://github.com/yourusername/hsip/issues
-- **Email:** support@yourdomain.com
+- **Documentation:** See `README.md`, `THREAT_MODEL.md`, `docs/SANDBOX_QUICKSTART.md`
+- **Issues:** https://github.com/rewired89/HSIP-1PHASE/issues
+- **Security vulnerabilities:** sanchezleal1989@gmail.com with subject `[HSIP SECURITY]`
 
 ---
 

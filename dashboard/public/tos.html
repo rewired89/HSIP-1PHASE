@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terms of Service — HSIP</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #3fb950;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 16px;
+      line-height: 1.7;
+      padding: 2rem 1rem 4rem;
+    }
+    .container {
+      max-width: 740px;
+      margin: 0 auto;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 2.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .logo { font-size: 2rem; }
+    .site-name { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
+    h1 { font-size: 1.9rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 2.5rem; }
+    h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--accent);
+      margin: 2rem 0 0.75rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+    p { margin-bottom: 0.9rem; }
+    ul { padding-left: 1.4rem; margin-bottom: 0.9rem; }
+    li { margin-bottom: 0.3rem; }
+    .notice {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid #d29922;
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 2rem;
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+    .back-link:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <span class="logo">🔐</span>
+      <span class="site-name">HSIP</span>
+    </div>
+
+    <a href="/" class="back-link">← Back to dashboard</a>
+
+    <h1>Terms of Service</h1>
+    <p class="meta">Effective date: June 21, 2026 &nbsp;·&nbsp; Contact: <a href="mailto:sanchezleal1989@gmail.com">sanchezleal1989@gmail.com</a></p>
+
+    <h2>1. What HSIP Is</h2>
+    <p>HSIP ("High Security Internet Protocol") is software that provides cryptographic identity management, consent records, message signing, verifiable credentials, and an audit trail. It is available as open-source software and as a hosted evaluation demo.</p>
+    <p>HSIP is a <strong>tool</strong>, not a compliance certification. Using HSIP does not make you compliant with any law or regulation. Whether HSIP's capabilities satisfy a specific requirement in your jurisdiction is a legal and compliance question — one you should answer with your own legal counsel.</p>
+
+    <h2>2. The Hosted Demo</h2>
+    <p>The demo instance at <code>hsip-1phase-production.up.railway.app</code> is provided <strong>for evaluation only</strong>:</p>
+    <ul>
+      <li>Trial keys expire after <strong>24 hours</strong>.</li>
+      <li>Demo data may be erased at any time without notice.</li>
+      <li>There are no uptime guarantees on the demo.</li>
+      <li>The demo is <strong>not suitable for production use</strong> or sensitive data.</li>
+    </ul>
+    <p>For production, deploy your own HSIP instance. See the <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/DEPLOYMENT.md">Deployment Guide</a>.</p>
+
+    <h2>3. No Warranty</h2>
+    <p>HSIP is provided <strong>"as is"</strong> without warranty of any kind, express or implied — including fitness for a particular purpose, absence of security vulnerabilities, or continuous availability.</p>
+    <p>No third-party security audit has been completed. A third-party audit is planned before v1.0 commercial release. Known limitations are documented openly in <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/THREAT_MODEL.md">THREAT_MODEL.md</a>.</p>
+
+    <h2>4. Limitation of Liability</h2>
+    <p>To the maximum extent permitted by applicable law, the author shall not be liable for indirect, incidental, special, consequential, or punitive damages arising from your use of HSIP — including data loss, security breaches from misconfiguration, business losses, or regulatory penalties.</p>
+
+    <h2>5. What Data We Collect</h2>
+    <p><strong>Self-hosted instances:</strong> We collect nothing. All data stays on your server. You are the data controller.</p>
+    <p><strong>The hosted demo:</strong> We do not intentionally collect personal information beyond what you create in the system (signed messages, consent records). Demo data may be retained for up to 30 days. We do not sell or share demo data.</p>
+
+    <h2>6. Acceptable Use</h2>
+    <p>You may not use HSIP to:</p>
+    <ul>
+      <li>Violate any applicable law or regulation</li>
+      <li>Impersonate another person or organization</li>
+      <li>Conduct attacks against systems you do not own</li>
+      <li>Circumvent security controls of third-party services</li>
+    </ul>
+
+    <h2>7. Changes to These Terms</h2>
+    <p>These terms may be updated at any time. Continued use of the demo after an update constitutes acceptance. The effective date at the top of this page reflects the most recent revision.</p>
+
+    <h2>8. Contact</h2>
+    <p>Questions: <a href="mailto:sanchezleal1989@gmail.com">sanchezleal1989@gmail.com</a><br>
+    Security issues: same address with subject <code>[HSIP SECURITY]</code></p>
+
+    <div class="footer">
+      HSIP is maintained by Dayana Sanchez. &nbsp;·&nbsp;
+      <a href="https://github.com/rewired89/HSIP-1PHASE">GitHub</a> &nbsp;·&nbsp;
+      <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/THREAT_MODEL.md">Security</a>
+    </div>
+  </div>
+</body>
+</html>
