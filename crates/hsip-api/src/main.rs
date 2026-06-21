@@ -612,9 +612,19 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
         .execute(db)
         .await?;
 
-    let mut raw_bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut raw_bytes);
-    let raw_key = format!("hsip_{}", hex::encode(&raw_bytes));
+    // HSIP_ADMIN_KEY env var lets Railway/K8s deployments use a fixed key so the
+    // admin password survives container restarts (ephemeral filesystem resets the DB).
+    let raw_key = match std::env::var("HSIP_ADMIN_KEY") {
+        Ok(k) if k.starts_with("hsip_") && k.len() >= 20 => {
+            tracing::info!("Using admin key from HSIP_ADMIN_KEY env var");
+            k
+        }
+        _ => {
+            let mut raw_bytes = [0u8; 32];
+            OsRng.fill_bytes(&mut raw_bytes);
+            format!("hsip_{}", hex::encode(&raw_bytes))
+        }
+    };
     let key_hash = hash_key(&raw_key);
     let key_id = Uuid::new_v4().to_string();
 
@@ -631,16 +641,20 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
 
     metrics::ACTIVE_TENANTS.inc();
 
+    let from_env = std::env::var("HSIP_ADMIN_KEY").is_ok();
     println!();
     println!("╔══════════════════════════════════════════════════╗");
     println!("║          HSIP API — FIRST-TIME SETUP             ║");
     println!("╠══════════════════════════════════════════════════╣");
-    println!("║  Admin API Key (save this — shown only once):    ║");
-    println!("║                                                  ║");
-    println!("║  {:<48}  ║", raw_key);
-    println!("║                                                  ║");
-    println!("║  Authorization: Bearer <key>                     ║");
-    println!("║  Key saved to: {:<33}  ║", admin_key_path);
+    if from_env {
+        println!("║  Admin key loaded from HSIP_ADMIN_KEY env var    ║");
+    } else {
+        println!("║  Admin API Key (save this — shown only once):    ║");
+        println!("║                                                  ║");
+        println!("║  {:<48}  ║", raw_key);
+        println!("║                                                  ║");
+        println!("║  Key saved to: {:<33}  ║", admin_key_path);
+    }
     println!("╚══════════════════════════════════════════════════╝");
     println!();
 

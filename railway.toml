@@ -10,10 +10,15 @@ restartPolicyMaxRetries = 3
 
 # Sandbox demo deployment — set these in Railway environment variables:
 #
+#   HSIP_ADMIN_KEY=hsip_<64 hex chars>   fixed admin key that survives restarts
+#                                         generate: openssl rand -hex 32 | sed 's/^/hsip_/'
 #   HSIP_SANDBOX=true          enables POST /v1/sandbox/provision
-#   HSIP_PUBLIC_URL=https://demo.hsip.io   returned in provision response
+#   HSIP_PUBLIC_URL=https://hsip-1phase-production.up.railway.app
 #   CORS_ALLOW_ALL=1           already set in Dockerfile
 #   HOST=0.0.0.0               already set in Dockerfile
 #   PORT=8080                  already set in Dockerfile
+#
+# IMPORTANT: without HSIP_ADMIN_KEY the admin key changes on every container
+# restart (Railway filesystem is ephemeral — no persistent volume by default).
 #
 # For production (non-sandbox) deployments, leave HSIP_SANDBOX unset.
