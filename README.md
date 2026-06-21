@@ -4,6 +4,7 @@
 
 [![License: Proprietary](https://img.shields.io/badge/License-Commercial-red.svg)](LICENSE)
 [![Build](https://github.com/rewired89/HSIP-1PHASE/actions/workflows/release.yml/badge.svg)](https://github.com/rewired89/HSIP-1PHASE/actions)
+[![Security Audit](https://github.com/rewired89/HSIP-1PHASE/actions/workflows/security-audit.yml/badge.svg)](https://github.com/rewired89/HSIP-1PHASE/actions/workflows/security-audit.yml)
 
 ### [🌐 hsip.rewired89.github.io/HSIP-1PHASE](https://rewired89.github.io/HSIP-1PHASE/) — Landing page with one-click downloads
 
