@@ -47,6 +47,7 @@ export default function App() {
     localStorage.getItem('hsip_mode') === 'expert' ? 'identity' : 'home'
   );
   const [onboarding, setOnboarding] = useState(false);
+  const [provisioning, setProvisioning] = useState(false);
 
   function switchMode(m) {
     setMode(m);
@@ -69,6 +70,28 @@ export default function App() {
       setTab(mode === 'simple' ? 'home' : 'identity');
     } catch {
       setError('Invalid access key. Please check and try again.');
+    }
+  }
+
+  async function handleGetTrialKey() {
+    setProvisioning(true);
+    setError('');
+    try {
+      const res = await fetch('/v1/sandbox/provision', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Provision failed');
+      const key = data.api_key;
+      // verify the key works then auto-sign-in
+      await request('POST', '/v1/identity', null, key);
+      localStorage.setItem('hsip_api_key', key);
+      setApiKey(key);
+      setAuthed(true);
+      setError('');
+      setTab('home');
+    } catch (err) {
+      setError(err.message || 'Could not get a trial key. Try again.');
+    } finally {
+      setProvisioning(false);
     }
   }
 
@@ -96,13 +119,22 @@ export default function App() {
             </button>
           </div>
 
+          <button
+            className="trial-key-btn"
+            onClick={handleGetTrialKey}
+            disabled={provisioning}
+          >
+            {provisioning ? 'Getting your key…' : '✨ Try it free — get a 24-hour key'}
+          </button>
+
+          <div className="login-divider"><span>or sign in with your own key</span></div>
+
           <form onSubmit={handleLogin}>
             <input
               type="text"
               placeholder="Access key  (hsip_…)"
               value={apiKey}
               onChange={e => setApiKey(e.target.value)}
-              autoFocus
             />
             <button type="submit">
               {mode === 'simple' ? 'Sign in' : 'Connect'}
@@ -112,7 +144,7 @@ export default function App() {
 
           <div className="login-key-hint">
             <p className="login-hint-head">
-              First time? Your key was shown in the terminal and saved to:
+              Running HSIP locally? Your key is saved to:
             </p>
             <div className="login-hint-paths">
               <span className="login-hint-os">Windows</span>

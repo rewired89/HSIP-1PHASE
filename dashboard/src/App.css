@@ -164,6 +164,44 @@ body {
 
 .error { color: var(--c-red); margin-top: 0.6rem; font-size: 0.85rem; }
 
+/* ── Trial key button ──────────────────────────────────────────────────── */
+.trial-key-btn {
+  width: 100%;
+  padding: 0.85rem 1rem;
+  margin-top: 1rem;
+  background: linear-gradient(135deg, #1a6636 0%, #146e46 100%);
+  border: 1px solid rgba(40,200,100,0.35);
+  border-radius: var(--r-sm);
+  color: #c8fce0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  letter-spacing: 0.02em;
+}
+.trial-key-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1f7a40 0%, #188055 100%);
+  box-shadow: 0 4px 24px rgba(30,180,80,0.4);
+  transform: translateY(-1px);
+}
+.trial-key-btn:disabled { opacity: 0.6; cursor: default; transform: none; }
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin: 1.1rem 0 0.5rem;
+  color: var(--c-text-3);
+  font-size: 0.75rem;
+}
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(67,97,255,0.18);
+}
+
 .login-key-hint {
   margin-top: 1.25rem;
   padding: 0.85rem;
