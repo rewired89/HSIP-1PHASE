@@ -25,7 +25,7 @@ const SIMPLE_TABS = [
   { id: 'prove-it',          icon: '✍️',  label: 'Alibi',      subtitle: 'Prove something happened when' },
   { id: 'consent-wallet',    icon: '🛡️',  label: 'Consents',   subtitle: 'Control who acts on your behalf' },
   { id: 'ai-watch',          icon: '🤖', label: 'AI Watch',   subtitle: 'Monitor AI agents in real time' },
-  { id: 'tracker-inspector', icon: '🔍', label: 'Trackers',   subtitle: 'See who's tracking you online' },
+  { id: 'tracker-inspector', icon: '🔍', label: 'Trackers',   subtitle: 'See who is tracking you online' },
   { id: 'protection',        icon: '🔒', label: 'Protection', subtitle: 'Block ads, trackers & malware' },
 ];
 
