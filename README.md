@@ -46,7 +46,7 @@ HSIP is the answer to all three. It runs on your hardware, signs everything with
 | **Control my AI agents** — see exactly what my AI did, revoke access instantly | [AI Watch + Consent Wallet](#3-ai-watch--know-exactly-what-your-ai-did) |
 | **Build privacy-respecting software** — add consent infrastructure to my app or AI agent | [Developer SDK →](#for-developers) |
 | **Enterprise audit compliance** — GDPR, court records, legal-grade evidence chains | [Enterprise deployment →](#for-enterprises) |
-| **Financial services infrastructure** — MiFID II, FINRA 4511, SOX §404, DORA, SWIFT CSCF compliance | [Financial Services →](#financial-services) |
+| **Financial services infrastructure** — audit-trail and key-management patterns for regulated environments | [Financial Services →](#financial-services) |
 
 ---
 
@@ -141,28 +141,31 @@ HSIP is cryptographic infrastructure for banks, trading desks, fintechs, and any
 
 **1. AI agents act on behalf of your institution** — and regulators are going to ask who authorized each action. Without a cryptographic identity attached to each agent and an append-only log of every request, you cannot answer that question. HSIP assigns every AI agent its own Ed25519 keypair, logs every action it takes, and lets you revoke its access in milliseconds.
 
-**2. MiFID II Article 25 and FINRA Rule 4511 require you to prove** what your systems did, when, and on whose authority. A log in a database is not proof — it can be altered. A BLAKE3 hash-chained audit log is proof. Tamper with any entry and the chain breaks, detectable by any party.
+**2. Regulated environments require you to prove** what your systems did, when, and on whose authority. A log in a database is not proof — it can be altered. A BLAKE3 hash-chained audit log is proof. Tamper with any entry and the chain breaks, detectable by any party.
 
-**3. Open Banking (PSD2) mandates machine-readable, time-bounded consent.** HSIP's Consent Wallet generates exactly that: a cryptographically signed grant scoped to a specific action, automatically expiring, revocable in real time. No more cookie banners your compliance team can't evidence.
+**3. Time-bounded consent is a design requirement in many financial workflows.** HSIP's Consent Wallet generates exactly that: a cryptographically signed grant scoped to a specific action, automatically expiring, revocable in real time.
 
 **4. Inter-institution trust is broken.** When a message arrives from a counterparty, how do you verify it wasn't altered in transit? HSIP's Federated Trust layer lets institutions exchange Ed25519 verify keys out-of-band (email, secure channel) and then verify any future message cryptographically — no central registry, no PKI vendor, no single point of failure.
 
-**5. DORA and SWIFT CSCF require you to detect and respond to anomalous AI or automated system behavior.** HSIP's velocity monitoring flags agents exceeding 100 requests/minute and auto-revokes access at 1,000 requests/minute — with a signed audit entry at every step.
+**5. Anomalous AI and automated system behavior requires detection and response.** HSIP's velocity monitoring flags agents exceeding 100 requests/minute and auto-revokes access at 1,000 requests/minute — with a signed audit entry at every step.
 
 ---
 
-### Compliance coverage
+### What HSIP provides for regulated environments
 
-| Regulation | What HSIP covers |
+HSIP is not certified against any regulatory framework. It provides cryptographic infrastructure — the building blocks that compliance architectures are built on.
+
+| Capability | What it does |
 |---|---|
-| **SOX §404** | Append-only BLAKE3 hash-chained audit log. Every control action signed with Ed25519. Exportable for auditors. |
-| **FINRA Rule 4511** | Six-year tamper-evident record retention. API endpoint for bulk audit export. Signature chain proves no entry was altered. |
-| **MiFID II Art. 25** | Per-trade authorization signed with institutional Ed25519 key. Timestamp + signature = defensible suitability record. |
-| **PSD2 / Open Banking** | Machine-readable consent grants with scope, expiry, and revocation. `POST /v1/consent/grant` with `expires_in_seconds`. |
-| **GDPR Art. 7** | Cryptographically signed consent with documented scope. `DELETE /v1/tenant/erase` for right-to-erasure. Audit log proves consent was active at time of processing. |
-| **DORA** | AI agent velocity monitoring, anomaly detection, auto-revocation. Incident response via `DELETE /v1/keys/:id`. All events in signed audit trail. |
-| **SWIFT CSCF** | Ed25519 message authentication prevents unauthorized instruction injection. Federated trust keys verified per counterparty. No shared secrets. |
-| **ISO 20022** | Signed payment messages with Ed25519. Verifiable by any counterparty holding the institution's public key. Non-repudiation by construction. |
+| **Append-only hash-chained audit log** | BLAKE3-chained entries. Tamper with any entry and the chain breaks. Exportable for auditors. |
+| **Ed25519-signed actions** | Every control action signed with the institution's key. Timestamp + signature = non-repudiable record. |
+| **Time-bounded consent grants** | Machine-readable grants with scope, expiry, and revocation via `POST /v1/consent/grant`. |
+| **Right-to-erasure** | `DELETE /v1/tenant/erase` permanently removes all tenant data and logs the erasure event. |
+| **AI agent identity and revocation** | Every agent gets a unique keypair. Velocity monitoring, anomaly detection, auto-revocation. |
+| **Inter-institution message verification** | Ed25519 verify keys exchanged out-of-band. Messages verified locally, no central authority. |
+| **Non-repudiation** | Signed messages with public verify key. Any counterparty can verify without calling your server. |
+
+Whether these capabilities satisfy a specific regulatory requirement in your jurisdiction is a legal question, not a product claim. Talk to your compliance team and legal counsel before deploying HSIP in a regulated context. Contact [sanchezleal1989@gmail.com](mailto:sanchezleal1989@gmail.com) to discuss your architecture.
 
 ---
 
@@ -364,14 +367,16 @@ docker compose up
 # See DEPLOYMENT.md for full Helm chart + TLS + backup configuration
 ```
 
-**Compliance built in:**
-- **SOX / FINRA 4511** — Append-only BLAKE3 hash-chained audit log. Every entry signed with Ed25519. Bulk export via `GET /v1/audit`. No vendor can alter your records.
-- **MiFID II Art. 25** — Per-action Ed25519 signature proves authorization, identity, and timestamp for every trade, instruction, or consent action.
-- **PSD2 Open Banking** — Machine-readable consent grants: scoped, time-bounded, revocable. `POST /v1/consent/grant` with `expires_in_seconds`.
-- **GDPR Art. 17** — Right-to-erasure endpoint: `DELETE /v1/tenant/erase`. Signed consent records prove lawful basis at time of processing.
-- **DORA** — AI agent velocity monitoring, anomaly detection, auto-revocation at configurable thresholds. All events written to the signed audit trail.
-- **SWIFT CSCF** — Ed25519 message authentication. No shared secrets between counterparties. Federated trust key exchange prevents instruction injection.
+**Built for regulated environments:**
+- **Append-only hash-chained audit log** — BLAKE3-chained entries. Every action signed with Ed25519. Bulk export via `GET /v1/audit`. Tamper-evident by construction.
+- **Non-repudiable signed actions** — Ed25519 signature proves authorization, identity, and timestamp for every instruction or consent action.
+- **Time-bounded consent grants** — scoped, machine-readable, revocable. `POST /v1/consent/grant` with `expires_in_seconds`.
+- **Right-to-erasure** — `DELETE /v1/tenant/erase` permanently removes all tenant data and writes a signed erasure event to the audit log.
+- **AI agent governance** — velocity monitoring, anomaly detection, auto-revocation. All events in the signed audit trail.
+- **Inter-institution message auth** — Ed25519 verify keys, no shared secrets. Federated trust key exchange, verified locally.
 - **No telemetry, no phone-home, no licensing server** — your keys and your audit trail never leave your infrastructure.
+
+> HSIP is not certified against any regulatory framework. Whether these capabilities satisfy a specific requirement in your jurisdiction is a legal and compliance question. Contact [sanchezleal1989@gmail.com](mailto:sanchezleal1989@gmail.com) to discuss your architecture.
 
 **Deployment architecture:**
 - Single binary for on-premise or private cloud

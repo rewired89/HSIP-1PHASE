@@ -1,9 +1,9 @@
 # HSIP Threat Model
 
-**Version:** 0.3  
+**Version:** 0.3-draft  
 **Date:** 2026-06-21  
 **Author:** Dayana Sanchez (rewired89)  
-**Review status:** Self-reviewed. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
+**Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
 
 ---
 
@@ -256,8 +256,9 @@ If you find a vulnerability, please disclose it responsibly:
 
 **Response commitments:**
 - Acknowledgement within 48 hours
-- Status update within 7 days
-- Critical issues patched within 7 days of confirmed reproduction
+- For critical issues: status update and documented mitigation steps within 7 days, or a message explaining why the timeline is delayed
 - Researchers credited by name in release notes (or anonymously on request)
+
+> Note: HSIP is currently maintained by a single developer. Patch timelines reflect best-effort availability, not an SLA. If you need a contractual response commitment, contact us before deploying in production.
 
 HSIP does not currently have a bug bounty program.
