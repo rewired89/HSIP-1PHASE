@@ -1042,6 +1042,74 @@ button.danger:hover { background: var(--c-red-bg); }
 .home-action-btn strong { display: block; font-size: 0.92rem; margin-bottom: 0.3rem; color: var(--c-text); }
 .home-action-btn p      { font-size: 0.79rem; color: var(--c-text-3); line-height: 1.45; margin: 0; }
 
+/* ── Hero stat bar ──────────────────────────────────────────────────────── */
+.hero-stat-row {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  background: rgba(5,5,15,0.6);
+  border: 1px solid rgba(224,64,251,0.15);
+  border-radius: var(--r);
+  padding: 1.1rem 1.75rem;
+  max-width: 640px;
+  margin: 1.75rem auto 0;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.hero-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  flex: 1;
+  padding: 0 1rem;
+}
+.hero-stat-num {
+  font-size: 1.9rem;
+  font-weight: 900;
+  color: var(--c-accent-l);
+  margin-bottom: 0.2rem;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-shadow: 0 0 20px rgba(224,64,251,0.4);
+}
+.hero-stat-label {
+  font-size: 0.68rem;
+  color: var(--c-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.hero-stat-div {
+  width: 1px;
+  background: rgba(224,64,251,0.15);
+  flex-shrink: 0;
+  align-self: stretch;
+}
+
+/* ── What-is tile (tiltable) ────────────────────────────────────────────── */
+.what-is-tile {
+  padding: 1rem 1.1rem;
+  background: rgba(9,9,30,0.7);
+  border: 1px solid rgba(224,64,251,0.12);
+  border-top: 1px solid rgba(224,64,251,0.2);
+  border-radius: var(--r-sm);
+  cursor: default;
+  transform-style: preserve-3d;
+  will-change: transform;
+  transition: transform 0.5s cubic-bezier(0.2,0,0,1), box-shadow 0.3s ease, border-color 0.3s;
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+}
+.what-is-tile:hover {
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 30px rgba(224,64,251,0.1);
+  border-color: rgba(224,64,251,0.28);
+  border-top-color: rgba(224,64,251,0.45);
+}
+.what-is-tile > span { font-size: 1.6rem; flex-shrink: 0; filter: drop-shadow(0 0 8px rgba(224,64,251,0.5)); }
+.what-is-tile strong { display: block; font-size: 0.9rem; margin-bottom: 0.25rem; color: var(--c-text); }
+.what-is-tile p { font-size: 0.79rem; color: var(--c-text-3); line-height: 1.5; margin: 0; }
+
 /* ── DNS Blocker ────────────────────────────────────────────────────────── */
 .dns-card--active { border-color: var(--c-green-dim) !important; }
 .dns-error-banner {
@@ -1446,19 +1514,20 @@ button.danger:hover { background: var(--c-red-bg); }
   padding: 3rem 1.5rem 2.25rem;
   margin-bottom: 1rem;
   background:
-    radial-gradient(ellipse 100% 80% at 50% -5%, rgba(249,115,22,0.25) 0%, rgba(245,158,11,0.08) 35%, transparent 65%),
+    radial-gradient(ellipse 100% 80% at 50% -5%, rgba(0,229,255,0.2) 0%, rgba(224,64,251,0.06) 35%, transparent 65%),
     radial-gradient(ellipse 60% 45% at 80% 90%, rgba(67,97,255,0.1) 0%, transparent 55%);
-  border: 1px solid rgba(245,158,11,0.18);
+  border: 1px solid rgba(0,229,255,0.2);
+  border-top: 1px solid rgba(0,229,255,0.35);
   border-radius: var(--r-lg);
-  box-shadow: 0 1px 6px rgba(0,0,0,0.35), 0 0 60px rgba(249,115,22,0.06);
+  box-shadow: 0 1px 6px rgba(0,0,0,0.35), 0 0 60px rgba(0,229,255,0.06);
 }
 
 .fin-hero-badge {
   display: inline-block;
   padding: 0.25rem 0.9rem;
-  background: rgba(245,158,11,0.15);
-  color: #f59e0b;
-  border: 1px solid rgba(245,158,11,0.3);
+  background: rgba(0,229,255,0.12);
+  color: #00e5ff;
+  border: 1px solid rgba(0,229,255,0.25);
   border-radius: 999px;
   font-size: 0.68rem;
   font-weight: 700;
@@ -1508,7 +1577,7 @@ button.danger:hover { background: var(--c-red-bg); }
 .fin-stat-val {
   font-size: 1rem;
   font-weight: 800;
-  color: #f59e0b;
+  color: #00e5ff;
   margin-bottom: 0.3rem;
   letter-spacing: -0.01em;
 }
@@ -1552,7 +1621,7 @@ button.danger:hover { background: var(--c-red-bg); }
 
 .fin-gap-card:hover,
 .fin-gap-card--open {
-  border-color: rgba(245,158,11,0.4);
+  border-color: rgba(0,229,255,0.4);
 }
 
 .fin-gap-header {
@@ -1565,8 +1634,8 @@ button.danger:hover { background: var(--c-red-bg); }
 .fin-gap-num {
   width: 22px;
   height: 22px;
-  background: rgba(245,158,11,0.14);
-  color: #f59e0b;
+  background: rgba(0,229,255,0.12);
+  color: #00e5ff;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1603,8 +1672,8 @@ button.danger:hover { background: var(--c-red-bg); }
 .fin-reg-chip {
   font-size: 0.65rem;
   padding: 0.13rem 0.45rem;
-  background: rgba(245,158,11,0.1);
-  color: #f59e0b;
+  background: rgba(0,229,255,0.1);
+  color: #00e5ff;
   border-radius: 4px;
   font-weight: 600;
 }
@@ -1689,11 +1758,11 @@ button.danger:hover { background: var(--c-red-bg); }
   user-select: none;
 }
 
-.fin-uc-card:hover { border-color: rgba(245,158,11,0.3); }
+.fin-uc-card:hover { border-color: rgba(0,229,255,0.25); }
 
 .fin-uc-card--active {
-  border-color: #f59e0b !important;
-  background: rgba(245,158,11,0.05) !important;
+  border-color: #00e5ff !important;
+  background: rgba(0,229,255,0.05) !important;
 }
 
 .fin-uc-icon {
@@ -1821,9 +1890,9 @@ button.danger:hover { background: var(--c-red-bg); }
 }
 
 .fin-scenario-btn--active {
-  background: rgba(245,158,11,0.12);
-  border-color: rgba(245,158,11,0.4);
-  color: #f59e0b;
+  background: rgba(0,229,255,0.1);
+  border-color: rgba(0,229,255,0.35);
+  color: #00e5ff;
 }
 
 .fin-demo-actions {
@@ -1841,9 +1910,9 @@ button.danger:hover { background: var(--c-red-bg); }
 
 .fin-result-block {
   margin-top: 1rem;
-  border: 1px solid rgba(245,158,11,0.25);
+  border: 1px solid rgba(0,229,255,0.2);
   border-radius: var(--r-sm);
-  background: rgba(245,158,11,0.04);
+  background: rgba(0,229,255,0.04);
   padding: 0.875rem;
   display: flex;
   flex-direction: column;
@@ -1875,7 +1944,7 @@ button.danger:hover { background: var(--c-red-bg); }
 
 .fin-result-code {
   font-size: 0.74rem;
-  color: #f59e0b;
+  color: #00e5ff;
   word-break: break-all;
 }
 
@@ -1898,14 +1967,14 @@ button.danger:hover { background: var(--c-red-bg); }
 .fin-cmp-table th:first-child { width: 42%; }
 
 .fin-cmp-hsip {
-  background: rgba(245,158,11,0.05) !important;
-  border-left:  2px solid rgba(245,158,11,0.25) !important;
-  border-right: 2px solid rgba(245,158,11,0.25) !important;
+  background: rgba(0,229,255,0.05) !important;
+  border-left:  2px solid rgba(0,229,255,0.25) !important;
+  border-right: 2px solid rgba(0,229,255,0.25) !important;
   text-align: center;
 }
 
 .fin-cmp-table thead .fin-cmp-hsip {
-  color: #f59e0b !important;
+  color: #00e5ff !important;
   font-weight: 700 !important;
 }
 
@@ -1918,8 +1987,8 @@ button.danger:hover { background: var(--c-red-bg); }
 
 /* ── Finance Home CTA ── */
 .fin-home-cta {
-  border-color: rgba(245,158,11,0.25) !important;
-  background: linear-gradient(135deg, rgba(245,158,11,0.06) 0%, var(--c-surface) 70%) !important;
+  border-color: rgba(0,229,255,0.2) !important;
+  background: linear-gradient(135deg, rgba(0,229,255,0.05) 0%, var(--c-surface) 70%) !important;
   display: flex !important;
   align-items: center;
   justify-content: space-between;
@@ -1927,11 +1996,11 @@ button.danger:hover { background: var(--c-red-bg); }
   flex-wrap: wrap;
   cursor: pointer;
   transition: border-color 0.15s;
-  box-shadow: 0 0 40px rgba(245,158,11,0.04);
+  box-shadow: 0 0 40px rgba(0,229,255,0.04);
 }
 
 .fin-home-cta:hover {
-  border-color: rgba(245,158,11,0.45) !important;
+  border-color: rgba(0,229,255,0.4) !important;
 }
 
 .fin-home-cta-left {
@@ -1954,8 +2023,8 @@ button.danger:hover { background: var(--c-red-bg); }
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #f59e0b;
-  background: rgba(245,158,11,0.12);
+  color: #00e5ff;
+  background: rgba(0,229,255,0.1);
   padding: 0.13rem 0.48rem;
   border-radius: 4px;
   margin-bottom: 0.4rem;
@@ -1978,10 +2047,10 @@ button.danger:hover { background: var(--c-red-bg); }
 
 .fin-home-cta-btn {
   padding: 0.55rem 1.1rem;
-  background: rgba(245,158,11,0.13);
-  border: 1px solid rgba(245,158,11,0.35);
+  background: rgba(0,229,255,0.1);
+  border: 1px solid rgba(0,229,255,0.3);
   border-radius: var(--r-sm);
-  color: #f59e0b;
+  color: #00e5ff;
   cursor: pointer;
   font-size: 0.82rem;
   font-weight: 600;
@@ -1992,6 +2061,6 @@ button.danger:hover { background: var(--c-red-bg); }
 }
 
 .fin-home-cta-btn:hover {
-  background: rgba(245,158,11,0.22);
-  border-color: rgba(245,158,11,0.55);
+  background: rgba(0,229,255,0.18);
+  border-color: rgba(0,229,255,0.45);
 }

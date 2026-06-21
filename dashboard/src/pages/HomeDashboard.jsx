@@ -1,16 +1,38 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { TRACKERS, RISK_LEVEL, TRACKER_STATS } from '../data/trackers';
 
-// Wall of Shame — three most invasive trackers, chosen by category + risk
+// ── 3D tilt on mouse move ─────────────────────────────────────────────────────
+function useTilt(strength = 10) {
+  const ref = useRef(null);
+
+  const onMouseMove = useCallback((e) => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width  - 0.5) * strength;
+    const y = ((e.clientY - r.top)  / r.height - 0.5) * strength;
+    el.style.transform = `perspective(800px) rotateY(${x}deg) rotateX(${-y}deg) translateZ(12px)`;
+    el.style.transition = 'transform 0.08s ease';
+  }, [strength]);
+
+  const onMouseLeave = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.transform = '';
+    el.style.transition = 'transform 0.5s cubic-bezier(0.2, 0, 0, 1)';
+  }, []);
+
+  return { ref, onMouseMove, onMouseLeave };
+}
+
+// Wall of Shame — three most invasive trackers
 const WALL_OF_SHAME = [
   TRACKERS.find(t => t.vendor === 'Hotjar'),
   TRACKERS.find(t => t.vendor === 'FullStory'),
   TRACKERS.find(t => t.vendor === 'Facebook / Meta Pixel'),
 ].filter(Boolean);
 
-// Score map: risk level → 0-100
 const RISK_SCORE = { critical: 94, high: 73, medium: 47, low: 18 };
-// Session recording is the most visceral — bump score
 function scoreTracker(t) {
   const base = RISK_SCORE[t.risk] ?? 10;
   return Math.min(100, base + (t.category === 'Session Recording' ? 5 : 0));
@@ -36,11 +58,30 @@ function lookupDomain(raw) {
 }
 
 // ── Creep-O-Meter ─────────────────────────────────────────────────────────────
-
 function CreepMeter() {
-  const [input,  setInput]  = useState('');
-  const [result, setResult] = useState(null); // null | 'idle' | { tracker } | 'clean'
-  const [domain, setDomain] = useState('');
+  const [input,        setInput]       = useState('');
+  const [result,       setResult]      = useState(null);
+  const [domain,       setDomain]      = useState('');
+  const [displayScore, setDisplayScore] = useState(0);
+
+  const score = result !== null && result !== 'idle'
+    ? (result === 'clean' ? 5 : scoreTracker(result.tracker))
+    : null;
+  const tier = score !== null ? creepTier(score) : null;
+
+  // Animate score counting up
+  useEffect(() => {
+    if (score === null) { setDisplayScore(0); return; }
+    setDisplayScore(0);
+    let current = 0;
+    const target = score;
+    const id = setInterval(() => {
+      current = Math.min(current + Math.ceil(target / 18), target);
+      setDisplayScore(current);
+      if (current >= target) clearInterval(id);
+    }, 28);
+    return () => clearInterval(id);
+  }, [score]);
 
   function check() {
     if (!input.trim()) return;
@@ -50,26 +91,23 @@ function CreepMeter() {
     setInput('');
   }
 
-  const score = result && result !== 'idle'
-    ? (result === 'clean' ? 5 : scoreTracker(result.tracker))
-    : null;
-  const tier  = score !== null ? creepTier(score) : null;
+  const tilt = useTilt(5);
 
   return (
-    <div className="card creep-card">
+    <div className="card creep-card" ref={tilt.ref} onMouseMove={tilt.onMouseMove} onMouseLeave={tilt.onMouseLeave}>
       <div className="creep-header">
         <h2>Creep-O-Meter™</h2>
         <span className="creep-badge">powered by HSIP</span>
       </div>
       <p className="aiwatch-normal-note">
-        Type any website and find out if it's secretly following you.
+        Type any website and find out if it is secretly following you.
       </p>
 
       <div className="lookup-row" style={{ marginTop: '0.75rem' }}>
         <input
           placeholder="e.g. hotjar.com, facebook.com, your-bank.com…"
           value={input}
-          onChange={e => { setInput(e.target.value); }}
+          onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && check()}
           style={{ marginBottom: 0, flex: 1 }}
         />
@@ -80,28 +118,25 @@ function CreepMeter() {
 
       {result !== null && score !== null && (
         <div className={`creep-result creep-result--${result === 'clean' ? 'low' : result.tracker.risk}`}>
-          {/* Score display */}
           <div className="creep-score-row">
-            <span className="creep-score-num" style={{ color: tier.color }}>{score}</span>
+            <span className="creep-score-num" style={{ color: tier.color }}>{displayScore}</span>
             <span className="creep-score-denom">/100</span>
             <span className="creep-tier-label" style={{ color: tier.color, background: tier.bar }}>
               {tier.label}
             </span>
           </div>
 
-          {/* Bar */}
           <div className="creep-bar-track">
             <div
               className="creep-bar-fill"
-              style={{ width: `${score}%`, background: tier.color }}
+              style={{ width: `${displayScore}%`, background: tier.color, boxShadow: `0 0 12px ${tier.color}` }}
             />
           </div>
 
-          {/* Verdict */}
           {result === 'clean' ? (
             <p className="creep-verdict">
               <strong>{domain}</strong> is not in HSIP's tracker database.
-              That doesn't mean it's 100% safe — just that we have no record of it being used to track you.
+              That does not mean it is 100% safe — just that we have no record of it being used to track you.
             </p>
           ) : (
             <div className="creep-verdict-block">
@@ -126,6 +161,38 @@ function CreepMeter() {
 }
 
 // ── Wall of Shame ─────────────────────────────────────────────────────────────
+function ShameCard({ t, i, isOpen, onToggle }) {
+  const tilt = useTilt(6);
+  const r = RISK_LEVEL[t.risk];
+  return (
+    <div
+      className={`shame-card shame-card--${t.risk}${isOpen ? ' shame-card--open' : ''}`}
+      onClick={() => onToggle(i)}
+      ref={tilt.ref}
+      onMouseMove={tilt.onMouseMove}
+      onMouseLeave={tilt.onMouseLeave}
+    >
+      <div className="shame-card-top">
+        <div className="shame-rank" style={{ background: r.bg, color: r.color }}>
+          #{i + 1}
+        </div>
+        <div className="shame-body">
+          <div className="shame-vendor">{t.vendor}</div>
+          <div className="shame-plain">{t.plain}</div>
+        </div>
+        <span className="shame-toggle">{isOpen ? '▲' : '▼'}</span>
+      </div>
+      {isOpen && (
+        <div className="shame-detail">
+          <p>{t.description}</p>
+          <span className="block-badge block-badge--yes" style={{ marginTop: '0.5rem', display: 'inline-block' }}>
+            ✓ HSIP can block this
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function WallOfShame() {
   const [open, setOpen] = useState(null);
@@ -138,49 +205,46 @@ function WallOfShame() {
         Click any to see exactly what they do to you.
       </p>
       <div className="shame-list">
-        {WALL_OF_SHAME.map((t, i) => {
-          const isOpen = open === i;
-          const r      = RISK_LEVEL[t.risk];
-          return (
-            <div
-              key={i}
-              className={`shame-card shame-card--${t.risk}${isOpen ? ' shame-card--open' : ''}`}
-              onClick={() => setOpen(isOpen ? null : i)}
-            >
-              <div className="shame-card-top">
-                <div className="shame-rank" style={{ background: r.bg, color: r.color }}>
-                  #{i + 1}
-                </div>
-                <div className="shame-body">
-                  <div className="shame-vendor">{t.vendor}</div>
-                  <div className="shame-plain">{t.plain}</div>
-                </div>
-                <span className="shame-toggle">{isOpen ? '▲' : '▼'}</span>
-              </div>
-              {isOpen && (
-                <div className="shame-detail">
-                  <p>{t.description}</p>
-                  <span className="block-badge block-badge--yes" style={{ marginTop: '0.5rem', display: 'inline-block' }}>
-                    ✓ HSIP can block this
-                  </span>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {WALL_OF_SHAME.map((t, i) => (
+          <ShameCard
+            key={i}
+            t={t}
+            i={i}
+            isOpen={open === i}
+            onToggle={idx => setOpen(open === idx ? null : idx)}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-// ── Quick actions ─────────────────────────────────────────────────────────────
+// ── Quick action tile with tilt ───────────────────────────────────────────────
+function ActionTile({ tab, icon, title, desc, onNavigate }) {
+  const tilt = useTilt(8);
+  return (
+    <button
+      className="home-action-btn"
+      onClick={() => onNavigate(tab)}
+      ref={tilt.ref}
+      onMouseMove={tilt.onMouseMove}
+      onMouseLeave={tilt.onMouseLeave}
+    >
+      <span className="home-action-icon">{icon}</span>
+      <div>
+        <strong>{title}</strong>
+        <p>{desc}</p>
+      </div>
+    </button>
+  );
+}
 
 const ACTIONS = [
   {
     tab:   'prove-it',
     icon:  '✍️',
     title: 'Create a Digital Alibi',
-    desc:  'Prove you sent a message. Prove it wasn\'t tampered with. Useful in disputes, contracts, and court.',
+    desc:  'Prove you sent a message. Prove it was not tampered with. Useful in disputes, contracts, and court.',
   },
   {
     tab:   'messages',
@@ -208,8 +272,6 @@ const ACTIONS = [
   },
 ];
 
-// ── Page ──────────────────────────────────────────────────────────────────────
-
 const WHAT_IS = [
   {
     icon: '🚫',
@@ -233,9 +295,32 @@ const WHAT_IS = [
   },
 ];
 
+// ── What-is tile with tilt ────────────────────────────────────────────────────
+function WhatIsTile({ item }) {
+  const tilt = useTilt(7);
+  return (
+    <div
+      className="protection-item what-is-tile"
+      ref={tilt.ref}
+      onMouseMove={tilt.onMouseMove}
+      onMouseLeave={tilt.onMouseLeave}
+    >
+      <span>{item.icon}</span>
+      <div>
+        <strong>{item.title}</strong>
+        <p>{item.body}</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function HomeDashboard({ onNavigate }) {
+  const criticalCount = TRACKERS.filter(t => t.risk === 'critical').length;
+
   return (
     <div>
+      {/* ── Hero ── */}
       <div className="consumer-hero">
         <div className="consumer-hero-icon">🛡️</div>
         <h2>Your Digital Bodyguard</h2>
@@ -244,9 +329,30 @@ export default function HomeDashboard({ onNavigate }) {
           HSIP shows you who they are, helps you stop them, and gives you
           cryptographic proof of everything you say and do.
         </p>
+        <div className="hero-stat-row">
+          <div className="hero-stat">
+            <span className="hero-stat-num">{TRACKERS.length}</span>
+            <span className="hero-stat-label">trackers mapped</span>
+          </div>
+          <div className="hero-stat-div" />
+          <div className="hero-stat">
+            <span className="hero-stat-num" style={{ color: 'var(--c-red)' }}>{criticalCount}</span>
+            <span className="hero-stat-label">critical risk</span>
+          </div>
+          <div className="hero-stat-div" />
+          <div className="hero-stat">
+            <span className="hero-stat-num">{TRACKER_STATS.safeToBlock}</span>
+            <span className="hero-stat-label">blockable now</span>
+          </div>
+          <div className="hero-stat-div" />
+          <div className="hero-stat">
+            <span className="hero-stat-num" style={{ color: 'var(--c-green)' }}>0</span>
+            <span className="hero-stat-label">data sold by us</span>
+          </div>
+        </div>
       </div>
 
-      {/* Finance CTA */}
+      {/* ── Finance CTA ── */}
       <div className="card fin-home-cta" onClick={() => onNavigate('finance')}>
         <div className="fin-home-cta-left">
           <span className="fin-home-cta-icon">🏦</span>
@@ -262,18 +368,12 @@ export default function HomeDashboard({ onNavigate }) {
         <button className="fin-home-cta-btn">See Finance Overview →</button>
       </div>
 
-      {/* What is HSIP */}
+      {/* ── What is HSIP ── */}
       <div className="card" style={{ marginBottom: '1rem' }}>
         <h2>What is HSIP?</h2>
         <div className="protection-grid">
           {WHAT_IS.map((item, i) => (
-            <div key={i} className="protection-item">
-              <span>{item.icon}</span>
-              <div>
-                <strong>{item.title}</strong>
-                <p>{item.body}</p>
-              </div>
-            </div>
+            <WhatIsTile key={i} item={item} />
           ))}
         </div>
       </div>
@@ -281,17 +381,12 @@ export default function HomeDashboard({ onNavigate }) {
       <CreepMeter />
       <WallOfShame />
 
+      {/* ── Quick actions ── */}
       <div className="card">
         <h2>What do you want to do?</h2>
         <div className="home-actions">
           {ACTIONS.map(a => (
-            <button key={a.tab} className="home-action-btn" onClick={() => onNavigate(a.tab)}>
-              <span className="home-action-icon">{a.icon}</span>
-              <div>
-                <strong>{a.title}</strong>
-                <p>{a.desc}</p>
-              </div>
-            </button>
+            <ActionTile key={a.tab} {...a} onNavigate={onNavigate} />
           ))}
         </div>
       </div>
