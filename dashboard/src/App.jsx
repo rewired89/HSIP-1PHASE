@@ -11,6 +11,7 @@ import HomeDashboard   from './pages/HomeDashboard';
 import ProveIt         from './pages/ProveIt';
 import ConsentWallet   from './pages/ConsentWallet';
 import AIWatch         from './pages/AIWatch';
+import DecisionsSimple from './pages/DecisionsSimple';
 import TrackerInspector  from './pages/TrackerInspector';
 import ProtectionSetup   from './pages/ProtectionSetup';
 import NetworkMonitor    from './pages/NetworkMonitor';
@@ -26,6 +27,7 @@ const SIMPLE_TABS = [
   { id: 'prove-it',          icon: '✍️',  label: 'Alibi',      subtitle: 'Prove something happened when' },
   { id: 'consent-wallet',    icon: '🛡️',  label: 'Consents',   subtitle: 'Control who acts on your behalf' },
   { id: 'ai-watch',          icon: '🤖', label: 'AI Watch',   subtitle: 'Monitor AI agents in real time' },
+  { id: 'decisions-simple',  icon: '📈', label: 'AI Decisions', subtitle: 'See what your trading bots decided' },
   { id: 'tracker-inspector', icon: '🔍', label: 'Trackers',   subtitle: 'See who is tracking you online' },
   { id: 'protection',        icon: '🔒', label: 'Protection', subtitle: 'Block ads, trackers & malware' },
 ];
@@ -227,6 +229,7 @@ export default function App() {
               {tab === 'prove-it'          && <ProveIt          apiKey={apiKey} />}
               {tab === 'consent-wallet'    && <ConsentWallet    apiKey={apiKey} />}
               {tab === 'ai-watch'          && <AIWatch          apiKey={apiKey} />}
+              {tab === 'decisions-simple'  && <DecisionsSimple  apiKey={apiKey} />}
               {tab === 'tracker-inspector' && <TrackerInspector />}
               {tab === 'protection'        && <ProtectionSetup  apiKey={apiKey} />}
             </>

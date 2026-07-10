@@ -725,6 +725,22 @@ button.danger:hover { background: var(--c-red-bg); }
 .protection-item strong { display: block; font-size: 0.9rem; margin-bottom: 0.25rem; }
 .protection-item p { font-size: 0.8rem; color: var(--c-text-3); line-height: 1.5; margin: 0; }
 
+/* ── Simple decision list ───────────────────────────────────────────────── */
+.simple-decision-list { display: flex; flex-direction: column; gap: 0.6rem; }
+.simple-decision-row {
+  border: 1px solid var(--c-border-s); border-radius: var(--r-sm, 10px);
+  background: var(--c-surface-2); overflow: hidden;
+}
+.simple-decision-summary {
+  display: flex; align-items: center; gap: 0.75rem; padding: 0.85rem 1rem; cursor: pointer;
+}
+.simple-decision-icon { font-size: 1.3rem; flex-shrink: 0; }
+.simple-decision-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.simple-decision-main strong { font-size: 0.9rem; text-transform: capitalize; }
+.simple-decision-sub { font-size: 0.78rem; color: var(--c-text-3); }
+.simple-decision-toggle { color: var(--c-text-3); font-size: 0.8rem; flex-shrink: 0; }
+.simple-decision-detail { padding: 0 1rem 1rem; border-top: 1px solid var(--c-border-s); padding-top: 0.85rem; }
+
 /* ── Tracker Inspector ──────────────────────────────────────────────────── */
 .tracker-stats { display: flex; align-items: center; padding: 1rem 1.5rem; }
 .tracker-stat { display: flex; flex-direction: column; align-items: center; flex: 1; }

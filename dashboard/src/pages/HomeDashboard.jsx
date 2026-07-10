@@ -72,6 +72,13 @@ const ACTIONS = [
     c: { bg: 'linear-gradient(135deg,rgba(124,58,237,0.3),rgba(124,58,237,0.08))', border: '#7c3aed', glow: 'rgba(124,58,237,0.3)' },
   },
   {
+    tab:   'decisions-simple',
+    icon:  '📈',
+    title: 'Audit Your Trading Bots',
+    desc:  'See every decision your AI trading systems make, locked in and provable — impossible to quietly alter after the fact.',
+    c: { bg: 'linear-gradient(135deg,rgba(16,185,129,0.28),rgba(16,185,129,0.07))', border: '#10b981', glow: 'rgba(16,185,129,0.28)' },
+  },
+  {
     tab:   'protection',
     icon:  '🔒',
     title: 'Block All Trackers',
