@@ -40,6 +40,7 @@ once_cell        = "1"
 chacha20poly1305 = "0.10"
 hkdf             = "0.12"
 webbrowser       = "1"
+reqwest          = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
 rust-embed       = { version = "8", optional = true }
 mime_guess       = { version = "2", optional = true }
 hsip-core        = { path = "../hsip-core" }
@@ -53,6 +54,7 @@ dirs  = "5"
 [dev-dependencies]
 tower            = { version = "0.4", features = ["util"] }
 http-body-util   = "0.1"
+wiremock         = "0.6"
 
 [lib]
 name = "hsip_api"

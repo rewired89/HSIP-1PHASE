@@ -15,7 +15,6 @@ pub enum ApiError {
     #[error("Bad request: {0}")]
     BadRequest(String),
     #[error("Conflict: {0}")]
-    #[allow(dead_code)]
     Conflict(String),
     #[error("Too many requests: {0}")]
     TooManyRequests(String),

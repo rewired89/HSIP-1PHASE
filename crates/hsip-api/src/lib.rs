@@ -1,3 +1,5 @@
+pub mod anchor;
+pub mod anchor_job;
 pub mod auth;
 pub mod config;
 pub mod db;

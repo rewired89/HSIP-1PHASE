@@ -199,6 +199,75 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Node-level Ed25519 identity used to sign anchored Merkle roots. This
+    // is deliberately separate from any tenant's identity: an anchor batch
+    // spans decisions from every tenant, so "who vouches for this batch"
+    // must not be arbitrarily attributed to one tenant's key. Singleton row
+    // (id always 1), created on first anchor cycle.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS anchor_identity (
+            id              INTEGER PRIMARY KEY,
+            signing_key_b64 TEXT NOT NULL,
+            verify_key_b64  TEXT NOT NULL,
+            created_at      INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Batches of decisions anchored together under one RFC 6962 Merkle root.
+    // `ots_status` starts 'pending' (submitted to OpenTimestamps calendars,
+    // not yet confirmed in a Bitcoin block) and moves to 'confirmed' once
+    // upgraded — see routes/decisions.rs and anchor.rs.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS decision_anchors (
+            id               TEXT PRIMARY KEY,
+            merkle_root      TEXT NOT NULL,
+            leaf_count       INTEGER NOT NULL,
+            anchor_signature TEXT NOT NULL,
+            anchor_verify_key TEXT NOT NULL,
+            ots_proof        BLOB,
+            ots_status       TEXT NOT NULL DEFAULT 'pending',
+            created_at       INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // AI-agent decision attestations (M1: decision attestation feature).
+    // Two-tier by design: accountability metadata is clear text; the actual
+    // decision content the caller made is never stored here, only
+    // `payload_hash` (SHA-256 of a payload only the caller holds).
+    // `event_hash` is SHA256(JCS(envelope)) — see hsip-core::canonical.
+    // UNIQUE(tenant_id, prev_hash) serializes each tenant's hash chain: two
+    // concurrent inserts racing to extend the same prev_hash cannot both
+    // succeed, so the chain can't fork.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS decisions (
+            id              TEXT PRIMARY KEY,
+            tenant_id       TEXT NOT NULL,
+            agent_key_id    TEXT NOT NULL,
+            accountable_key TEXT NOT NULL,
+            model_version   TEXT NOT NULL,
+            strategy_id     TEXT NOT NULL,
+            decision_type   TEXT NOT NULL,
+            payload_hash    TEXT NOT NULL,
+            prev_hash       TEXT NOT NULL,
+            event_hash      TEXT NOT NULL UNIQUE,
+            signature       TEXT NOT NULL,
+            sign_algo       TEXT NOT NULL,
+            timestamp_iso   TEXT NOT NULL,
+            timestamp_int   TEXT NOT NULL,
+            hsip_gov_ext    TEXT NOT NULL,
+            anchor_id       TEXT,
+            merkle_index    INTEGER,
+            created_at      INTEGER NOT NULL,
+            UNIQUE(tenant_id, prev_hash)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Indexes on tenant_id for all high-traffic tables (L4)
     let indexes = [
         "CREATE INDEX IF NOT EXISTS idx_contacts_tenant     ON contacts (tenant_id)",
@@ -209,6 +278,9 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_audit_tenant       ON audit_entries (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON audit_entries (timestamp)",
         "CREATE INDEX IF NOT EXISTS idx_uploads_tenant     ON uploads (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_decisions_tenant   ON decisions (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_decisions_anchor   ON decisions (anchor_id)",
+        "CREATE INDEX IF NOT EXISTS idx_decisions_created  ON decisions (tenant_id, created_at)",
     ];
     for idx in &indexes {
         sqlx::query(idx).execute(pool).await?;

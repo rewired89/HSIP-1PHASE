@@ -64,6 +64,55 @@ fn bearer(key: &str) -> String {
     format!("Bearer {key}")
 }
 
+// Like `test_app`, but also returns the raw `Db` and master key so a test can
+// call `hsip_api::anchor_job::run_anchor_cycle` directly — the production
+// binary runs that on a timer, but a test needs to drive it synchronously to
+// make batch timing deterministic. Registers the key as `ai_agent` type
+// (Predicta's shape), not `human`, to match how decision attestation callers
+// authenticate in practice.
+async fn test_app_with_db() -> (axum::Router, String, hsip_api::db::Db, Vec<u8>) {
+    let db_url = format!(
+        "sqlite:file:{}?mode=memory&cache=shared",
+        uuid::Uuid::new_v4()
+    );
+    sqlx::any::install_default_drivers();
+    let db = hsip_api::db::init(&db_url).await.expect("db init");
+
+    let tenant_id = uuid::Uuid::new_v4().to_string();
+    let raw_key = format!("hsip_{}", hex::encode([9u8; 32]));
+    let key_hash = hsip_api::auth::hash_key(&raw_key);
+    let key_id = uuid::Uuid::new_v4().to_string();
+    let now = hsip_api::db::now_ms();
+
+    use sqlx::Executor;
+    db.execute(
+        sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'test', ?)")
+            .bind(&tenant_id)
+            .bind(now),
+    )
+    .await
+    .unwrap();
+
+    db.execute(
+        sqlx::query(
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+             VALUES (?, ?, ?, 'predicta', 'ai_agent', ?, 1)",
+        )
+        .bind(&key_id)
+        .bind(&tenant_id)
+        .bind(&key_hash)
+        .bind(now),
+    )
+    .await
+    .unwrap();
+
+    let master_key = vec![7u8; 32];
+    let state = hsip_api::state::AppState::new(db.clone(), master_key.clone());
+    let app = hsip_api::routes::router().with_state(state);
+
+    (app, raw_key, db, master_key)
+}
+
 async fn body_json(body: axum::body::Body) -> serde_json::Value {
     let bytes = body.collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
@@ -403,4 +452,204 @@ async fn test_audit_log_populated() {
     let arr = entries.as_array().unwrap();
     assert!(!arr.is_empty());
     assert_eq!(arr[0]["action"], "identity.created");
+}
+
+/// End-to-end decision attestation: sign a Predicta-shaped trading decision,
+/// chain a second one, anchor the batch, and verify the resulting proof
+/// bundle via `POST /v1/decisions/verify` — which takes no auth and makes
+/// no database call — matching the "smallest possible working slice" the
+/// feature was scoped to: one real decision through the whole loop,
+/// independently verifiable with zero further trust in this server.
+#[tokio::test]
+async fn test_decision_attestation_sign_anchor_verify_end_to_end() {
+    use sha2::{Digest, Sha256};
+
+    let (app, key, db, master_key) = test_app_with_db().await;
+
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_json = body_json(ident_res.into_body()).await;
+    let accountable_key = ident_json["verify_key"].as_str().unwrap().to_string();
+
+    // Predicta hashes its real (undisclosed) trade decision locally — HSIP
+    // never sees the trade parameters themselves, only this hash.
+    let payload_hash = hex::encode(Sha256::digest(
+        b"BUY 100 AAPL @ 191.20 strategy=mean-reversion-1",
+    ));
+
+    let record_body = serde_json::json!({
+        "accountable_key": accountable_key,
+        "model_version": "predicta-v3.2",
+        "strategy_id": "mean-reversion-1",
+        "decision_type": "trade.order",
+        "payload_hash": payload_hash,
+    });
+    let record_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(record_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record_res.status(), StatusCode::OK);
+    let record_json = body_json(record_res.into_body()).await;
+    let decision_id = record_json["decision_id"].as_str().unwrap().to_string();
+    assert_eq!(record_json["envelope"]["prev_hash"], "");
+
+    // A second decision must chain to the first.
+    let record_res2 = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(record_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let record_json2 = body_json(record_res2.into_body()).await;
+    assert_eq!(
+        record_json2["envelope"]["prev_hash"],
+        record_json["event_hash"]
+    );
+
+    // Before anchoring: authorship is provable, anchoring is not yet done.
+    let proof_res = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/decisions/{decision_id}/proof"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let proof_json = body_json(proof_res.into_body()).await;
+    assert_eq!(proof_json["anchored"], false);
+
+    let verify_body_pre = serde_json::json!({
+        "envelope": proof_json["envelope"],
+        "event_hash": proof_json["event_hash"],
+        "signature": proof_json["signature"],
+        "issuer_verify_key": proof_json["issuer_verify_key"],
+    });
+    let verify_res_pre = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/decisions/verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(verify_body_pre.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let verify_json_pre = body_json(verify_res_pre.into_body()).await;
+    assert_eq!(verify_json_pre["valid"], true);
+    assert_eq!(
+        verify_json_pre["merkle_inclusion_valid"],
+        serde_json::Value::Null
+    );
+
+    // Drive one anchor cycle synchronously against a local mock calendar
+    // (production runs this on a timer against the real public OpenTimestamps
+    // calendars — pointing tests at a mock keeps this fast and hermetic).
+    let mock_calendar = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/digest"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_bytes(b"test-ots-receipt".to_vec()),
+        )
+        .mount(&mock_calendar)
+        .await;
+    let summary = hsip_api::anchor_job::run_anchor_cycle_with_calendars(
+        &db,
+        &master_key,
+        &[&mock_calendar.uri()],
+    )
+    .await
+    .expect("anchor cycle should not error");
+    assert!(
+        summary.is_some(),
+        "batch of 2 unanchored decisions should anchor immediately in tests"
+    );
+
+    let proof_res2 = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/decisions/{decision_id}/proof"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let proof_json2 = body_json(proof_res2.into_body()).await;
+    assert_eq!(proof_json2["anchored"], true);
+    assert!(proof_json2["merkle_root"].is_string());
+    assert!(proof_json2["inclusion_proof"].is_array());
+
+    // The whole point: verify with zero further calls to this app's database.
+    let verify_body_post = serde_json::json!({
+        "envelope": proof_json2["envelope"],
+        "event_hash": proof_json2["event_hash"],
+        "signature": proof_json2["signature"],
+        "issuer_verify_key": proof_json2["issuer_verify_key"],
+        "merkle_root": proof_json2["merkle_root"],
+        "inclusion_proof": proof_json2["inclusion_proof"],
+        "anchor_signature": proof_json2["anchor_signature"],
+        "anchor_verify_key": proof_json2["anchor_verify_key"],
+    });
+    let verify_res_post = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/decisions/verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(verify_body_post.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let verify_json_post = body_json(verify_res_post.into_body()).await;
+    assert_eq!(verify_json_post["valid"], true);
+    assert_eq!(verify_json_post["merkle_inclusion_valid"], true);
+    assert_eq!(verify_json_post["reason"], serde_json::Value::Null);
+
+    // Tamper check: altering the disclosed envelope must break verification
+    // even though the signature/hash/merkle-proof strings are unchanged.
+    let mut tampered = verify_body_post.clone();
+    tampered["envelope"]["strategy_id"] = serde_json::json!("mean-reversion-2-TAMPERED");
+    let tamper_res = app
+        .oneshot(
+            Request::post("/v1/decisions/verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(tampered.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let tamper_json = body_json(tamper_res.into_body()).await;
+    assert_eq!(tamper_json["valid"], false);
+    assert_eq!(tamper_json["event_hash_matches"], false);
 }

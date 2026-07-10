@@ -53,6 +53,33 @@ pub static MESSAGES_SIGNED: Lazy<CounterVec> = Lazy::new(|| {
     register_counter_vec!("hsip_messages_signed_total", "Messages signed", &["tenant"]).unwrap()
 });
 
+pub static DECISIONS_RECORDED: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "hsip_decisions_recorded_total",
+        "AI-agent decision attestations recorded by decision_type",
+        &["decision_type"]
+    )
+    .unwrap()
+});
+
+pub static DECISIONS_ANCHORED: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "hsip_decisions_anchored_total",
+        "Decision batches anchored by ots_status",
+        &["ots_status"]
+    )
+    .unwrap()
+});
+
+pub static DECISIONS_VERIFIED: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "hsip_decisions_verified_total",
+        "Decision proof verifications by result",
+        &["result"]
+    )
+    .unwrap()
+});
+
 /// Force initialization of all metrics at startup
 pub fn init() {
     Lazy::force(&REQUESTS_TOTAL);
@@ -62,6 +89,9 @@ pub fn init() {
     Lazy::force(&AGENT_ANOMALIES);
     Lazy::force(&ACTIVE_TENANTS);
     Lazy::force(&MESSAGES_SIGNED);
+    Lazy::force(&DECISIONS_RECORDED);
+    Lazy::force(&DECISIONS_ANCHORED);
+    Lazy::force(&DECISIONS_VERIFIED);
 }
 
 /// Render all metrics as Prometheus text format

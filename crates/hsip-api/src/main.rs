@@ -19,6 +19,8 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
+mod anchor;
+mod anchor_job;
 mod auth;
 mod config;
 mod db;
@@ -168,6 +170,34 @@ async fn run() -> Result<()> {
     bootstrap_admin(&db, &config.security.admin_key_path).await?;
 
     let state = AppState::new(db, master_key);
+
+    // Periodic decision-anchoring cycle: batches unanchored decisions into
+    // an RFC 6962 Merkle tree and submits the root to OpenTimestamps on a
+    // "whichever comes first" cadence (see anchor_job::BATCH_SIZE_TRIGGER /
+    // INTERVAL_TRIGGER_MS). The 10s poll interval just checks whether a
+    // cycle is due — most ticks are a no-op.
+    {
+        let anchor_db = state.db.clone();
+        let anchor_master_key = state.master_key.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                match anchor_job::run_anchor_cycle(&anchor_db, &anchor_master_key).await {
+                    Ok(Some(summary)) => {
+                        tracing::info!(
+                            anchor_id = %summary.anchor_id,
+                            leaf_count = summary.leaf_count,
+                            ots_status = %summary.ots_status,
+                            "anchored decision batch"
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(error = %e, "decision anchor cycle failed"),
+                }
+            }
+        });
+    }
 
     // Build CORS layer from config
     let cors = build_cors_layer(&config.cors);

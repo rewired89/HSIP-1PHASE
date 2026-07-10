@@ -452,7 +452,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers) and adds missing columns idempotently.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity). `decision_anchors` holds one row per RFC 6962 Merkle batch (root, signature, OpenTimestamps proof/status). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -671,7 +671,7 @@
 ### `ApiError`
 - **type**: enum
 - **file**: `crates/hsip-api/src/errors.rs`
-- **purpose**: Typed error enum for all API failures: Unauthorized, Forbidden, NotFound, BadRequest, TooManyRequests, Internal.
+- **purpose**: Typed error enum for all API failures: Unauthorized, Forbidden, NotFound, BadRequest, Conflict, TooManyRequests, Internal. `Conflict` is used by `routes::decisions::record` when the `UNIQUE(tenant_id, prev_hash)` retry loop is exhausted under high contention.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -795,6 +795,36 @@
 - **calls**: none
 - **called_by**: `bootstrap_admin`, tenant lifecycle
 - **mutates**: gauge value
+
+### `DECISIONS_RECORDED`
+- **type**: variable (static `CounterVec`, label `decision_type`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Prometheus counter for decision attestations recorded, by `decision_type`.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `routes::decisions::record`
+- **mutates**: counter value
+
+### `DECISIONS_ANCHORED`
+- **type**: variable (static `CounterVec`, label `ots_status`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Prometheus counter for decision batches anchored, by `ots_status` (`pending` or `calendar_unreachable`).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `anchor_job::run_anchor_cycle_with_calendars`
+- **mutates**: counter value
+
+### `DECISIONS_VERIFIED`
+- **type**: variable (static `CounterVec`, label `result`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Prometheus counter for `POST /v1/decisions/verify` calls, by result (`valid`/`invalid`).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `routes::decisions::verify`
+- **mutates**: counter value
 
 ### `init` (metrics)
 - **type**: function
@@ -1828,12 +1858,12 @@
 - **mutates**: `state.sandbox_rate`
 
 ### `ms_to_iso`
-- **type**: function
+- **type**: function (`pub(crate)`)
 - **file**: `crates/hsip-api/src/routes/sandbox.rs`
-- **purpose**: Converts Unix millisecond timestamp to ISO 8601 UTC string without chrono dependency.
+- **purpose**: Converts Unix millisecond timestamp to ISO 8601 UTC string without chrono dependency. Made `pub(crate)` so `routes::decisions::record` can reuse it for `DecisionEnvelope.timestamp_iso` instead of duplicating the calendar-math implementation.
 - **inputs**: `ms: i64`
 - **outputs**: `String` (e.g. `"2026-06-21T14:32:00Z"`)
-- **called_by**: `provision`
+- **called_by**: `provision`, `routes::decisions::record`
 
 ---
 
@@ -1869,6 +1899,170 @@
 - **called_by**: Axum router
 - **mutates**: nothing
 
+
+---
+
+## `crates/hsip-api/src/routes/decisions.rs`
+
+AI-agent decision attestations: sign, chain, anchor, and independently verify
+a record of "this identity made this decision." Two-tier record: accountability
+metadata (`model_version`, `strategy_id`, `accountable_key`, tagged
+`hsip_gov_ext` as HSIP's own draft ahead of the unpublished VCP-GOV) is clear
+text; the actual decision content is never sent to or stored by HSIP, only
+its `payload_hash`.
+
+### `RecordDecisionRequest` / `RecordDecisionResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: Request/response bodies for `POST /v1/decisions`. Response is the full signed receipt (`envelope`, `event_hash`, `signature`, `issuer_verify_key`) meant to be persisted client-side (see SDK `save_receipt`).
+- **called_by**: `record`
+
+### `DecisionSummary`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: Row shape for `GET /v1/decisions` listing.
+- **called_by**: `list`
+
+### `ProofStepDto`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: Wire format (hex hash + "left"/"right") for `hsip_core::merkle::ProofStep`. `From`/`TryFrom` impls convert to/from the core type.
+- **called_by**: `proof`, `verify`
+
+### `DecisionProofBundle`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: Full self-contained verification bundle returned by `GET /v1/decisions/:id/proof` — everything a third party needs to independently verify authorship and (once anchored) tamper-evidence, with zero further calls to this server.
+- **called_by**: `proof`
+
+### `VerifyDecisionRequest` / `VerifyDecisionResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: Request/response for `POST /v1/decisions/verify`.
+- **called_by**: `verify`
+
+### `record`
+- **type**: function (async handler)
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: `POST /v1/decisions` — resolves the authenticated `api_keys` row, validates fields, builds a `DecisionEnvelope` chained to the tenant's last decision (`prev_hash`), signs its `event_hash` with the tenant's Ed25519 identity, inserts it. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS` (another request extended the chain first). Writes `decision.recorded` audit entry, increments `DECISIONS_RECORDED`.
+- **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`, `Json(req): Json<RecordDecisionRequest>`
+- **outputs**: `ApiResult<Json<RecordDecisionResponse>>`
+- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `ms_to_iso`, `hash_key`, sqlx queries
+- **called_by**: Axum router
+- **mutates**: DB (`decisions`, `audit_entries`)
+
+### `list` (decisions)
+- **type**: function (async handler)
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: `GET /v1/decisions` — lists the tenant's decisions, newest first.
+- **inputs**: `State(state)`, `tenant: TenantId`
+- **outputs**: `ApiResult<Json<Vec<DecisionSummary>>>`
+- **called_by**: Axum router
+- **mutates**: nothing
+
+### `proof`
+- **type**: function (async handler)
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: `GET /v1/decisions/:id/proof` — builds the full proof bundle. If unanchored, returns `anchored: false` with signature-only proof. If anchored, reconstructs the batch's leaf set from `decisions.anchor_id` ordered by `merkle_index`, rebuilds the `MerkleTree`, regenerates the inclusion proof, and defensively re-checks the recomputed root against the stored `decision_anchors.merkle_root`.
+- **inputs**: `State(state)`, `tenant: TenantId`, `Path(id)`
+- **outputs**: `ApiResult<Json<DecisionProofBundle>>`
+- **calls**: `hsip_core::merkle::MerkleTree::from_leaves`, `MerkleTree::inclusion_proof`
+- **called_by**: Axum router
+- **mutates**: nothing
+
+### `verify`
+- **type**: function (async handler)
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: `POST /v1/decisions/verify` — pure verification of a self-contained bundle. Deliberately takes no `TenantId` and no `State`; makes no database call. Recomputes `event_hash` from the disclosed envelope, verifies the Ed25519 signature, and (if anchor fields are present) verifies RFC 6962 inclusion and the anchor signature. This is the function meant to be run independently of HSIP entirely.
+- **inputs**: `Json(req): Json<VerifyDecisionRequest>`
+- **outputs**: `Json<VerifyDecisionResponse>`
+- **calls**: `hsip_core::canonical::event_hash`, `hsip_core::merkle::verify_inclusion`, `anchor_job::verify_anchor_signature`
+- **called_by**: Axum router
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-api/src/anchor.rs`
+
+OpenTimestamps calendar HTTP client — network I/O only, no DB. See module
+docs for MVP scope (opaque blob storage, no `.ots` parsing, no upgrade
+polling yet) and the sandbox connectivity caveat (egress policy blocks
+`*.calendar.opentimestamps.org`, confirmed via the sandbox's own proxy
+rejection log).
+
+### `DEFAULT_CALENDARS`
+- **type**: variable (const `&[&str]`)
+- **file**: `crates/hsip-api/src/anchor.rs`
+- **purpose**: Public OpenTimestamps calendar server URLs tried in order.
+- **called_by**: `anchor_job::run_anchor_cycle`
+
+### `CalendarReceipt`
+- **type**: struct
+- **file**: `crates/hsip-api/src/anchor.rs`
+- **purpose**: One calendar's raw, opaque, not-yet-Bitcoin-confirmed response to a digest submission.
+- **called_by**: `submit_digest_to`, `anchor_job`
+
+### `submit_digest_to`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/anchor.rs`
+- **purpose**: `POST <calendar>/digest` with the raw 32-byte digest as body, per calendar HTTP protocol. Tries each given calendar in turn, returns first success. Calendar list is a parameter (not hardcoded) so tests can point this at a local `wiremock` server instead of the real network.
+- **inputs**: `calendars: &[&str]`, `digest: &[u8; 32]`
+- **outputs**: `Result<CalendarReceipt>`
+- **calls**: `reqwest::Client`
+- **called_by**: `anchor_job::run_anchor_cycle_with_calendars`, `anchor_job::retry_pending_ots_submissions`
+- **mutates**: nothing (network I/O only)
+
+---
+
+## `crates/hsip-api/src/anchor_job.rs`
+
+Batches unanchored decisions into an RFC 6962 Merkle tree on a "whichever
+comes first" cadence (`BATCH_SIZE_TRIGGER` decisions, or `INTERVAL_TRIGGER_MS`
+elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
+`anchor.rs` is the network client it calls into.
+
+### `load_or_create_anchor_identity`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Loads the node-level anchor signing key from `anchor_identity` (singleton row), creating it on first use. Distinct from any tenant's identity since an anchor batch spans every tenant's decisions. Handles the race of two anchor cycles both trying to create the row (loser re-reads the winner's row).
+- **inputs**: `db: &Db`, `master_key: &[u8]`
+- **outputs**: `anyhow::Result<SigningKey>`
+- **calls**: `key_encryption::{encrypt_signing_key, decrypt_signing_key}`
+- **called_by**: `run_anchor_cycle_with_calendars`
+- **mutates**: DB (`anchor_identity`, at most once ever)
+
+### `AnchorSummary`
+- **type**: struct
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Result of one anchor cycle (`anchor_id`, `leaf_count`, `ots_status`), logged by the caller in `main.rs`'s spawned loop.
+- **called_by**: `run_anchor_cycle_with_calendars`, `main.rs`
+
+### `run_anchor_cycle` / `run_anchor_cycle_with_calendars`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: `run_anchor_cycle` is the production entry point (default public calendars). `run_anchor_cycle_with_calendars` does the real work: retries stuck OTS submissions, checks whether a batch is due, builds a `MerkleTree` over unanchored decisions' `event_hash`es, signs the root with the anchor identity, submits to OpenTimestamps (proceeding with local-only anchoring if that fails — `ots_status = 'calendar_unreachable'`), inserts `decision_anchors`, stamps `anchor_id`/`merkle_index` onto each covered decision, writes one `decision.anchored` audit entry per distinct tenant touched.
+- **inputs**: `db: &Db`, `master_key: &[u8]`, (`calendars: &[&str]` for the `_with_calendars` form)
+- **outputs**: `anyhow::Result<Option<AnchorSummary>>` (`None` when nothing was due)
+- **calls**: `hsip_core::merkle::MerkleTree`, `anchor::submit_digest_to`, `load_or_create_anchor_identity`
+- **called_by**: `main.rs`'s spawned anchor loop; integration tests call `run_anchor_cycle_with_calendars` directly against a mock calendar
+- **mutates**: DB (`decision_anchors`, `decisions.anchor_id`/`merkle_index`, `audit_entries`)
+
+### `retry_pending_ots_submissions`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Re-attempts OpenTimestamps submission for anchors stuck at `ots_status = 'calendar_unreachable'`. Best-effort — logs and moves on if a retry fails again.
+- **inputs**: `db: &Db`, `calendars: &[&str]`
+- **outputs**: none
+- **called_by**: `run_anchor_cycle_with_calendars`
+- **mutates**: DB (`decision_anchors.ots_proof`/`ots_status` on success)
+
+### `verify_anchor_signature`
+- **type**: function
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Verifies an Ed25519 signature over a Merkle root against a given verify key. Pure — no DB.
+- **inputs**: `root: &[u8; 32]`, `signature: &[u8; 64]`, `verify_key: &[u8; 32]`
+- **outputs**: `bool`
+- **called_by**: `routes::decisions::verify`
 
 ---
 
@@ -3402,6 +3596,80 @@
 
 ---
 
+## `crates/hsip-core/src/merkle.rs`
+
+Pure RFC 6962 Merkle tree construction and inclusion proofs — no I/O. Leaf
+hash `H(0x00||data)` and internal node hash `H(0x01||data)` use distinct
+domain prefixes so a leaf hash can never be replayed as an internal node
+hash (the second-preimage attack RFC 6962 prefixing prevents). Used by
+`hsip-api`'s `anchor_job.rs` (building batches) and `routes/decisions.rs`
+(building/verifying inclusion proofs).
+
+### `Side` / `ProofStep`
+- **type**: enum / struct
+- **file**: `crates/hsip-core/src/merkle.rs`
+- **purpose**: One step of an inclusion proof: a sibling hash and which side of the running accumulator it combines on when folding from leaf toward root.
+- **called_by**: `MerkleTree::inclusion_proof`, `verify_inclusion`
+
+### `leaf_hash` / `node_hash`
+- **type**: function
+- **file**: `crates/hsip-core/src/merkle.rs`
+- **purpose**: `SHA256(0x00||data)` and `SHA256(0x01||left||right)` respectively — the RFC 6962 domain-separated hash primitives.
+- **inputs**: `data: &[u8]` / `left: &[u8; 32], right: &[u8; 32]`
+- **outputs**: `[u8; 32]`
+- **called_by**: `MerkleTree::from_leaves`, `mth`, `audit_path`, `verify_inclusion`
+
+### `MerkleTree`
+- **type**: struct
+- **file**: `crates/hsip-core/src/merkle.rs`
+- **purpose**: A batch of leaf-hashed entries. `from_leaves` builds it (panics on an empty entry list — an anchor batch must contain at least one decision); `root()` computes the RFC 6962 `MTH`; `inclusion_proof(index)` computes the RFC 6962 `PATH`.
+- **inputs**: `entries: &[T: AsRef<[u8]>]` (constructor)
+- **outputs**: `[u8; 32]` (`root`), `Vec<ProofStep>` (`inclusion_proof`)
+- **calls**: `leaf_hash`, `mth`, `audit_path`
+- **called_by**: `hsip-api`'s `anchor_job::run_anchor_cycle_with_calendars`, `routes::decisions::proof`
+
+### `verify_inclusion`
+- **type**: function
+- **file**: `crates/hsip-core/src/merkle.rs`
+- **purpose**: Verifies that `leaf_data` at a claimed position is included under `root`, given an inclusion proof. The function a third party runs with zero knowledge of anything but the leaf's own data, its proof, and the published root — never touches a database.
+- **inputs**: `leaf_data: &[u8]`, `proof: &[ProofStep]`, `root: &[u8; 32]`
+- **outputs**: `bool`
+- **called_by**: `hsip-api`'s `routes::decisions::verify`
+
+---
+
+## `crates/hsip-core/src/canonical.rs`
+
+Canonical JSON encoding (RFC 8785 JCS, via the `serde_jcs` crate) and event
+hashing for signed decision records. Deliberately not the alphabetical-
+`BTreeMap` trick `hsip-api`'s `routes/credentials.rs::canonical_json` uses —
+JCS is what the VeritasChain Protocol (VCP) mandates, and unlike the
+`BTreeMap` shortcut it's correct for nested structures and exact number
+formatting.
+
+### `HSIP_GOV_EXT_VERSION`
+- **type**: variable (const `&str`)
+- **file**: `crates/hsip-core/src/canonical.rs`
+- **purpose**: Version tag for HSIP's own draft of "which fields describe AI-agent decision accountability," since VCP-GOV is referenced by the VCP spec but has no published schema as of this writing. Lets the schema be reconciled later without silently pretending to be an official VCP module.
+- **called_by**: `hsip-api`'s `routes::decisions::record`
+
+### `DecisionEnvelope`
+- **type**: struct
+- **file**: `crates/hsip-core/src/canonical.rs`
+- **purpose**: The signed envelope for one AI-agent decision attestation. Two-tier: `model_version`/`strategy_id`/`accountable_key`/`decision_type` are clear accountability metadata; `payload_hash` is an opaque SHA-256 of content HSIP never receives. `prev_hash` chains to the tenant's previous decision (empty string for the first). `timestamp_int` is kept as a string, not a JSON number, so canonicalization never risks IEEE-754-double precision loss on large timestamps.
+- **called_by**: `hsip-api`'s `routes::decisions::{record, proof, verify}`
+
+### `canonical_bytes` / `event_hash`
+- **type**: function
+- **file**: `crates/hsip-core/src/canonical.rs`
+- **purpose**: `canonical_bytes` serializes a `DecisionEnvelope` per RFC 8785 JCS (deterministic across implementations). `event_hash` is `SHA256(JCS(envelope))` — the value that gets Ed25519-signed and fed into the Merkle tree as leaf data.
+- **inputs**: `envelope: &DecisionEnvelope`
+- **outputs**: `Result<Vec<u8>, serde_json::Error>` / `Result<[u8; 32], serde_json::Error>`
+- **calls**: `serde_jcs::to_vec`, `sha2::Sha256::digest`
+- **called_by**: `hsip-api`'s `routes::decisions::{record, proof, verify}`
+
+---
+
 ## `dashboard/src/api.js`
 
 ### `BASE`
@@ -4798,6 +5066,66 @@
 - **calls**: `_request`
 - **called_by**: SDK users
 - **mutates**: nothing
+
+### `HSIPClient.hash_payload`
+- **type**: function (static)
+- **file**: `sdks/python/hsip/client.py`
+- **purpose**: Hex-encoded SHA-256 of a decision payload the caller wants attested. Kept as a static helper so callers get the exact encoding `record_decision`'s `payload_hash` expects without reimplementing it.
+- **inputs**: `payload: bytes`
+- **outputs**: `str`
+- **calls**: `hashlib.sha256`
+- **called_by**: SDK users, `record_decision` callers
+
+### `HSIPClient.record_decision`
+- **type**: function
+- **file**: `sdks/python/hsip/client.py`
+- **purpose**: `POST /v1/decisions` — signs and chains one AI-agent decision attestation. If `receipt_dir` is given, immediately persists the receipt via `save_receipt` — the client-side mitigation for the gap between signing and the next anchor cycle (see `anchor_job.rs`).
+- **inputs**: `self`, `accountable_key: str`, `model_version: str`, `strategy_id: str`, `decision_type: str`, `payload_hash: str`, `receipt_dir: Optional[str]`
+- **outputs**: `dict`
+- **calls**: `_request`, `save_receipt`
+- **called_by**: SDK users (e.g. Predicta's trading loop)
+- **mutates**: DB via API; filesystem if `receipt_dir` given
+
+### `HSIPClient.save_receipt`
+- **type**: function (static)
+- **file**: `sdks/python/hsip/client.py`
+- **purpose**: Writes a decision receipt to `<receipt_dir>/<decision_id>.json`. Callable independently of `record_decision` (e.g. to re-save a receipt fetched later via `get_decision_proof`).
+- **inputs**: `receipt: dict`, `receipt_dir: str`
+- **outputs**: `str` (path written)
+- **called_by**: `record_decision`, SDK users
+- **mutates**: filesystem
+
+### `HSIPClient.list_decisions`
+- **type**: function
+- **file**: `sdks/python/hsip/client.py`
+- **purpose**: `GET /v1/decisions` — lists this tenant's decision attestations, newest first.
+- **inputs**: `self`
+- **outputs**: `list`
+- **calls**: `_request`
+- **called_by**: SDK users
+- **mutates**: nothing
+
+### `HSIPClient.get_decision_proof`
+- **type**: function
+- **file**: `sdks/python/hsip/client.py`
+- **purpose**: `GET /v1/decisions/:id/proof` — full self-contained verification bundle. `anchored` is `False` until the next anchor cycle runs.
+- **inputs**: `self`, `decision_id: str`
+- **outputs**: `dict`
+- **calls**: `_request`
+- **called_by**: SDK users
+- **mutates**: nothing
+
+### `HSIPClient.verify_decision`
+- **type**: function
+- **file**: `sdks/python/hsip/client.py`
+- **purpose**: `POST /v1/decisions/verify` — thin wrapper over an endpoint that itself takes no API key and touches no database; documented as such so callers know they could reimplement this check independently of HSIP entirely.
+- **inputs**: `self`, `bundle: dict`
+- **outputs**: `dict`
+- **calls**: `_request`
+- **called_by**: SDK users
+- **mutates**: nothing
+
+> **Node/Go SDK parity gap**: `hash_payload`, `record_decision`, `save_receipt`, `list_decisions`, `get_decision_proof`, and `verify_decision` exist only in the Python SDK so far — added to unblock the Predicta proof-of-concept, whose integration language wasn't confirmed at the time. Port to `sdks/node/` and `sdks/go/` once Predicta's actual stack (or another Node/Go caller) needs them, following the existing "same pattern as Python SDK" convention.
 
 ---
 

@@ -23,8 +23,10 @@ pub mod crypto {
     pub mod labels;
     pub mod nonce;
 }
+pub mod canonical;
 pub mod identity;
 pub mod keystore;
+pub mod merkle;
 pub mod wire;
 
 /// Security hardening modules

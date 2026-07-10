@@ -1,6 +1,8 @@
 """HSIP Python SDK - Cryptographic consent and message verification."""
 
+import hashlib
 import json
+import os
 import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any
@@ -168,3 +170,82 @@ class HSIPClient:
         Returns candidates with port, hint, description, and already_registered flag.
         """
         return self._request("GET", "/v1/agents/discover")
+
+    # ── Decision attestations ─────────────────────────────────────────────────
+    #
+    # HSIP never receives or stores the actual content of a decision (trade
+    # parameters, etc.) — only its SHA-256 hash. Disclosure of the real
+    # payload, if ever needed, happens entirely on your side.
+
+    @staticmethod
+    def hash_payload(payload: bytes) -> str:
+        """Hex-encoded SHA-256 of a decision payload, ready for `payload_hash`."""
+        return hashlib.sha256(payload).hexdigest()
+
+    def record_decision(
+        self,
+        accountable_key: str,
+        model_version: str,
+        strategy_id: str,
+        decision_type: str,
+        payload_hash: str,
+        receipt_dir: Optional[str] = None,
+    ) -> Dict:
+        """
+        Sign and chain one AI-agent decision attestation.
+
+        `payload_hash` must be the hex-encoded SHA-256 of your actual (never
+        disclosed to HSIP) decision content — see `hash_payload`.
+
+        Returns a self-contained receipt: { decision_id, envelope, event_hash,
+        signature, sign_algo, issuer_verify_key }. If `receipt_dir` is given,
+        the receipt is also written to disk immediately — this is the
+        client-side mitigation for the gap between signing and anchoring: if
+        this HSIP instance's own database were ever tampered with or a
+        decision deleted before the next anchor cycle, your own copy is
+        independent proof the decision was signed.
+        """
+        receipt = self._request("POST", "/v1/decisions", {
+            "accountable_key": accountable_key,
+            "model_version":   model_version,
+            "strategy_id":      strategy_id,
+            "decision_type":    decision_type,
+            "payload_hash":     payload_hash,
+        })
+        if receipt_dir:
+            self.save_receipt(receipt, receipt_dir)
+        return receipt
+
+    @staticmethod
+    def save_receipt(receipt: Dict, receipt_dir: str) -> str:
+        """
+        Persist a decision receipt to `<receipt_dir>/<decision_id>.json`.
+        Returns the path written. Safe to call independently of
+        `record_decision` (e.g. to re-save a receipt fetched later).
+        """
+        os.makedirs(receipt_dir, exist_ok=True)
+        path = os.path.join(receipt_dir, f"{receipt['decision_id']}.json")
+        with open(path, "w") as f:
+            json.dump(receipt, f, indent=2)
+        return path
+
+    def list_decisions(self) -> List[Dict]:
+        """List this tenant's decision attestations, newest first."""
+        return self._request("GET", "/v1/decisions")
+
+    def get_decision_proof(self, decision_id: str) -> Dict:
+        """
+        Full self-contained verification bundle for one decision. Before the
+        next anchor cycle runs, `anchored` is False and only authorship
+        (signature) is provable yet — call again later once a batch anchors.
+        """
+        return self._request("GET", f"/v1/decisions/{decision_id}/proof")
+
+    def verify_decision(self, bundle: Dict) -> Dict:
+        """
+        Verify a decision proof bundle. This calls HSIP's `/v1/decisions/verify`
+        endpoint, but that endpoint takes no API key and touches no database —
+        it's a pure function of `bundle`, so any party can run the equivalent
+        check themselves without this SDK or an HSIP account at all.
+        """
+        return self._request("POST", "/v1/decisions/verify", bundle)

@@ -268,7 +268,7 @@ fn check_provision_rate(ip: &str, state: &AppState) -> Result<(), ApiError> {
 }
 
 /// Convert a Unix millisecond timestamp to ISO 8601 UTC string without chrono.
-fn ms_to_iso(ms: i64) -> String {
+pub(crate) fn ms_to_iso(ms: i64) -> String {
     let secs = (ms / 1000) as u64;
     let h = (secs % 86400) / 3600;
     let mi = (secs % 3600) / 60;
