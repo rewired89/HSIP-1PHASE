@@ -6,6 +6,7 @@ import Messages        from './pages/Messages';
 import Audit           from './pages/Audit';
 import Keys            from './pages/Keys';
 import Credentials     from './pages/Credentials';
+import Decisions       from './pages/Decisions';
 import HomeDashboard   from './pages/HomeDashboard';
 import ProveIt         from './pages/ProveIt';
 import ConsentWallet   from './pages/ConsentWallet';
@@ -34,6 +35,7 @@ const EXPERT_TABS = [
   { id: 'consent',     icon: '✅', label: 'Consent',     subtitle: 'Grant & revoke peer access' },
   { id: 'messages',    icon: '💬', label: 'Messages',    subtitle: 'Sign & verify signatures' },
   { id: 'credentials', icon: '🏅', label: 'Credentials', subtitle: 'Issue verifiable credentials' },
+  { id: 'decisions',   icon: '📈', label: 'Decisions',   subtitle: 'Audit AI-agent trading decisions' },
   { id: 'audit',       icon: '📋', label: 'Audit',       subtitle: 'Append-only action log' },
   { id: 'keys',        icon: '🔑', label: 'Keys',        subtitle: 'Manage API keys' },
 ];
@@ -234,6 +236,7 @@ export default function App() {
               {tab === 'consent'     && <Consent     apiKey={apiKey} />}
               {tab === 'messages'    && <Messages    apiKey={apiKey} />}
               {tab === 'credentials' && <Credentials apiKey={apiKey} />}
+              {tab === 'decisions'   && <Decisions   apiKey={apiKey} />}
               {tab === 'audit'       && <Audit       apiKey={apiKey} />}
               {tab === 'keys'        && <Keys        apiKey={apiKey} />}
             </>

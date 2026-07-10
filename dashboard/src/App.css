@@ -461,8 +461,9 @@ th, td { padding: 0.7rem 0.75rem; text-align: left; border-bottom: 1px solid var
 th { color: var(--c-text-3); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
 
 .badge { padding: 0.2rem 0.65rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
-.badge.granted, .badge.verified { background: var(--c-green-bg); color: var(--c-green); }
-.badge.revoked, .badge.failed   { background: var(--c-red-bg);   color: var(--c-red); }
+.badge.granted, .badge.verified { background: var(--c-green-bg);  color: var(--c-green); }
+.badge.revoked, .badge.failed   { background: var(--c-red-bg);    color: var(--c-red); }
+.badge.pending                  { background: var(--c-yellow-bg); color: var(--c-yellow); }
 
 input, textarea {
   width: 100%;
