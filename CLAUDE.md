@@ -53,6 +53,7 @@ cargo test -p hsip-core
 
 # Single test (exact match)
 cargo test -p hsip-api test_credential_issue_verify_revoke -- --nocapture --exact
+cargo test -p hsip-api test_decision_attestation_sign_anchor_verify_end_to_end -- --nocapture --exact
 
 # Crypto compliance
 cargo test -p hsip-core rfc8439 -- --nocapture   # RFC 8439 ChaCha20-Poly1305 vectors
@@ -71,7 +72,7 @@ cargo audit
 | Crate | Binary | Role | Status |
 |---|---|---|---|
 | `hsip-api` | `hsip-api` | REST API server. Axum + Tokio. All HTTP routes, auth, rate limiting, DB. The only deployable binary. | Core — do not break |
-| `hsip-core` | — | Crypto primitives: Ed25519, X25519, ChaCha20-Poly1305, consent protocol, nonce tracking. No I/O. | Core — do not break |
+| `hsip-core` | — | Crypto primitives: Ed25519, X25519, ChaCha20-Poly1305, consent protocol, nonce tracking, RFC 6962 Merkle trees (`merkle.rs`), RFC 8785 JCS canonicalization (`canonical.rs`). No I/O. | Core — do not break |
 | `hsip-dns` | — | UDP DNS server (:5300). Hardcoded tracker blocklist; forwards to 1.1.1.1:53. | Working |
 | `hsip-cli` | `hsip-cli` | CLI tool. Includes `agent`, `trust`, `up`, `status` subcommands. | Active development |
 | `hsip-mcp` | `hsip-mcp` | MCP server (JSON-RPC over stdio). Exposes HSIP tools to AI clients. | Active development |
@@ -85,12 +86,14 @@ cargo audit
 ## `hsip-api` Internals
 
 ```
-main.rs           Startup: config → master key → DB → bootstrap admin → Axum router
+main.rs           Startup: config → master key → DB → bootstrap admin → Axum router → spawns anchor loop
 config.rs         Two modes: Config::load("config.toml") or Config::desktop_defaults()
 db.rs             AnyPool (sqlx). ALL migrations are inline SQL in run_migrations() — no migration files.
 auth.rs           TenantId extractor: SHA-256(Bearer) → DB lookup → rate limit → AI velocity check
 state.rs          AppState: DB + DashMap rate limiter + agent tracker + DNS handle + proxy ring buffer
 key_encryption.rs ChaCha20-Poly1305 + HKDF-SHA256 encryption for Ed25519 private keys at rest
+anchor.rs         OpenTimestamps calendar HTTP client (network I/O only, no DB) — see Decision Attestations below
+anchor_job.rs     Batches unanchored decisions into a Merkle tree on a timer, submits root to OpenTimestamps
 routes/           One file per domain (see route table below)
 static_files.rs   Serves dashboard/dist/ via rust-embed (only active with embed-dashboard feature)
 ```
@@ -116,6 +119,9 @@ POST      /v1/trust/peer            Add a trusted peer (label + Ed25519 verify k
 GET       /v1/trust/peers           List trusted peers
 DELETE    /v1/trust/peers/:id       Remove a trusted peer
 POST      /v1/trust/verify          Verify a message signature from a trusted peer by label
+POST/GET  /v1/decisions             Sign + chain an AI-agent decision attestation / list this tenant's decisions
+GET       /v1/decisions/:id/proof   Full self-contained verification bundle (signature + Merkle proof + anchor)
+POST      /v1/decisions/verify      Pure verification of a bundle — no auth, no DB call, runnable by anyone
 GET       /health                   {"status":"ok","version":"0.2.0"}
 GET       /metrics                  Prometheus metrics
 GET       /openapi.json             OpenAPI 3.0 spec
@@ -147,6 +153,9 @@ All tables created at startup in `db::run_migrations()` — **no separate migrat
 | `contacts` | id, tenant_id, nickname, verify_key | — |
 | `credentials` | id, tenant_id, claim, user_token, issuer_verify_key, signature, revoked | — |
 | `trusted_peers` | id, tenant_id, label, verify_key, added_at | UNIQUE(tenant_id, verify_key). Federated trust store. |
+| `decisions` | id, tenant_id, agent_key_id, accountable_key, model_version, strategy_id, decision_type, payload_hash, prev_hash, event_hash, signature, anchor_id, merkle_index | UNIQUE(tenant_id, prev_hash) — hash-chains each tenant's decisions, prevents forks under concurrent inserts. `payload_hash` only — actual decision content never stored. |
+| `decision_anchors` | id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status | One row per RFC 6962 Merkle batch. `ots_status`: `pending` \| `calendar_unreachable`. |
+| `anchor_identity` | id (singleton, always 1), signing_key_b64, verify_key_b64 | Node-level Ed25519 key that signs anchor roots — distinct from any tenant identity. Created on first anchor cycle. |
 
 ### Master Key Sources (in priority order)
 
@@ -310,6 +319,31 @@ CLI: `hsip agent discover` in `agent.rs`.
 
 ---
 
+## Decision Attestations (`/v1/decisions/*`)
+
+Signs and hash-chains AI-agent decisions (starting with trading decisions) into a tamper-evident, independently verifiable record — proving *which* identity produced a decision without requiring anyone to trust HSIP's own database. Informed by the VeritasChain Protocol (VCP): RFC 6962 Merkle trees, RFC 8785 JCS canonicalization, Ed25519 signing. VCP-TRADE/VCP-GOV have no published schema as of this writing, so the accountability fields below are HSIP's own draft, tagged `hsip_gov_ext`, meant to be reconciled if/when VSO publishes one.
+
+**Two-tier record by design:**
+- Clear accountability metadata: `model_version`, `strategy_id`, `accountable_key`, `decision_type` — the part a regulator or auditor asks about first.
+- Opaque `payload_hash`: SHA-256 of the caller's actual (never disclosed to HSIP) decision content. HSIP never receives or stores trade parameters, prices, sizes, etc. — only their hash. Disclosure of the preimage, if ever needed, happens entirely on the caller's side.
+
+**Implementation:**
+- `crates/hsip-core/src/canonical.rs` — `DecisionEnvelope` struct + `canonical_bytes()`/`event_hash()` (JCS canonicalization via `serde_jcs`, then SHA-256). `timestamp_int` is kept as a *string* field, not a JSON number, to avoid IEEE-754 precision loss on large timestamps.
+- `crates/hsip-core/src/merkle.rs` — pure RFC 6962 Merkle tree (`MerkleTree`, `leaf_hash`/`node_hash` with `0x00`/`0x01` domain-separation prefixes), inclusion proof generation and verification (`verify_inclusion`). No I/O.
+- `crates/hsip-api/src/routes/decisions.rs`:
+  - `record()` — `POST /v1/decisions`. Resolves the authenticated `api_keys` row, validates fields, chains to the tenant's last decision via `prev_hash`, signs `event_hash` with the tenant's Ed25519 identity. Retries on `UNIQUE(tenant_id, prev_hash)` conflict (another request extended the chain first) up to `MAX_ATTEMPTS`. Writes `decision.recorded` audit entry.
+  - `list()` — `GET /v1/decisions`.
+  - `proof()` — `GET /v1/decisions/:id/proof`. Returns the full self-contained bundle. If unanchored yet, `anchored: false` with signature-only proof. If anchored, reconstructs the batch's leaf set and regenerates the inclusion proof on demand (not stored — recomputed from `decisions.anchor_id`/`merkle_index`).
+  - `verify()` — `POST /v1/decisions/verify`. **Takes no `TenantId`, no `State`, makes no DB call** — a pure function of its request body. This is the function meant to be run independently of HSIP entirely (by Predicta, a regulator, an acquirer's engineering review).
+- `crates/hsip-api/src/anchor.rs` — OpenTimestamps calendar HTTP client (`submit_digest_to`). Submits a batch's Merkle root to public calendars, stores the raw response as an opaque blob. **MVP scope**: does not parse the `.ots` binary format and does not yet poll for Bitcoin-confirmation ("upgrade"). Calendar list is a parameter so tests can point it at a `wiremock` server instead of the real network.
+- `crates/hsip-api/src/anchor_job.rs` — `run_anchor_cycle()` (spawned on a timer in `main.rs`, ~10s poll). Anchors on a "whichever comes first" cadence: `BATCH_SIZE_TRIGGER` (50) unanchored decisions, or `INTERVAL_TRIGGER_MS` (5 min) elapsed with at least one waiting. Builds a `MerkleTree`, signs the root with the node-level `anchor_identity` key (**not** any tenant's identity — an anchor batch spans every tenant), submits to OpenTimestamps. If calendars are unreachable, local Merkle anchoring still proceeds (`ots_status = 'calendar_unreachable'`) and `retry_pending_ots_submissions()` retries on the next cycle. Writes one `decision.anchored` audit entry per tenant touched by the batch.
+
+**Trust model — the signing-to-anchoring gap:** a signature proves authorship; it does not by itself prove the record wasn't deleted or reordered before the next anchor cycle publishes the batch's root externally (to OpenTimestamps/Bitcoin). That gap is bounded by the anchor cadence, and further mitigated client-side — see SDK `save_receipt()` below, which persists the signed receipt independently of this server the moment it's received.
+
+**Known sandbox limitation:** OpenTimestamps calendar submission could not be live-tested during development — this repo's dev sandbox blocks outbound HTTPS to `*.calendar.opentimestamps.org` by egress policy (confirmed via the sandbox's own proxy rejection log, not assumed). Verify real connectivity before relying on this in production; `anchor.rs`'s unit tests cover the HTTP client logic against a mock server, which is not a substitute for that check.
+
+---
+
 ## Browser Extension
 
 Location: `browser-extension/`. Manifest V3. Works in Chrome, Edge, Firefox.
@@ -371,6 +405,19 @@ Python: `sdks/python/hsip/client.py`
 Node: `sdks/node/src/index.js` + `sdks/node/src/index.d.ts`
 Go: `sdks/go/hsip/client.go`
 
+### Decision attestation methods — **Python SDK only so far**
+
+| Method | API call |
+|---|---|
+| `hash_payload(payload: bytes)` | Static helper — hex SHA-256 in the format `record_decision` expects |
+| `record_decision(accountable_key, model_version, strategy_id, decision_type, payload_hash, receipt_dir=None)` | `POST /v1/decisions`; if `receipt_dir` given, also calls `save_receipt` |
+| `save_receipt(receipt, receipt_dir)` | Writes `<receipt_dir>/<decision_id>.json` — the client-side mitigation for the signing-to-anchoring trust gap |
+| `list_decisions()` | `GET /v1/decisions` |
+| `get_decision_proof(decision_id)` | `GET /v1/decisions/:id/proof` |
+| `verify_decision(bundle)` | `POST /v1/decisions/verify` |
+
+**Not yet ported to Node/Go** — deferred until Predicta's integration language is confirmed (this was added to unblock a specific proof-of-concept, not as full SDK parity). Port following the existing "same pattern as Python SDK" convention once needed.
+
 ---
 
 ## Key Invariants — Do Not Break
@@ -384,6 +431,10 @@ Go: `sdks/go/hsip/client.go`
 - **No migration files** — all schema is inline in `db::run_migrations()`. Add new tables/columns there.
 - **CLI key resolution must use `commands::util::load_admin_key()`** — never write a local `load_admin_key()` in a command file.
 - **`config.toml` must not be committed** — it forces server mode and breaks desktop-mode testing.
+- **Decision payload content must never reach HSIP.** `routes::decisions::record` only ever accepts `payload_hash` (a caller-computed SHA-256 hex string) — never add a field for the actual decision content itself; that defeats the confidentiality design.
+- **The anchor identity (`anchor_identity` table) must stay separate from tenant identities.** An anchor batch spans every tenant's decisions; do not sign an anchor root with any one tenant's key.
+- **`POST /v1/decisions/verify` must stay DB-free and auth-free.** It's the one handler in `decisions.rs` deliberately without `TenantId`/`State` — a third party (regulator, acquirer's engineering review) needs to be able to run the equivalent check independently of this server. Don't add a database lookup to it.
+- **`decisions` chain integrity relies on `UNIQUE(tenant_id, prev_hash)`.** Don't remove it or bypass it with raw inserts — it's what prevents the hash chain from forking under concurrent requests.
 
 ---
 
@@ -405,6 +456,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Remove `config.toml` from repo (renamed to `config.example.toml`) | root |
 | Compiler warning cleanup | `proxy.rs`, `static_files.rs`, `main.rs`, `errors.rs`, `key_encryption.rs`, `db.rs` |
 | Windows admin key path fix (`commands/util.rs`) | `commands/util.rs`, `agent.rs`, `trust.rs`, `up.rs`, `mod.rs` |
+| Decision attestations: `/v1/decisions/*` + Merkle anchoring + Python SDK | `hsip-core/src/{merkle,canonical}.rs`, `hsip-api/src/{anchor,anchor_job}.rs`, `routes/decisions.rs`, `db.rs`, `sdks/python/hsip/client.py` |
 
 ---
 
@@ -419,6 +471,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - `hsip up` onboarding command
 - Dashboard single-mode refactor (progressive disclosure)
 - SDK parity: Python, Node.js, Go
+- Decision attestations: `/v1/decisions/*`, RFC 6962 Merkle anchoring, OpenTimestamps submission, Python SDK (`record_decision`/`save_receipt`/`get_decision_proof`/`verify_decision`)
 
 ### Remaining
 
@@ -426,6 +479,10 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - **Dashboard trust page** — Add a "Trust" tab (Advanced section) showing `GET /v1/trust/peers` with add/remove UI. Wire to the new `/v1/trust/*` routes.
 - **Dashboard discover page** — show `/v1/agents/discover` results with one-click register buttons.
 - **Integration tests for trust routes** — add to `crates/hsip-api/tests/integration.rs` using `test_app()`.
+- **Verify OpenTimestamps connectivity in a non-sandboxed environment** — `anchor.rs` was only tested against a mocked calendar; confirm the real submission protocol works before depending on it for compliance purposes.
+- **OpenTimestamps "upgrade" polling** — currently a batch's `ots_proof` is just the calendar's initial pending-commitment bytes; poll calendars later to obtain a fully Bitcoin-confirmed proof and flip `ots_status` to `confirmed`.
+- **Node/Go SDK parity for decision attestation** — `record_decision`/`save_receipt`/`get_decision_proof`/`verify_decision` exist only in the Python SDK; port once a Node/Go caller needs them.
+- **Dashboard decisions page** — show `GET /v1/decisions` with anchor/proof status, similar to the trust/discover pages above.
 
 ### Before adding new API routes
 1. Add the route function in the relevant `crates/hsip-api/src/routes/*.rs` file
