@@ -223,6 +223,23 @@ POST   /v1/trust/verify        Verify a signed message from a named counterparty
 
 ---
 
+### Master key rotation and backups
+
+The master key encrypts every tenant's private signing key at rest. It's generated automatically on first boot — back it up, and rotate it on whatever schedule your compliance policy requires:
+
+```bash
+# Confirm your backup file actually matches what's running — no key exposure, no rotation
+hsip keys master-fingerprint
+
+# Rotate on a schedule: re-encrypts every identity, swaps live, no restart, no downtime
+hsip keys rotate-master
+#   → asks for confirmation before doing anything; pass --yes for scripted/scheduled runs
+```
+
+Admin key only. Requires the master key to be file-backed (the default) rather than sourced from `HSIP_MASTER_KEY` — if you're pointing that at your own secrets manager, rotate it there instead, then restart.
+
+---
+
 ### Financial services API examples
 
 ```bash
@@ -456,14 +473,14 @@ cargo test --workspace
 
 Everything runs in a single binary for desktop/on-premise use. Switch to PostgreSQL and multi-tenancy for production financial deployments with no code changes — just a `config.toml`.
 
-16 specialized crates. 260 tests (`cargo test --workspace`; `hsip-verify` excluded, see above, has its own suite). RFC 8032 (Ed25519) + RFC 8439 (ChaCha20-Poly1305) + RFC 5869 (HKDF) + RFC 7748 (X25519) compliance verified. NIST FIPS 203 + 204 post-quantum algorithms available via `hsip-verify` (not part of the default build). Audited RustCrypto primitives throughout — no custom cryptography.
+16 specialized crates. 261 tests (`cargo test --workspace`; `hsip-verify` excluded, see above, has its own suite). RFC 8032 (Ed25519) + RFC 8439 (ChaCha20-Poly1305) + RFC 5869 (HKDF) + RFC 7748 (X25519) compliance verified. NIST FIPS 203 + 204 post-quantum algorithms available via `hsip-verify` (not part of the default build). Audited RustCrypto primitives throughout — no custom cryptography.
 
 ---
 
 ## Security
 
 - **Private keys encrypted at rest** — ChaCha20-Poly1305 + HKDF-SHA-256. Compromise of the database file alone does not expose private keys — the master key is also required. By default the master key lives in a file on disk (`~/.hsip/master.key` or a configured path); point `HSIP_MASTER_KEY` at a secrets manager (Vault, AWS KMS, etc.) instead if you don't want that.
-- **Master key rotation** — `POST /v1/admin/master-key/rotate` (bootstrap admin key only) re-encrypts every identity under a fresh key and swaps it live, no restart. Previously there was no rotation path at all.
+- **Master key rotation** — `hsip keys rotate-master` (or `POST /v1/admin/master-key/rotate` directly; bootstrap admin key only) re-encrypts every identity under a fresh key and swaps it live, no restart. Previously there was no rotation path at all. `hsip keys master-fingerprint` lets you verify a backup file matches the running key without exposing or rotating anything.
 - **API keys stored as SHA-256 hashes only** — raw key shown once at creation, never stored. Compromise of the database does not expose API credentials.
 - **Rate limiting on all endpoints** — 300 req/min default per key, configurable via `RATE_LIMIT_RPM`.
 - **AI agent velocity monitoring** — anomaly logged at >100 req/min; key auto-revoked at >1,000 req/min with immediate in-memory block before DB write, and the DB write that makes revocation durable past a restart now retries with backoff and logs loudly if it still fails.

@@ -90,4 +90,8 @@ pub fn router() -> Router<AppState> {
             "/v1/admin/master-key/rotate",
             post(admin::rotate_master_key),
         )
+        .route(
+            "/v1/admin/master-key/fingerprint",
+            get(admin::master_key_fingerprint),
+        )
 }

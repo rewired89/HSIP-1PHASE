@@ -66,6 +66,36 @@ fn fingerprint(key_bytes: &[u8]) -> String {
 }
 
 #[derive(Serialize)]
+pub struct MasterKeyFingerprintResponse {
+    pub fingerprint: String,
+    /// `None` when the key is sourced from `HSIP_MASTER_KEY` rather than a
+    /// file — matches `RotateMasterKeyResponse` (and rotation's own
+    /// refusal) in treating that as "no file this process owns."
+    pub master_key_path: Option<String>,
+}
+
+/// `GET /v1/admin/master-key/fingerprint` — read-only. Returns the SHA-256
+/// fingerprint of the master key currently in use, without touching or
+/// rotating anything. Closes a real gap: before this existed, the *only*
+/// way to see a fingerprint was in the startup log or in a rotation
+/// response — there was no way for an operator to confirm "does my backup
+/// file actually match what's running right now" without either grepping
+/// server logs or triggering an actual rotation (which changes the key).
+pub async fn master_key_fingerprint(
+    State(state): State<AppState>,
+    tenant: TenantId,
+    headers: HeaderMap,
+) -> ApiResult<Json<MasterKeyFingerprintResponse>> {
+    require_root_admin(&state.db, &headers, &tenant.0).await?;
+
+    let key = state.master_key.read().await;
+    Ok(Json(MasterKeyFingerprintResponse {
+        fingerprint: fingerprint(&key),
+        master_key_path: state.master_key_path.as_ref().map(|p| p.to_string()),
+    }))
+}
+
+#[derive(Serialize)]
 pub struct RotateMasterKeyResponse {
     pub identities_reencrypted: u64,
     pub anchor_identity_reencrypted: bool,

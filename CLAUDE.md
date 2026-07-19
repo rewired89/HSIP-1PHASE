@@ -125,6 +125,7 @@ POST/GET  /v1/decisions             Sign + chain an AI-agent decision attestatio
 GET       /v1/decisions/:id/proof   Full self-contained verification bundle (signature + Merkle proof + anchor)
 POST      /v1/decisions/verify      Pure verification of a bundle — no auth, no DB call, runnable by anyone
 POST      /v1/admin/master-key/rotate  Rotate the master key (bootstrap admin key only) — see Master Key Rotation below
+GET       /v1/admin/master-key/fingerprint  SHA-256 fingerprint of the running master key — read-only, no mutation, admin key only
 GET       /health                   {"status":"ok","version":"0.2.0"}
 GET       /metrics                  Prometheus metrics
 GET       /openapi.json             OpenAPI 3.0 spec
@@ -180,6 +181,10 @@ Was previously impossible — the master key was loaded once into an `Arc<Vec<u8
 
 **Residual risk, by design, documented rather than hidden:** if the process crashes in the narrow window between the DB transaction committing and the staging-file rename completing, the DB holds ciphertext under the new key but the real key file still has the old one. The staging file (`{path}.rotating`) is deliberately left in place rather than cleaned up, specifically so that window is recoverable — an operator moves it into place manually. Covered by `crates/hsip-api/tests/integration.rs::test_master_key_rotation_reencrypts_and_swaps_live_key`, which proves actual re-encryption (old key stops decrypting, disk key decrypts), live in-memory swap (signing keeps working on the same running process), and rejection of a non-root-admin key.
 
+**Read-only companion:** `GET /v1/admin/master-key/fingerprint` — same `require_root_admin()` gate, no mutation, returns the current key's fingerprint and `master_key_path`. Exists because before it did, the *only* way to see a fingerprint was the startup log or a rotation response — there was no way to check "does my backup file actually match what's running right now" without either grepping server logs or triggering a real rotation. Covered by `test_master_key_fingerprint_is_read_only_and_admin_gated` — proves it's idempotent (same fingerprint on repeated calls) and admin-gated the same way rotation is.
+
+**CLI:** `hsip keys master-fingerprint` and `hsip keys rotate-master` in `crates/hsip-cli/src/commands/keys.rs`. `rotate-master` prints what it's about to do and requires typing `yes` at an interactive prompt before calling the API — `--yes` skips that for scripts/automation. This was deliberately built as a CLI command and not left as "call the HTTP endpoint yourself" — HSIP's original design point was non-technical users, and requiring hand-rolled `curl` with bearer auth for a rotation operation would have made it unreachable for exactly that audience, while `--yes` keeps it scriptable for the enterprise/ops use case the CLI also needs to serve.
+
 ### Admin Key Location (platform-aware)
 
 The server writes the admin key on first boot:
@@ -223,6 +228,10 @@ hsip trust add <label> <verify-key> [--api-url URL] [--key K]
 hsip trust list [--api-url URL] [--key K]
 hsip trust remove <id> [--api-url URL] [--key K]
 hsip trust verify --from <label> <content> <signature> [--api-url URL] [--key K]
+
+# Master key inspection/rotation (admin key only)
+hsip keys master-fingerprint [--api-url URL] [--key K]
+hsip keys rotate-master [--yes] [--api-url URL] [--key K]
 ```
 
 The existing commands in `main.rs` handle: keygen, init, key import/export (plain + encrypted), consent over UDP, session management, token issue/verify, discovery, reputation, daemon, audit export/verify/query. Do not delete these — they are separate functionality.
@@ -246,6 +255,7 @@ crates/hsip-cli/src/commands/
   util.rs       admin_key_path() + load_admin_key() — platform-aware, shared by all commands
   agent.rs      AgentCmd enum: Register, List, Revoke, Discover + status() pub fn
   trust.rs      TrustCmd enum: Add, List, Remove, Verify
+  keys.rs       KeysCmd enum: MasterFingerprint, RotateMaster (interactive y/N confirm, --yes to skip)
   up.rs         UpArgs + run() — onboarding wizard
   diag.rs       Diagnostics (pre-existing)
   handshake.rs  UDP handshake (pre-existing)
@@ -505,6 +515,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Backoff + `metrics::CHAIN_WRITE_RETRIES` on the `audit_entries`/`decisions` hash-chain retry loops — was a tight no-delay retry loop, a thundering-herd risk at scale | `audit_log.rs`, `routes/decisions.rs` |
 | AI-agent auto-revocation DB write now retries 3x with backoff and logs loudly on final failure instead of a silent fire-and-forget `let _ =` | `auth.rs` |
 | Master key rotation: `POST /v1/admin/master-key/rotate`, `AppState.master_key` now `Arc<RwLock<Vec<u8>>>`, transactional re-encryption of `identities`/`anchor_identity`, staging-file + atomic-rename key persistence — the master key previously had no rotation path at all | `routes/admin.rs`, `state.rs`, `main.rs`, all master-key read sites |
+| Read-only `GET /v1/admin/master-key/fingerprint` + `hsip keys master-fingerprint`/`rotate-master` CLI (interactive y/N confirm, `--yes` for scripts) — closed the gap where rotation and fingerprinting were only reachable by hand-rolling `curl` with bearer auth, unreachable for HSIP's original non-technical-user audience | `routes/admin.rs`, `commands/keys.rs`, `main.rs` |
 
 ---
 
@@ -526,6 +537,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - Consent grant/revoke records `granted_by_key_type` — which kind of key authorized it
 - `HSIP_SANDBOX` startup warning + `SANDBOX_PROVISIONS` metric; `HSIP_MASTER_KEY` env var actually wired + fingerprint logging; hash-chain retry backoff + `CHAIN_WRITE_RETRIES` metric; durable AI-agent auto-revocation writes; `ANCHOR_CALENDAR_UNREACHABLE` metric
 - Master key rotation: `POST /v1/admin/master-key/rotate`
+- `GET /v1/admin/master-key/fingerprint` (read-only) + `hsip keys master-fingerprint` / `hsip keys rotate-master` CLI — closes the "admin has to hand-roll curl with bearer auth" gap for the audience HSIP was originally built for
 
 ### Remaining
 
@@ -540,8 +552,8 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - **Dashboard audit verify indicator** — surface `GET /v1/audit/verify`'s `valid`/`unchained` fields somewhere in the Audit tab so a broken chain is visible without calling the API directly.
 - **Externally anchor the audit log hash chain** — decisions get Merkle-batched and submitted to OpenTimestamps (see Decision Attestations above); the audit log's BLAKE3 chain (see Audit Log Hash Chain above) is self-verifiable but not yet anchored outside this database, so an attacker with DB write access can still delete the whole chain undetected, just not alter what remains. Same shape of fix as decisions, not yet done for audit.
 - **Document and test a real SQLite → PostgreSQL migration path** — `DATABASE_URL` pointing at Postgres works for a fresh install (`db::run_migrations()` is backend-agnostic SQL), but there's no tested procedure for moving an existing SQLite deployment's data over. Treat it as a fresh install until this exists.
-- **`hsip-cli` command for master key rotation** — `POST /v1/admin/master-key/rotate` exists but has no CLI wrapper yet; add `hsip keys rotate-master` following the `agent.rs`/`trust.rs` `ApiClient` pattern once there's a real caller.
-- **Real RBAC beyond "the bootstrap admin key"** — `routes::admin::require_root_admin` is a single global admin tied to the first tenant ever created, not a proper permissions system. Fine for today's one node-level operation (master key rotation); revisit before adding a second one.
+- **Real RBAC beyond "the bootstrap admin key"** — `routes::admin::require_root_admin` is a single global admin tied to the first tenant ever created, not a proper permissions system. Deliberately not built out further yet: two node-level operations (rotate + fingerprint) both fit the same single-admin gate cleanly, and a real permissions model (roles, scoped grants, multiple admins) is real design work that shouldn't be bolted on speculatively before there's a second *kind* of operation that actually needs it. Revisit when one shows up — likely the first candidate for HSIP's enterprise-readiness track, since "single root credential, no RBAC" is a real objection in an enterprise security review.
+- **Automated rotation when the master key is `HSIP_MASTER_KEY`-sourced** — `rotate-master` refuses to run in this case by design (no file this process owns to rewrite). Closing this for real means integrating with the specific secrets manager in use (Vault, AWS KMS, ...) to write the new value back programmatically — a real, credentialed integration per provider, not something to stub in speculatively without a specific provider and deployment to build against. Today's answer is manual: rotate at the secrets manager, then restart.
 - **Dashboard: surface master key rotation + its audit trail** — no UI for `POST /v1/admin/master-key/rotate` yet; an admin has to call it directly.
 
 ### Before adding new API routes

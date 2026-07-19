@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.5-draft  
+**Version:** 0.6-draft  
 **Date:** 2026-07-19  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -210,9 +210,13 @@ Until this revision, the master key that encrypts every tenant's Ed25519 signing
 
 **Residual risk:** a `state.master_key.write().await` lock is held for the entire rotation, serializing it against every concurrent signing/encryption operation — a brief, deliberate stop-the-world rather than a narrow, hard-to-reproduce corruption window. Separately, if the process crashes in the exact gap between the DB transaction committing and the key-file rename completing, the DB holds ciphertext under the new key while the on-disk file still has the old one; the staging file is deliberately left in place (not cleaned up) specifically so an operator can complete that rename manually rather than face silent, undetected data loss. This is the same category of residual risk this document already documents for decision-attestation anchoring (§ Decision Attestations trust model in `CLAUDE.md`) — narrow, acknowledged, and recoverable, not eliminated.
 
-**Not yet covered:** rotation via the API is unavailable when the master key is sourced from `HSIP_MASTER_KEY` (no file this process can rewrite) — that path must be rotated wherever the env var's value is managed (e.g. the secrets manager), followed by a restart.
+**Not yet covered:** rotation via the API is unavailable when the master key is sourced from `HSIP_MASTER_KEY` (no file this process can rewrite) — that path must be rotated wherever the env var's value is managed (e.g. the secrets manager), followed by a restart. Closing this for real means a credentialed, provider-specific integration (Vault, AWS KMS, ...); deliberately not stubbed in speculatively without a specific provider to build and test against.
 
-*Source: `crates/hsip-api/src/routes/admin.rs`*
+**Verifying a backup without rotating:** `GET /v1/admin/master-key/fingerprint` (same admin gate, no mutation) returns the current key's SHA-256 fingerprint on demand. Before this existed, confirming "does my backup file actually match what's running in production" required either grepping the startup log or triggering an actual rotation — not something you want as the only way to audit a backup.
+
+**Reachable by non-technical operators, not just API calls:** `hsip keys master-fingerprint` and `hsip keys rotate-master` (the latter requires typing `yes` at an interactive prompt, or `--yes` for scripted use) — HSIP's original design point was non-technical users, and a security control only reachable via hand-rolled `curl` with bearer-token auth is a control most of that audience would never actually use.
+
+*Source: `crates/hsip-api/src/routes/admin.rs`, `crates/hsip-cli/src/commands/keys.rs`*
 
 ---
 
@@ -242,7 +246,7 @@ The following are **explicitly out of scope**. They must be addressed at the inf
 | **Network-layer DDoS** | HSIP has per-key rate limiting but no IP-level flood protection | Reverse proxy or CDN in front for public deployments |
 | **Side-channel attacks** | No constant-time guarantees outside what `ed25519-dalek` and `chacha20poly1305` provide | Not a realistic concern for network-connected deployments |
 | **Consent coercion** | HSIP enforces cryptographic consent, not voluntary human consent | Application-layer UX and legal controls |
-| **Master key loss** | If `master.key` is lost, all encrypted signing keys are permanently unrecoverable | Back up the master key (a startup warning now reminds you to); `POST /v1/admin/master-key/rotate` (§4.13) lets you *replace* a still-available key on a schedule, which reduces how long any one key's loss would matter, but does not help if the current key is already gone — that's still unrecoverable |
+| **Master key loss** | If `master.key` is lost, all encrypted signing keys are permanently unrecoverable | Back up the master key (a startup warning now reminds you to); `GET /v1/admin/master-key/fingerprint` / `hsip keys master-fingerprint` lets you *verify* that backup actually matches production without exposing or rotating the key; `POST /v1/admin/master-key/rotate` (§4.13) lets you *replace* a still-available key on a schedule, which reduces how long any one key's loss would matter, but does not help if the current key is already gone — that's still unrecoverable |
 | **HSM-backed key storage** | Master key lives on the filesystem by default | Point `HSIP_MASTER_KEY` at a secrets manager (Vault, AWS KMS) — **this now actually works**; previously the only code path that read `HSIP_MASTER_KEY` was dead code nothing called, so this documented mitigation was not functional. Fixed — see `main.rs::load_master_key`. |
 | **Post-quantum adversaries (current Ed25519)** | Ed25519 is not quantum-safe | ML-KEM-768 + ML-DSA-65 available via `hsip-verify` for environments requiring it |
 | **Social engineering** | If an admin is phished, HSIP cannot detect it | Operational security, 2FA on the server, key rotation |
@@ -278,7 +282,8 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Formal verification of protocol properties | `hsip-verify` crate uses Z3 SMT solver for cryptographic protocol proofs. **Excluded from the workspace build and from `cargo test --workspace`** — its guarantees do not currently run in CI. |
 | RFC compliance test vectors | RFC 8439 (ChaCha20-Poly1305), RFC 8032 (Ed25519) vectors pass in CI |
 | Audit log hash chain integrity | Covered by `hsip-api/tests/integration.rs::test_audit_chain_verify_detects_valid_and_tampered_chains` — writes a chain, verifies it, then directly tampers with a row via SQL (simulating OS-level DB compromise) and confirms `GET /v1/audit/verify` detects it. |
-| Master key rotation | Covered by `hsip-api/tests/integration.rs::test_master_key_rotation_reencrypts_and_swaps_live_key` — proves actual re-encryption (old key stops decrypting, the key now on disk decrypts), live in-memory key swap on the *same running process* (not just DB/file state), and rejection of a non-root-admin key. |
+| Master key rotation | Covered by `hsip-api/tests/integration.rs::test_master_key_rotation_reencrypts_and_swaps_live_key` — proves actual re-encryption (old key stops decrypting, the key now on disk decrypts), live in-memory key swap on the *same running process* (not just DB/file state), and rejection of a non-root-admin key. Also manually verified end-to-end against a running server: real `hsip keys rotate-master`/`master-fingerprint` CLI invocations, confirming fingerprints change, the key file on disk is rewritten, and `POST /v1/messages/sign` keeps working transparently across the rotation. |
+| Master key fingerprint endpoint | Covered by `test_master_key_fingerprint_is_read_only_and_admin_gated` — proves it's idempotent (repeated calls return the identical fingerprint, i.e. no mutation) and rejects a non-root-admin key. |
 | Dependency vulnerability scanning | `cargo audit` runs on every build |
 | Minimum supported Rust version | 1.88.0 |
 

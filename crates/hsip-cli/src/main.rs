@@ -405,6 +405,12 @@ enum Commands {
         cmd: commands::trust::TrustCmd,
     },
 
+    /// Inspect and rotate the node's master key
+    Keys {
+        #[command(subcommand)]
+        cmd: commands::keys::KeysCmd,
+    },
+
     /// Show HSIP server status: identity, active agents, recent audit events
     Status {
         #[arg(long, env = "HSIP_API_URL")]
@@ -1682,6 +1688,13 @@ fn main() {
 
         Commands::Trust { cmd } => {
             if let Err(e) = commands::trust::run(cmd) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Keys { cmd } => {
+            if let Err(e) = commands::keys::run(cmd) {
                 eprintln!("Error: {e:#}");
                 std::process::exit(1);
             }

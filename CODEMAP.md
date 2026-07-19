@@ -1409,7 +1409,27 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **inputs**: `key_bytes: &[u8]`
 - **outputs**: `String`
 - **calls**: `sha2::Sha256::digest`
-- **called_by**: `rotate_master_key`
+- **called_by**: `rotate_master_key`, `master_key_fingerprint`
+- **mutates**: nothing
+
+### `MasterKeyFingerprintResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: Response for `GET /v1/admin/master-key/fingerprint`: fingerprint, master_key_path (`None` when sourced from `HSIP_MASTER_KEY`).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `master_key_fingerprint`
+- **mutates**: nothing
+
+### `master_key_fingerprint`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: `GET /v1/admin/master-key/fingerprint` — read-only, no mutation. Returns the SHA-256 fingerprint of the master key currently in use, gated by the same `require_root_admin` check as rotation. Exists so an operator can confirm a backup file matches production without either grepping logs or triggering an actual rotation.
+- **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`
+- **outputs**: `ApiResult<Json<MasterKeyFingerprintResponse>>`
+- **calls**: `require_root_admin`, `fingerprint`
+- **called_by**: Axum router
 - **mutates**: nothing
 
 ### `RotateMasterKeyResponse`
@@ -2261,7 +2281,7 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 ### `Commands`
 - **type**: enum
 - **file**: `crates/hsip-cli/src/main.rs`
-- **purpose**: Top-level clap subcommand enum: Keygen, Init, Export, Import, Consent, Session, Token, Discover, Reputation, Daemon, Audit, Agent, Trust, Up, Status, Diag.
+- **purpose**: Top-level clap subcommand enum: Keygen, Init, Export, Import, Consent, Session, Token, Discover, Reputation, Daemon, Audit, Agent, Trust, Keys, Up, Status, Diag.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -2727,6 +2747,70 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **called_by**: `run` (trust)
 - **mutates**: nothing
 
+
+---
+
+## `crates/hsip-cli/src/commands/keys.rs`
+
+### `KeysCmd`
+- **type**: enum
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Clap subcommand enum for `hsip keys`: MasterFingerprint, RotateMaster (with a `--yes` flag to skip the interactive confirmation prompt).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `run` (keys)
+- **mutates**: nothing
+
+### `FingerprintResponse` / `RotateResponse`
+- **type**: structs
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Deserialize `GET /v1/admin/master-key/fingerprint` and `POST /v1/admin/master-key/rotate` responses respectively.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `master_fingerprint`, `rotate_master`
+- **mutates**: nothing
+
+### `ApiClient` (keys)
+- **type**: struct
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Same `reqwest::blocking` wrapper pattern as `agent.rs`/`trust.rs`, `get`/`post` only (no `delete` — neither keys endpoint needs it). Uses `commands::util::load_admin_key()` — not a local copy.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `master_fingerprint`, `rotate_master`
+- **mutates**: nothing
+
+### `run` (keys)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Dispatches `KeysCmd` subcommands to `master_fingerprint` or `rotate_master`.
+- **inputs**: `cmd: KeysCmd`
+- **outputs**: `Result<()>`
+- **calls**: `master_fingerprint`, `rotate_master`
+- **called_by**: `main`
+- **mutates**: varies
+
+### `master_fingerprint`
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: `hsip keys master-fingerprint` — calls `GET /v1/admin/master-key/fingerprint`, prints the fingerprint, its source (file path or `HSIP_MASTER_KEY`), and the shell command to independently hash a local backup file for comparison.
+- **inputs**: `api_url: Option<String>`, `key: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `client.get`, `println!`
+- **called_by**: `run` (keys)
+- **mutates**: nothing
+
+### `rotate_master`
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: `hsip keys rotate-master` — unless `--yes`, prints what the operation does and requires typing `yes` at an interactive stdin prompt before calling `POST /v1/admin/master-key/rotate`. Built as a CLI command specifically because HSIP's original audience was non-technical users, for whom a security control only reachable via hand-rolled `curl` + bearer auth would be effectively unreachable; `--yes` keeps it scriptable for automated/scheduled rotation.
+- **inputs**: `api_url: Option<String>`, `key: Option<String>`, `yes: bool`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `std::io::stdin().read_line`, `client.post`, `println!`
+- **called_by**: `run` (keys)
+- **mutates**: DB (`identities`, `anchor_identity`) + master key file + in-memory key, via the API — this CLI process itself mutates nothing locally
 
 ---
 

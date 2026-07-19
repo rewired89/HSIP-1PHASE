@@ -957,3 +957,85 @@ async fn test_master_key_rotation_reencrypts_and_swaps_live_key() {
 
     let _ = std::fs::remove_file(&key_path);
 }
+
+/// `GET /v1/admin/master-key/fingerprint` must be read-only (no mutation,
+/// callable repeatedly, matches what rotation would report as the "old"
+/// fingerprint) and must enforce the same admin-only gate as rotation.
+#[tokio::test]
+async fn test_master_key_fingerprint_is_read_only_and_admin_gated() {
+    use sha2::{Digest, Sha256};
+
+    let (app, admin_key, db, key_path) = test_app_with_admin_and_key_file().await;
+
+    let expected_fingerprint = hex::encode(&Sha256::digest([5u8; 32])[..8]);
+
+    let res1 = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/admin/master-key/fingerprint")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+    let json1 = body_json(res1.into_body()).await;
+    assert_eq!(json1["fingerprint"], expected_fingerprint);
+    assert!(json1["master_key_path"].is_string());
+
+    // Calling it again must return the identical fingerprint — proof this
+    // endpoint doesn't mutate or rotate anything, unlike the POST endpoint.
+    let res2 = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/admin/master-key/fingerprint")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json2 = body_json(res2.into_body()).await;
+    assert_eq!(json1["fingerprint"], json2["fingerprint"]);
+
+    // A non-admin key (a second tenant, even one that also names its key
+    // "admin") must be rejected, same as rotation.
+    let other_tenant_id = uuid::Uuid::new_v4().to_string();
+    let other_raw_key = format!("hsip_{}", hex::encode([13u8; 32]));
+    let other_key_hash = hsip_api::auth::hash_key(&other_raw_key);
+    let now = hsip_api::db::now_ms();
+    use sqlx::Executor;
+    db.execute(
+        sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'other', ?)")
+            .bind(&other_tenant_id)
+            .bind(now),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        sqlx::query(
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+             VALUES (?, ?, ?, 'admin', 'human', ?, 1)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&other_tenant_id)
+        .bind(&other_key_hash)
+        .bind(now),
+    )
+    .await
+    .unwrap();
+
+    let denied_res = app
+        .oneshot(
+            Request::get("/v1/admin/master-key/fingerprint")
+                .header(header::AUTHORIZATION, bearer(&other_raw_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied_res.status(), StatusCode::UNAUTHORIZED);
+
+    let _ = std::fs::remove_file(&key_path);
+}
