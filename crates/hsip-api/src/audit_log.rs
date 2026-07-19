@@ -19,6 +19,7 @@
 //! `routes::decisions::record`: a conflict means another request extended
 //! this tenant's chain first, not a real error.
 
+use rand::Rng;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -26,6 +27,18 @@ use crate::db::Db;
 
 const MAX_ATTEMPTS: u32 = 5;
 const GENESIS_PREV_HASH: &str = "";
+
+/// Small randomized backoff between chain-write retry attempts. Without
+/// this, concurrent writers hitting the same tenant's chain would retry in
+/// a tight loop with no delay — fine at low contention, but at scale (a
+/// busy agent writing many entries/sec) that's a self-inflicted thundering
+/// herd instead of the DB naturally serializing the writers. Grows with
+/// attempt number; capped low because this blocks a live HTTP request.
+pub(crate) async fn chain_retry_backoff(attempt: u32) {
+    let base_ms = 2u64.saturating_mul(attempt as u64);
+    let jitter_ms = rand::thread_rng().gen_range(0..5);
+    tokio::time::sleep(std::time::Duration::from_millis(base_ms + jitter_ms)).await;
+}
 
 /// Appends one entry to `tenant_id`'s audit hash chain and returns its id.
 pub async fn record(
@@ -80,9 +93,13 @@ pub async fn record(
         match result {
             Ok(_) => return Ok(id),
             Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+                crate::metrics::CHAIN_WRITE_RETRIES
+                    .with_label_values(&["audit"])
+                    .inc();
                 if attempt == MAX_ATTEMPTS {
                     return Err(sqlx::Error::Database(db_err));
                 }
+                chain_retry_backoff(attempt).await;
                 continue;
             }
             Err(e) => return Err(e),

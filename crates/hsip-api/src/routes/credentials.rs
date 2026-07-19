@@ -112,7 +112,8 @@ pub async fn issue(
     }
 
     // C1: load and decrypt the signing key
-    let signing_key = load_signing_key(&state.db, &tenant.0, &state.master_key).await?;
+    let master_key = state.master_key.read().await;
+    let signing_key = load_signing_key(&state.db, &tenant.0, &master_key).await?;
     let verify_b64 = BASE64.encode(signing_key.verifying_key().to_bytes());
 
     let now = now_ms();

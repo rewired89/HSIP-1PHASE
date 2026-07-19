@@ -152,8 +152,22 @@ async fn run() -> Result<()> {
     // Initialize metrics
     metrics::init();
 
+    // HSIP_SANDBOX=true opens POST /v1/sandbox/provision — the one endpoint
+    // in this API that requires no bearer key at all. It's rate-limited and
+    // capped, but flip this on somewhere it shouldn't be and it's an open
+    // tenant/API-key mint. Make that impossible to miss at boot.
+    if std::env::var("HSIP_SANDBOX").as_deref() == Ok("true") {
+        tracing::warn!("╔══════════════════════════════════════════════════════════╗");
+        tracing::warn!("║  HSIP_SANDBOX=true — UNAUTHENTICATED PROVISIONING IS ON  ║");
+        tracing::warn!("║  POST /v1/sandbox/provision requires NO Authorization    ║");
+        tracing::warn!("║  header and mints a 24h trial tenant + API key for any   ║");
+        tracing::warn!("║  caller. Intended for a public demo deployment only.     ║");
+        tracing::warn!("║  Unset HSIP_SANDBOX if this is not that.                 ║");
+        tracing::warn!("╚══════════════════════════════════════════════════════════╝");
+    }
+
     // Load master encryption key
-    let master_key = load_master_key(&config.security.master_key_path)?;
+    let (master_key, master_key_path) = load_master_key(&config.security.master_key_path)?;
     tracing::info!("✓ Master encryption key loaded");
 
     // Initialize database
@@ -170,7 +184,7 @@ async fn run() -> Result<()> {
     // Bootstrap admin tenant and key
     bootstrap_admin(&db, &config.security.admin_key_path).await?;
 
-    let state = AppState::new(db, master_key);
+    let state = AppState::new_with_master_key_path(db, master_key, master_key_path);
 
     // Periodic decision-anchoring cycle: batches unanchored decisions into
     // an RFC 6962 Merkle tree and submits the root to OpenTimestamps on a
@@ -179,11 +193,16 @@ async fn run() -> Result<()> {
     // cycle is due — most ticks are a no-op.
     {
         let anchor_db = state.db.clone();
-        let anchor_master_key = state.master_key.clone();
+        let anchor_master_key_lock = state.master_key.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
             loop {
                 interval.tick().await;
+                // Snapshot the key rather than holding the lock for the
+                // cycle's duration (which includes network I/O to
+                // OpenTimestamps) — a rotation in progress would otherwise
+                // block behind a live anchor cycle for no reason.
+                let anchor_master_key = anchor_master_key_lock.read().await.clone();
                 match anchor_job::run_anchor_cycle(&anchor_db, &anchor_master_key).await {
                     Ok(Some(summary)) => {
                         tracing::info!(
@@ -357,7 +376,41 @@ fn init_logging(config: &Config) {
     }
 }
 
-fn load_master_key(path: &str) -> Result<Vec<u8>> {
+/// Loads the master encryption key. `HSIP_MASTER_KEY`, when set, takes
+/// precedence over the file at `path` — this is what makes the
+/// THREAT_MODEL.md-recommended mitigation for "master key lives on the
+/// filesystem" ("point HSIP_MASTER_KEY at a secrets manager") actually
+/// work. Previously nothing in the real startup path read that env var:
+/// `key_encryption::load_master_key()` was the only code that did, and it
+/// was `#[allow(dead_code)]` and never called.
+///
+/// Returns `(key_bytes, master_key_path)` — `master_key_path` is `Some`
+/// only when the key came from the file, since that's the only source this
+/// process can durably rewrite (used by the master-key rotation endpoint).
+/// When sourced from `HSIP_MASTER_KEY`, rotation must happen wherever that
+/// env var's value is managed (e.g. the secrets manager), not via this API.
+fn load_master_key(path: &str) -> Result<(Vec<u8>, Option<String>)> {
+    if let Ok(env_hex) = std::env::var("HSIP_MASTER_KEY") {
+        let env_hex = env_hex.trim();
+        if !env_hex.is_empty() {
+            let key_bytes =
+                hex::decode(env_hex).context("HSIP_MASTER_KEY must be valid hexadecimal")?;
+            if key_bytes.len() != 32 {
+                anyhow::bail!(
+                    "HSIP_MASTER_KEY must be exactly 32 bytes (64 hex characters), got {} bytes",
+                    key_bytes.len()
+                );
+            }
+            tracing::info!(
+                fingerprint = %master_key_fingerprint(&key_bytes),
+                "✓ Master key loaded from HSIP_MASTER_KEY env var — {} is not read and \
+                 cannot be rotated via the API while this is set",
+                path
+            );
+            return Ok((key_bytes, None));
+        }
+    }
+
     let key_hex = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read master key from: {}", path))?;
 
@@ -372,8 +425,25 @@ fn load_master_key(path: &str) -> Result<Vec<u8>> {
         );
     }
 
-    tracing::debug!("Master key loaded from: {}", path);
-    Ok(key_bytes)
+    tracing::info!(
+        fingerprint = %master_key_fingerprint(&key_bytes),
+        "Master key loaded from: {}", path
+    );
+    tracing::warn!(
+        "⚠️  Back up {} now. If this file is lost, every tenant's encrypted \
+         signing key becomes permanently unrecoverable — there is no other copy.",
+        path
+    );
+    Ok((key_bytes, Some(path.to_string())))
+}
+
+/// SHA-256 fingerprint of the master key, safe to log — lets an operator
+/// confirm a backup file matches the key actually in use without ever
+/// printing or transmitting the key itself.
+fn master_key_fingerprint(key_bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(key_bytes);
+    hex::encode(&digest[..8]) // first 8 bytes — enough to compare, not enough to help brute force
 }
 
 fn build_cors_layer(cors_config: &config::CorsConfig) -> CorsLayer {

@@ -281,14 +281,14 @@ HSIP uses audited [RustCrypto](https://github.com/RustCrypto) libraries througho
 ### Key storage architecture
 
 ```
-Master key → never touches disk
+Master key (file, or HSIP_MASTER_KEY from a secrets manager)
     ↓ HKDF-SHA-256 derivation
 Wrapping key
     ↓ ChaCha20-Poly1305 encryption
 Encrypted Ed25519 private key → stored in SQLite
 ```
 
-The master key lives only in memory (or at a configured path with filesystem permissions). Compromise of the database file does not expose private keys — an attacker also needs the master key. API keys are stored as SHA-256 hashes only; the raw key is shown once at creation and never stored.
+By default the master key lives in a file with restrictive filesystem permissions (`~/.hsip/master.key`, or a configured path); set `HSIP_MASTER_KEY` to source it from a secrets manager instead and keep it off this machine's disk entirely. Either way, compromise of the database file alone does not expose private keys — an attacker also needs the master key. `POST /v1/admin/master-key/rotate` can replace it live without a restart. API keys are stored as SHA-256 hashes only; the raw key is shown once at creation and never stored.
 
 ### Formal verification
 
@@ -456,20 +456,23 @@ cargo test --workspace
 
 Everything runs in a single binary for desktop/on-premise use. Switch to PostgreSQL and multi-tenancy for production financial deployments with no code changes — just a `config.toml`.
 
-16 specialized crates. 259 tests (`cargo test --workspace`; `hsip-verify` excluded, see above, has its own suite). RFC 8032 (Ed25519) + RFC 8439 (ChaCha20-Poly1305) + RFC 5869 (HKDF) + RFC 7748 (X25519) compliance verified. NIST FIPS 203 + 204 post-quantum algorithms available via `hsip-verify` (not part of the default build). Audited RustCrypto primitives throughout — no custom cryptography.
+16 specialized crates. 260 tests (`cargo test --workspace`; `hsip-verify` excluded, see above, has its own suite). RFC 8032 (Ed25519) + RFC 8439 (ChaCha20-Poly1305) + RFC 5869 (HKDF) + RFC 7748 (X25519) compliance verified. NIST FIPS 203 + 204 post-quantum algorithms available via `hsip-verify` (not part of the default build). Audited RustCrypto primitives throughout — no custom cryptography.
 
 ---
 
 ## Security
 
-- **Private keys encrypted at rest** — ChaCha20-Poly1305 + HKDF-SHA-256. Master key never touches disk. Compromise of the database file does not expose private keys.
+- **Private keys encrypted at rest** — ChaCha20-Poly1305 + HKDF-SHA-256. Compromise of the database file alone does not expose private keys — the master key is also required. By default the master key lives in a file on disk (`~/.hsip/master.key` or a configured path); point `HSIP_MASTER_KEY` at a secrets manager (Vault, AWS KMS, etc.) instead if you don't want that.
+- **Master key rotation** — `POST /v1/admin/master-key/rotate` (bootstrap admin key only) re-encrypts every identity under a fresh key and swaps it live, no restart. Previously there was no rotation path at all.
 - **API keys stored as SHA-256 hashes only** — raw key shown once at creation, never stored. Compromise of the database does not expose API credentials.
 - **Rate limiting on all endpoints** — 300 req/min default per key, configurable via `RATE_LIMIT_RPM`.
-- **AI agent velocity monitoring** — anomaly logged at >100 req/min; key auto-revoked at >1,000 req/min with immediate in-memory block before DB write.
+- **AI agent velocity monitoring** — anomaly logged at >100 req/min; key auto-revoked at >1,000 req/min with immediate in-memory block before DB write, and the DB write that makes revocation durable past a restart now retries with backoff and logs loudly if it still fails.
 - **Append-only, hash-chained audit trail** — no delete or update endpoint exists. Every entry extends a BLAKE3 hash chain (`GET /v1/audit/verify` recomputes and checks it). Tamper requires OS-level DB access, not just API access, and is detectable if attempted.
+- **Consent records who authorized it** — every grant/revoke stores which kind of key (human / service / ai_agent) did it, so "consent" can't quietly mean "an AI agent approved its own action" without that being visible.
 - **Replay attack prevention on the UDP session/consent protocol** — monotonic nonce counters (`hsip-core`) reject zero, previously-seen, and stale nonces. **This does not currently cover the HTTP REST API** — a captured HTTP request with a valid API key can be replayed until the key expires or is revoked; the mitigations there are the rate limiter and key expiry, not per-request nonces. See `THREAT_MODEL.md` §4.3.
 - **Instant revocation** — `pending_revocation` DashSet blocks in-flight requests in memory before the async DB write completes. No race window.
 - **No telemetry, no analytics, no phone-home** — ever. Verified by code review: no outbound connections except DNS forwarding (1.1.1.1:53) when the DNS blocker is enabled.
+- **`HSIP_SANDBOX=true` is loudly flagged** — it opens the one endpoint in the API requiring no bearer key at all (a rate-limited, capped, 24h trial provisioner meant for a public demo deployment). Enabling it logs an unmissable startup warning and increments a dedicated metric.
 - **Formal verification available for the protocol layer, not yet part of CI** — optional Z3 SMT solver module (`hsip-verify`) provides machine-checked proofs of security properties, not just tests. Excluded from the default workspace build (`cargo build`/`cargo test --workspace` don't touch it) — build and test it explicitly with `cargo build -p hsip-verify`.
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) for a full breakdown of what HSIP protects against and what it does not.

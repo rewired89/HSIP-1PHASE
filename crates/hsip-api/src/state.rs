@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 // ── Proxy traffic monitoring ──────────────────────────────────────────────────
 
@@ -93,8 +93,17 @@ pub struct AppState {
     pub agent_tracker: AgentTracker,
     pub rate_limiter: RateLimiter,
     pub pending_revocation: PendingRevocation,
-    /// Loaded once at startup from HSIP_MASTER_KEY env var.
-    pub master_key: Arc<Vec<u8>>,
+    /// Loaded at startup from `HSIP_MASTER_KEY` env var or the master key
+    /// file (see `main.rs::load_master_key`). Behind a lock, not a plain
+    /// `Arc<Vec<u8>>`, so `POST /v1/admin/master-key/rotate` can swap it for
+    /// every subsequent request without a restart.
+    pub master_key: Arc<RwLock<Vec<u8>>>,
+    /// File path the master key can be durably rewritten to, if any.
+    /// `None` when the key came from `HSIP_MASTER_KEY` — there's no file
+    /// this process owns to rewrite, so rotation via the API is refused in
+    /// that case (rotate the env var's source, e.g. the secrets manager,
+    /// instead).
+    pub master_key_path: Option<Arc<String>>,
     /// Optional running DNS resolver handle.
     pub dns: DnsState,
     /// HTTP/HTTPS proxy traffic state.
@@ -105,12 +114,21 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(db: Db, master_key: Vec<u8>) -> Self {
+        Self::new_with_master_key_path(db, master_key, None)
+    }
+
+    pub fn new_with_master_key_path(
+        db: Db,
+        master_key: Vec<u8>,
+        master_key_path: Option<String>,
+    ) -> Self {
         Self {
             db,
             agent_tracker: Arc::new(DashMap::new()),
             rate_limiter: Arc::new(DashMap::new()),
             pending_revocation: Arc::new(DashSet::new()),
-            master_key: Arc::new(master_key),
+            master_key: Arc::new(RwLock::new(master_key)),
+            master_key_path: master_key_path.map(Arc::new),
             dns: Arc::new(Mutex::new(None)),
             proxy: ProxyShared::new(),
             sandbox_rate: Arc::new(DashMap::new()),

@@ -1,7 +1,8 @@
 //! At-rest encryption for Ed25519 private signing keys.
 //!
-//! Uses ChaCha20-Poly1305 with a key derived from HSIP_MASTER_KEY env var.
-//! If HSIP_MASTER_KEY is not set the server will refuse to start.
+//! Uses ChaCha20-Poly1305 with a key derived from the master key (see
+//! `main.rs::load_master_key` for where that comes from — file or
+//! `HSIP_MASTER_KEY` env var).
 //!
 //! Encrypted format (Base64-encoded):
 //!   [ nonce(12 bytes) | ciphertext+tag(32+16 bytes) ]
@@ -21,26 +22,6 @@ fn derive_encryption_key(master_key: &[u8]) -> [u8; 32] {
     let mut okm = [0u8; 32];
     hk.expand(HKDF_INFO, &mut okm).expect("HKDF expand failed");
     okm
-}
-
-/// Load the master key from the HSIP_MASTER_KEY environment variable.
-/// Panics at startup if not set — do not call after startup.
-#[allow(dead_code)]
-pub fn load_master_key() -> Vec<u8> {
-    let val = std::env::var("HSIP_MASTER_KEY").unwrap_or_default();
-    if val.is_empty() {
-        eprintln!();
-        eprintln!("FATAL: HSIP_MASTER_KEY environment variable is not set.");
-        eprintln!("Generate one with:  openssl rand -hex 32");
-        eprintln!("Then set it:        export HSIP_MASTER_KEY=<value>");
-        eprintln!();
-        std::process::exit(1);
-    }
-    hex::decode(&val).unwrap_or_else(|_| {
-        eprintln!("FATAL: HSIP_MASTER_KEY must be a hex-encoded 32-byte value.");
-        eprintln!("Generate one with:  openssl rand -hex 32");
-        std::process::exit(1);
-    })
 }
 
 /// Encrypt a 32-byte Ed25519 signing key.

@@ -205,13 +205,74 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
         let kid = key_id.to_string();
         let tid = tenant_id.to_string();
         tokio::task::spawn(async move {
-            let _ = sqlx::query("UPDATE api_keys SET active=0 WHERE id=?")
-                .bind(&kid)
-                .execute(&db)
+            // `pending_revocation` (in-memory, already set above) is what's
+            // actually blocking this key right now. This DB write is what
+            // makes that durable past a process restart. It was previously
+            // fire-and-forget with errors discarded — if it failed or the
+            // process crashed before it landed, the key would silently
+            // become valid again on restart with no record of why. Retry a
+            // few times and, if it still fails, say so loudly instead of
+            // staying silent about a security-relevant write that didn't
+            // happen.
+            let mut revoked = false;
+            for attempt in 1..=3u32 {
+                match sqlx::query("UPDATE api_keys SET active=0 WHERE id=?")
+                    .bind(&kid)
+                    .execute(&db)
+                    .await
+                {
+                    Ok(_) => {
+                        revoked = true;
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            key_id = %kid, attempt, error = %e,
+                            "auto-revoke DB write failed, retrying"
+                        );
+                        if attempt < 3 {
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                100 * attempt as u64,
+                            ))
+                            .await;
+                        }
+                    }
+                }
+            }
+
+            if revoked {
+                let _ = crate::audit_log::record(
+                    &db,
+                    &tid,
+                    "agent.auto_revoked",
+                    None,
+                    Some(&kid),
+                    now,
+                )
                 .await;
-            let _ =
-                crate::audit_log::record(&db, &tid, "agent.auto_revoked", None, Some(&kid), now)
-                    .await;
+            } else {
+                metrics::AGENT_ANOMALIES
+                    .with_label_values(&["auto_revoke_db_write_failed"])
+                    .inc();
+                tracing::error!(
+                    key_id = %kid, tenant_id = %tid,
+                    "AUTO-REVOKE DB WRITE FAILED after 3 attempts — key {kid} is blocked \
+                     in-memory only (pending_revocation) and will silently become valid \
+                     again on process restart until this DB write succeeds. Check DB \
+                     connectivity now."
+                );
+                // Best-effort: still try to leave a trace even though the
+                // revocation itself didn't land.
+                let _ = crate::audit_log::record(
+                    &db,
+                    &tid,
+                    "agent.auto_revoke_failed",
+                    None,
+                    Some(&kid),
+                    now,
+                )
+                .await;
+            }
         });
         tracing::error!(key_id=%key_id, count=%count, "AI agent auto-revoked: hard limit exceeded");
     }

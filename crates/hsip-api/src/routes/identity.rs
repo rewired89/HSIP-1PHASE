@@ -42,7 +42,10 @@ pub async fn create_or_get(
     let signing_key = SigningKey::generate(&mut OsRng);
     let verify_key = signing_key.verifying_key();
     // C1: encrypt the private key before storing
-    let encrypted_b64 = encrypt_signing_key(&signing_key.to_bytes(), &state.master_key);
+    let encrypted_b64 = {
+        let master_key = state.master_key.read().await;
+        encrypt_signing_key(&signing_key.to_bytes(), &master_key)
+    };
     let verify_b64 = BASE64.encode(verify_key.to_bytes());
     let now = now_ms();
 
@@ -119,7 +122,10 @@ pub async fn rotate(
     // Generate new keypair
     let new_signing_key = SigningKey::generate(&mut OsRng);
     let new_verify_key = new_signing_key.verifying_key();
-    let new_encrypted = encrypt_signing_key(&new_signing_key.to_bytes(), &state.master_key);
+    let new_encrypted = {
+        let master_key = state.master_key.read().await;
+        encrypt_signing_key(&new_signing_key.to_bytes(), &master_key)
+    };
     let new_verify_b64 = BASE64.encode(new_verify_key.to_bytes());
     let now = now_ms();
 

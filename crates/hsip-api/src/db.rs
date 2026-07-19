@@ -122,11 +122,19 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             expires_ms       INTEGER,
             revoked_at       INTEGER,
             created_at       INTEGER NOT NULL,
+            granted_by_key_type TEXT,
             UNIQUE(tenant_id, peer_verify_key)
         )",
     )
     .execute(pool)
     .await?;
+
+    // Non-fatal: column may already exist on upgraded databases. Distinguishes
+    // whether a consent grant was authorized by a human key, a service key, or
+    // an ai_agent key acting on its own behalf — NULL for pre-migration rows.
+    let _ = sqlx::query("ALTER TABLE consents ADD COLUMN granted_by_key_type TEXT")
+        .execute(pool)
+        .await;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS messages (

@@ -113,6 +113,63 @@ async fn test_app_with_db() -> (axum::Router, String, hsip_api::db::Db, Vec<u8>)
     (app, raw_key, db, master_key)
 }
 
+/// Like `test_app`, but the bootstrap key is named `admin` (matching
+/// `main.rs::bootstrap_admin`'s convention) in the *first* tenant created,
+/// and the master key is backed by a real temp file rather than an in-memory
+/// `Vec<u8>` — needed to exercise `POST /v1/admin/master-key/rotate`, which
+/// refuses to run unless `state.master_key_path` is `Some`.
+async fn test_app_with_admin_and_key_file(
+) -> (axum::Router, String, hsip_api::db::Db, std::path::PathBuf) {
+    let db_url = format!(
+        "sqlite:file:{}?mode=memory&cache=shared",
+        uuid::Uuid::new_v4()
+    );
+    sqlx::any::install_default_drivers();
+    let db = hsip_api::db::init(&db_url).await.expect("db init");
+
+    let tenant_id = uuid::Uuid::new_v4().to_string();
+    let raw_key = format!("hsip_{}", hex::encode([3u8; 32]));
+    let key_hash = hsip_api::auth::hash_key(&raw_key);
+    let key_id = uuid::Uuid::new_v4().to_string();
+    let now = hsip_api::db::now_ms();
+
+    use sqlx::Executor;
+    db.execute(
+        sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'default', ?)")
+            .bind(&tenant_id)
+            .bind(now),
+    )
+    .await
+    .unwrap();
+
+    db.execute(
+        sqlx::query(
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+             VALUES (?, ?, ?, 'admin', 'human', ?, 1)",
+        )
+        .bind(&key_id)
+        .bind(&tenant_id)
+        .bind(&key_hash)
+        .bind(now),
+    )
+    .await
+    .unwrap();
+
+    let master_key = vec![5u8; 32];
+    let key_path =
+        std::env::temp_dir().join(format!("hsip-test-master-{}.key", uuid::Uuid::new_v4()));
+    std::fs::write(&key_path, hex::encode(&master_key)).expect("write test master key file");
+
+    let state = hsip_api::state::AppState::new_with_master_key_path(
+        db.clone(),
+        master_key,
+        Some(key_path.to_string_lossy().into_owned()),
+    );
+    let app = hsip_api::routes::router().with_state(state);
+
+    (app, raw_key, db, key_path)
+}
+
 async fn body_json(body: axum::body::Body) -> serde_json::Value {
     let bytes = body.collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
@@ -267,6 +324,8 @@ async fn test_consent_grant_and_revoke() {
     assert_eq!(grant_res.status(), StatusCode::OK);
     let j = body_json(grant_res.into_body()).await;
     assert_eq!(j["status"], "granted");
+    // The "ignored actor" fix: consent records which kind of key authorized it.
+    assert_eq!(j["granted_by_key_type"], "human");
 
     let revoke_res = app
         .oneshot(
@@ -745,4 +804,156 @@ async fn test_audit_chain_verify_detects_valid_and_tampered_chains() {
     let tampered_json: serde_json::Value = body_json(tampered_res.into_body()).await;
     assert_eq!(tampered_json["valid"], false);
     assert!(tampered_json["first_break_id"].is_string());
+}
+
+/// Master key rotation must actually re-encrypt every identity under a new
+/// key (not silently no-op), must swap the in-memory key used by every
+/// subsequent request without a restart, must durably rewrite the key file,
+/// and must refuse anyone who isn't the bootstrap admin key.
+#[tokio::test]
+async fn test_master_key_rotation_reencrypts_and_swaps_live_key() {
+    let (app, admin_key, db, key_path) = test_app_with_admin_and_key_file().await;
+
+    // Create an identity under the original master key.
+    let ident_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ident_res.status(), StatusCode::OK);
+    let ident_json = body_json(ident_res.into_body()).await;
+    let verify_key_before = ident_json["verify_key"].as_str().unwrap().to_string();
+
+    // Capture the ciphertext as stored before rotation.
+    use sqlx::Row;
+    let row_before = sqlx::query("SELECT signing_key_b64 FROM identities LIMIT 1")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let ciphertext_before: String = row_before.try_get(0).unwrap();
+
+    // A non-admin key in a *second* tenant must be rejected.
+    let other_tenant_id = uuid::Uuid::new_v4().to_string();
+    let other_raw_key = format!("hsip_{}", hex::encode([11u8; 32]));
+    let other_key_hash = hsip_api::auth::hash_key(&other_raw_key);
+    let now = hsip_api::db::now_ms();
+    use sqlx::Executor;
+    db.execute(
+        sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'other', ?)")
+            .bind(&other_tenant_id)
+            .bind(now),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        sqlx::query(
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+             VALUES (?, ?, ?, 'admin', 'human', ?, 1)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&other_tenant_id)
+        .bind(&other_key_hash)
+        .bind(now),
+    )
+    .await
+    .unwrap();
+
+    let denied_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/admin/master-key/rotate")
+                .header(header::AUTHORIZATION, bearer(&other_raw_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        denied_res.status(),
+        StatusCode::UNAUTHORIZED,
+        "a key named 'admin' in a non-root tenant must not be able to rotate the master key"
+    );
+
+    // The real admin key rotates successfully.
+    let rotate_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/admin/master-key/rotate")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotate_res.status(), StatusCode::OK);
+    let rotate_json = body_json(rotate_res.into_body()).await;
+    assert_eq!(rotate_json["identities_reencrypted"], 1);
+    assert_ne!(
+        rotate_json["old_key_fingerprint"],
+        rotate_json["new_key_fingerprint"]
+    );
+
+    // The key file on disk must now hold the new key, not the old one.
+    let new_key_hex = std::fs::read_to_string(&key_path).unwrap();
+    let new_key_bytes = hex::decode(new_key_hex.trim()).unwrap();
+    assert_ne!(
+        new_key_bytes,
+        vec![5u8; 32],
+        "master key file was not actually rewritten"
+    );
+
+    // The stored ciphertext must have changed, and must now be undecryptable
+    // under the *old* key but decryptable under the key now on disk — proof
+    // this was a real re-encryption, not a no-op.
+    let row_after = sqlx::query("SELECT signing_key_b64 FROM identities WHERE tenant_id != ?")
+        .bind(&other_tenant_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let ciphertext_after: String = row_after.try_get(0).unwrap();
+    assert_ne!(ciphertext_before, ciphertext_after);
+    assert!(
+        hsip_api::key_encryption::decrypt_signing_key(&ciphertext_after, &vec![5u8; 32]).is_err(),
+        "old master key must no longer decrypt the re-encrypted identity"
+    );
+    assert!(
+        hsip_api::key_encryption::decrypt_signing_key(&ciphertext_after, &new_key_bytes).is_ok(),
+        "the key now on disk must decrypt the re-encrypted identity"
+    );
+
+    // Signing must keep working transparently on the *same running process*
+    // — proves the in-memory key was swapped, not just the DB and file.
+    let sign_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/messages/sign")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"content":"still works post-rotation"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sign_res.status(), StatusCode::OK);
+
+    // Identity's public verify key is unchanged — rotation re-encrypts the
+    // existing private key, it does not generate a new keypair.
+    let ident_res2 = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_json2 = body_json(ident_res2.into_body()).await;
+    assert_eq!(ident_json2["verify_key"], verify_key_before);
+
+    let _ = std::fs::remove_file(&key_path);
 }

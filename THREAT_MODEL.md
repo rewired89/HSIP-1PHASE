@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.4-draft  
+**Version:** 0.5-draft  
 **Date:** 2026-07-19  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -190,6 +190,30 @@ Every cryptographic operation uses a published, independently reviewed library:
 
 HSIP does not implement any cryptographic algorithm from scratch. The only glue code is key derivation setup, nonce generation, and encode/decode — approximately 90 lines in `key_encryption.rs`, auditable in a single file.
 
+### 4.12 Consent Records Which Kind of Key Authorized It
+
+HSIP's audit and consent APIs previously tracked *that* an action happened, but not *what kind of principal* authorized it. In particular, `POST /v1/consent/grant` — the one endpoint whose entire purpose is representing authorization — recorded a consent grant identically whether a human operator called it or an `ai_agent` key called it to approve its own action. For a product whose stated purpose includes AI agent governance, that's a meaningful gap: "consent" that can't distinguish a person from the agent it's supposed to be governing is a weaker claim than it sounds.
+
+Every consent grant/revoke now resolves the authenticated key's `agent_type` (`human` | `service` | `ai_agent`) and stores it on the row (`granted_by_key_type`) and in the audit entry (`granted_by=`/`revoked_by=` in `details`). This does not stop an `ai_agent` key from granting consent on its own behalf — that may be a legitimate use case — but it makes that fact visible and queryable instead of indistinguishable from a human-authorized grant.
+
+**Scope limitation:** this is provenance, not a policy engine. HSIP does not (yet) let a tenant require that certain consent scopes can only be granted by a `human` key — it only records which kind of key did it. Enforcing that distinction, if wanted, is an application-layer decision on top of this field.
+
+*Source: `crates/hsip-api/src/routes/consent.rs::resolve_granting_key_type`*
+
+### 4.13 Master Key Rotation
+
+Until this revision, the master key that encrypts every tenant's Ed25519 signing key (§4.1) had no rotation mechanism at all — it was loaded once at process startup and lived for the lifetime of the deployment. That's a real gap for any operator with a key-rotation compliance requirement, and it meant the master key was a security asset that, unlike tenant signing keys (`POST /v1/identity/rotate` has existed since the decision-attestation work), could only ever be replaced by re-provisioning the entire deployment from scratch.
+
+`POST /v1/admin/master-key/rotate` re-encrypts every `identities.signing_key_b64` row and the singleton `anchor_identity` row under a freshly generated key inside one database transaction, then durably persists the new key to disk (staging file + `fsync` + atomic rename) and swaps it into the running process's memory — no restart, no downtime for other tenants' non-identity operations.
+
+**Authorization:** gated to the bootstrap admin key specifically (see §5's note on the admin trust boundary below) — this is a system-wide operation touching every tenant's identity, not a tenant-scoped one.
+
+**Residual risk:** a `state.master_key.write().await` lock is held for the entire rotation, serializing it against every concurrent signing/encryption operation — a brief, deliberate stop-the-world rather than a narrow, hard-to-reproduce corruption window. Separately, if the process crashes in the exact gap between the DB transaction committing and the key-file rename completing, the DB holds ciphertext under the new key while the on-disk file still has the old one; the staging file is deliberately left in place (not cleaned up) specifically so an operator can complete that rename manually rather than face silent, undetected data loss. This is the same category of residual risk this document already documents for decision-attestation anchoring (§ Decision Attestations trust model in `CLAUDE.md`) — narrow, acknowledged, and recoverable, not eliminated.
+
+**Not yet covered:** rotation via the API is unavailable when the master key is sourced from `HSIP_MASTER_KEY` (no file this process can rewrite) — that path must be rotated wherever the env var's value is managed (e.g. the secrets manager), followed by a restart.
+
+*Source: `crates/hsip-api/src/routes/admin.rs`*
+
 ---
 
 ## 5. Trust Boundaries
@@ -200,7 +224,7 @@ HSIP does not implement any cryptographic algorithm from scratch. The only glue 
 | HSIP server → SQLite | Trusted | Database must not be publicly accessible |
 | Master key storage → HSIP server | Critical | Compromise = all signing keys exposed |
 | Tenant A ↔ Tenant B | Untrusted | Isolated by `tenant_id` on every query |
-| Admin key holder | Full | Can provision all tenant keys — protect carefully |
+| Admin key holder (bootstrap tenant, key named `admin`) | Full — now including master key rotation | Can provision all tenant keys and, as of §4.13, rotate the node's master key (a system-wide operation touching every tenant's identity). This is a single global admin tied to the first tenant ever created, not a real RBAC system — protect this key like the master key itself. |
 | AI agent key holder | Scoped | Velocity-limited, auto-revoked at 1000 req/min |
 | Trusted peer (federated trust) | Explicit | Verify key manually registered; messages verified locally |
 
@@ -218,8 +242,8 @@ The following are **explicitly out of scope**. They must be addressed at the inf
 | **Network-layer DDoS** | HSIP has per-key rate limiting but no IP-level flood protection | Reverse proxy or CDN in front for public deployments |
 | **Side-channel attacks** | No constant-time guarantees outside what `ed25519-dalek` and `chacha20poly1305` provide | Not a realistic concern for network-connected deployments |
 | **Consent coercion** | HSIP enforces cryptographic consent, not voluntary human consent | Application-layer UX and legal controls |
-| **Master key loss** | If `master.key` is lost, all encrypted signing keys are permanently unrecoverable | Back up the master key; use secrets manager |
-| **HSM-backed key storage** | Master key lives on the filesystem | Point `HSIP_MASTER_KEY` at a secrets manager (Vault, AWS KMS) |
+| **Master key loss** | If `master.key` is lost, all encrypted signing keys are permanently unrecoverable | Back up the master key (a startup warning now reminds you to); `POST /v1/admin/master-key/rotate` (§4.13) lets you *replace* a still-available key on a schedule, which reduces how long any one key's loss would matter, but does not help if the current key is already gone — that's still unrecoverable |
+| **HSM-backed key storage** | Master key lives on the filesystem by default | Point `HSIP_MASTER_KEY` at a secrets manager (Vault, AWS KMS) — **this now actually works**; previously the only code path that read `HSIP_MASTER_KEY` was dead code nothing called, so this documented mitigation was not functional. Fixed — see `main.rs::load_master_key`. |
 | **Post-quantum adversaries (current Ed25519)** | Ed25519 is not quantum-safe | ML-KEM-768 + ML-DSA-65 available via `hsip-verify` for environments requiring it |
 | **Social engineering** | If an admin is phished, HSIP cannot detect it | Operational security, 2FA on the server, key rotation |
 
@@ -233,7 +257,8 @@ Documented openly. Tracked for the v1.0 audit milestone.
 |---|---|---|
 | No third-party security audit | Medium | Planned before v1.0. Codebase is open source and auditable now. |
 | **Single maintainer, no succession plan** | Medium | Relevant to any team evaluating HSIP for compliance-grade audit trails: patch timelines and long-term availability are best-effort, not contractual (see §9). No code fix for this — flagged here for buyer due diligence, not left implicit in the disclosure section alone. |
-| Master key on filesystem (no HSM) | Medium | Use `HSIP_MASTER_KEY` env var + external secrets manager for production |
+| Master key on filesystem (no HSM) | Medium | Use `HSIP_MASTER_KEY` env var + external secrets manager for production — now functional, see §6 |
+| **Single global admin model** | Low-Medium | `routes::admin::require_root_admin` (§4.13) authorizes master key rotation to exactly one key: the one named `admin` in the first tenant ever created. There is no RBAC, no multiple admins, no scoped permissions — the bootstrap admin key is a de facto root credential for one system-wide operation today, and any future node-level operation would need the same treatment or a real permissions model. |
 | **SQLite → PostgreSQL migration path is undocumented and untested** | Medium | `DATABASE_URL` pointing at PostgreSQL is supported by `db.rs`'s `AnyPool`, but no migration tooling or tested procedure exists for moving an existing SQLite deployment's data over. Treat a PostgreSQL deployment as a fresh install, not an upgrade, until this is tested. |
 | **OpenTimestamps calendar submission unverified end-to-end** | Medium | `anchor.rs`'s HTTP client logic is unit-tested against a mock server only. Outbound HTTPS to `*.calendar.opentimestamps.org` has been confirmed blocked in every sandboxed environment this project has been developed in to date (including this session's, via a 403 on the CONNECT tunnel) — real-network submission has never been observed to complete. Verify from an unrestricted network before relying on it for compliance purposes. |
 | In-memory rate limiter resets on restart | Low | A burst attack timed around a restart or deploy can temporarily exceed rate limits |
@@ -253,6 +278,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Formal verification of protocol properties | `hsip-verify` crate uses Z3 SMT solver for cryptographic protocol proofs. **Excluded from the workspace build and from `cargo test --workspace`** — its guarantees do not currently run in CI. |
 | RFC compliance test vectors | RFC 8439 (ChaCha20-Poly1305), RFC 8032 (Ed25519) vectors pass in CI |
 | Audit log hash chain integrity | Covered by `hsip-api/tests/integration.rs::test_audit_chain_verify_detects_valid_and_tampered_chains` — writes a chain, verifies it, then directly tampers with a row via SQL (simulating OS-level DB compromise) and confirms `GET /v1/audit/verify` detects it. |
+| Master key rotation | Covered by `hsip-api/tests/integration.rs::test_master_key_rotation_reencrypts_and_swaps_live_key` — proves actual re-encryption (old key stops decrypting, the key now on disk decrypts), live in-memory key swap on the *same running process* (not just DB/file state), and rejection of a non-root-admin key. |
 | Dependency vulnerability scanning | `cargo audit` runs on every build |
 | Minimum supported Rust version | 1.88.0 |
 

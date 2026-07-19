@@ -113,6 +113,8 @@ pub async fn provision(
     )
     .await?;
 
+    crate::metrics::SANDBOX_PROVISIONS.inc();
+
     let base_url =
         std::env::var("HSIP_PUBLIC_URL").unwrap_or_else(|_| "https://demo.hsip.io".to_string());
 

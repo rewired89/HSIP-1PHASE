@@ -172,6 +172,7 @@ pub async fn run_anchor_cycle_with_calendars(
                 "OpenTimestamps submission failed for this anchor batch; \
                  local Merkle anchoring proceeds, external anchoring will retry next cycle"
             );
+            metrics::ANCHOR_CALENDAR_UNREACHABLE.inc();
             (None, "calendar_unreachable".to_string())
         }
     };
@@ -278,6 +279,7 @@ async fn retry_pending_ots_submissions(db: &Db, calendars: &[&str]) {
             }
             Err(e) => {
                 tracing::debug!(anchor_id = %anchor_id, error = %e, "OpenTimestamps retry still failing");
+                metrics::ANCHOR_CALENDAR_UNREACHABLE.inc();
             }
         }
     }
