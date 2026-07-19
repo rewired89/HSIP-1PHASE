@@ -42,6 +42,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/credentials/:id/revoke", delete(credentials::revoke))
         // Audit
         .route("/v1/audit", get(audit::list))
+        .route("/v1/audit/verify", get(audit::verify_chain))
         // API Keys
         .route("/v1/keys", get(keys::list))
         .route("/v1/keys", post(keys::create))
@@ -52,6 +53,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/contacts/:id", delete(contacts::remove))
         // AI Agents
         .route("/v1/agents", get(agents::list))
+        .route("/v1/agents/discover", get(agents::discover))
         .route("/v1/agent/capabilities", get(agents::capabilities))
         // Tenant
         .route("/v1/tenant", get(tenant::info))

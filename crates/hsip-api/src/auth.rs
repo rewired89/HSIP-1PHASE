@@ -9,7 +9,6 @@ use axum::http::request::Parts;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::sync::atomic::Ordering;
-use uuid::Uuid;
 
 // AI agent anomaly/revoke thresholds (requests per 60s window)
 const ANOMALY_THRESHOLD: u64 = 100;
@@ -179,16 +178,14 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
         let kid = key_id.to_string();
         let tid = tenant_id.to_string();
         tokio::task::spawn(async move {
-            let id = Uuid::new_v4().to_string();
-            let _ = sqlx::query(
-                "INSERT INTO audit_entries (id,tenant_id,action,details,timestamp)
-                 VALUES (?,?,'agent.anomaly_detected',?,?)",
+            let _ = crate::audit_log::record(
+                &db,
+                &tid,
+                "agent.anomaly_detected",
+                None,
+                Some(&kid),
+                now,
             )
-            .bind(&id)
-            .bind(&tid)
-            .bind(&kid)
-            .bind(now)
-            .execute(&db)
             .await;
         });
         tracing::warn!(key_id=%key_id, count=%count, "AI agent anomaly: threshold exceeded");
@@ -212,17 +209,9 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
                 .bind(&kid)
                 .execute(&db)
                 .await;
-            let id = Uuid::new_v4().to_string();
-            let _ = sqlx::query(
-                "INSERT INTO audit_entries (id,tenant_id,action,details,timestamp)
-                 VALUES (?,?,'agent.auto_revoked',?,?)",
-            )
-            .bind(&id)
-            .bind(&tid)
-            .bind(&kid)
-            .bind(now)
-            .execute(&db)
-            .await;
+            let _ =
+                crate::audit_log::record(&db, &tid, "agent.auto_revoked", None, Some(&kid), now)
+                    .await;
         });
         tracing::error!(key_id=%key_id, count=%count, "AI agent auto-revoked: hard limit exceeded");
     }

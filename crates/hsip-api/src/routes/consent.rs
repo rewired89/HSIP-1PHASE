@@ -108,17 +108,14 @@ pub async fn grant(
     .execute(&state.db)
     .await?;
 
-    let audit_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, details, timestamp)
-         VALUES (?, ?, 'consent.granted', ?, ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "consent.granted",
+        Some(&req.peer_verify_key),
+        Some(&format!("expires_at={exp}")),
+        now,
     )
-    .bind(&audit_id)
-    .bind(&tenant.0)
-    .bind(&req.peer_verify_key)
-    .bind(format!("expires_at={exp}"))
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(ConsentRecord {
@@ -168,16 +165,14 @@ pub async fn revoke(
     .fetch_one(&state.db)
     .await?;
 
-    let audit_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, timestamp)
-         VALUES (?, ?, 'consent.revoked', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "consent.revoked",
+        Some(&req.peer_verify_key),
+        None,
+        now,
     )
-    .bind(&audit_id)
-    .bind(&tenant.0)
-    .bind(&req.peer_verify_key)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(ConsentRecord {

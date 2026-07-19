@@ -343,6 +343,60 @@
 
 ---
 
+## `crates/hsip-api/src/audit_log.rs`
+
+### `record` (audit_log)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: The only sanctioned way to write to `audit_entries`. Reads the tenant's current chain tip (`entry_hash`), computes the new row's `entry_hash = BLAKE3(prev_hash || id || tenant_id || action || peer_verify_key || details || timestamp)`, and inserts. Retries up to `MAX_ATTEMPTS` on a `UNIQUE(tenant_id, prev_hash)` conflict — another concurrent writer extended the chain first, not a real error — mirroring `routes::decisions::record`'s pattern.
+- **inputs**: `db: &Db`, `tenant_id: &str`, `action: &str`, `peer_verify_key: Option<&str>`, `details: Option<&str>`, `timestamp: i64`
+- **outputs**: `Result<String, sqlx::Error>` (the new entry's id)
+- **calls**: `sqlx::query`, `compute_entry_hash`
+- **called_by**: every route handler and background task that writes an audit entry (`consent`, `credentials`, `identity`, `messages`, `trust`, `decisions`, `sandbox`, `auth::check_agent_velocity`, `anchor_job::run_anchor_cycle_with_calendars`)
+- **mutates**: `audit_entries` table
+
+### `compute_entry_hash`
+- **type**: function
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: Computes one entry's BLAKE3 hash from its chain-linked fields, with `0x00`-byte field separators to avoid concatenation-ambiguity collisions (e.g. `"ab"+"c"` vs `"a"+"bc"`).
+- **inputs**: `prev_hash`, `id`, `tenant_id`, `action`, `peer_verify_key`, `details`, `timestamp`
+- **outputs**: `String` (hex-encoded BLAKE3 digest)
+- **calls**: `blake3::Hasher`
+- **called_by**: `record` (audit_log), `verify_chain` (audit_log)
+- **mutates**: nothing
+
+### `ChainRow`
+- **type**: struct
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: One audit row as read back from the DB for chain verification — mirrors `audit_entries` columns.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `routes::audit::verify_chain`, `verify_chain` (audit_log)
+- **mutates**: nothing
+
+### `VerifyResult`
+- **type**: struct
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: Result of walking a tenant's chain: valid, checked (chained entries confirmed), unchained (pre-migration entries skipped), first_break_id.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `verify_chain` (audit_log)
+- **mutates**: nothing
+
+### `verify_chain` (audit_log)
+- **type**: function
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: Recomputes and checks a hash chain over pre-sorted (`ORDER BY timestamp ASC`) rows. Rows with NULL `entry_hash` (pre-migration) are counted in `unchained` and skipped rather than treated as breaks; any `prev_hash` mismatch or recomputed-hash mismatch stops at the first broken entry.
+- **inputs**: `rows: &[ChainRow]`
+- **outputs**: `VerifyResult`
+- **calls**: `compute_entry_hash`
+- **called_by**: `routes::audit::verify_chain`
+- **mutates**: nothing
+
+---
+
 ## `crates/hsip-api/src/auth.rs`
 
 ### `TenantId`
@@ -381,7 +435,7 @@
 - **purpose**: For `ai_agent` keys: logs anomaly audit entry if >100 req/min, auto-revokes key if >1000 req/min.
 - **inputs**: `key_hash: &str`, `key_id: &str`, `tenant_id: &str`, `agent_tracker: &AgentTracker`, `db: &Db`
 - **outputs**: `Result<(), ApiError>`
-- **calls**: `AgentTracker::entry`, `sqlx::query` (audit insert, key revoke)
+- **calls**: `AgentTracker::entry`, `sqlx::query` (key revoke), `audit_log::record`
 - **called_by**: `TenantId::from_request_parts`
 - **mutates**: `agent_tracker` DashMap, DB (`api_keys` revocation, `audit_entries`)
 
@@ -452,7 +506,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity). `decision_anchors` holds one row per RFC 6962 Merkle batch (root, signature, OpenTimestamps proof/status). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity). `decision_anchors` holds one row per RFC 6962 Merkle batch (root, signature, OpenTimestamps proof/status). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -871,7 +925,7 @@
 - **purpose**: `POST /v1/identity` — creates a new Ed25519 keypair for the tenant if one doesn't exist, encrypts the signing key, stores it, returns verify key.
 - **inputs**: `State(state): State<AppState>`, `tenant: TenantId`
 - **outputs**: `ApiResult<Json<IdentityResponse>>`
-- **calls**: `ed25519_dalek::SigningKey::generate`, `encrypt_signing_key`, `sqlx::query`
+- **calls**: `ed25519_dalek::SigningKey::generate`, `encrypt_signing_key`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`identities`), writes audit entry
 
@@ -891,7 +945,7 @@
 - **purpose**: `POST /v1/identity/rotate` — generates new Ed25519 keypair, replaces existing in DB, writes audit entry.
 - **inputs**: `State(state): State<AppState>`, `tenant: TenantId`
 - **outputs**: `ApiResult<Json<IdentityResponse>>`
-- **calls**: `ed25519_dalek::SigningKey::generate`, `encrypt_signing_key`, `sqlx::query`
+- **calls**: `ed25519_dalek::SigningKey::generate`, `encrypt_signing_key`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`identities`), audit entry
 
@@ -975,7 +1029,7 @@
 - **purpose**: `POST /v1/consent/grant` — upserts consent record with status `granted`, writes audit entry.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<ConsentRecord>>`
-- **calls**: `validate_peer_key`, `sqlx::query`, `now_ms`
+- **calls**: `validate_peer_key`, `sqlx::query`, `now_ms`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`consents`, `audit_entries`)
 
@@ -985,7 +1039,7 @@
 - **purpose**: `POST /v1/consent/revoke` — updates consent status to `revoked`, writes audit entry.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<ConsentRecord>>`
-- **calls**: `validate_peer_key`, `sqlx::query`
+- **calls**: `validate_peer_key`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`consents`, `audit_entries`)
 
@@ -1069,7 +1123,7 @@
 - **purpose**: `POST /v1/messages/sign` — signs content with tenant's Ed25519 key, stores record, increments MESSAGES_SIGNED counter, writes audit entry.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<SignResponse>>`
-- **calls**: `load_signing_key`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `metrics::MESSAGES_SIGNED.inc`
+- **calls**: `load_signing_key`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `audit_log::record`, `metrics::MESSAGES_SIGNED.inc`
 - **called_by**: Axum router
 - **mutates**: DB (`messages`, `audit_entries`)
 
@@ -1079,7 +1133,7 @@
 - **purpose**: `POST /v1/messages/verify` — verifies an Ed25519 signature against provided content and verify key.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<VerifyResponse>>`
-- **calls**: `ed25519_dalek::VerifyingKey::verify_strict`
+- **calls**: `ed25519_dalek::VerifyingKey::verify_strict`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: nothing
 
@@ -1154,7 +1208,7 @@
 - **purpose**: `POST /v1/credentials` — creates, signs, and stores a verifiable credential; increments CREDENTIALS_ISSUED metric.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<IssueResponse>>`
-- **calls**: `load_signing_key`, `canonical_json`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `metrics::CREDENTIALS_ISSUED.inc`
+- **calls**: `load_signing_key`, `canonical_json`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `audit_log::record`, `metrics::CREDENTIALS_ISSUED.inc`
 - **called_by**: Axum router
 - **mutates**: DB (`credentials`, `audit_entries`)
 
@@ -1164,7 +1218,7 @@
 - **purpose**: `POST /v1/credentials/verify` — verifies a credential signature against its payload; checks revocation status; increments CREDENTIALS_VERIFIED metric.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<VerifyResponse>>`
-- **calls**: `canonical_json`, `ed25519_dalek::VerifyingKey::verify_strict`, `sqlx::query`, `metrics::CREDENTIALS_VERIFIED.inc`
+- **calls**: `canonical_json`, `ed25519_dalek::VerifyingKey::verify_strict`, `sqlx::query`, `audit_log::record`, `metrics::CREDENTIALS_VERIFIED.inc`
 - **called_by**: Axum router
 - **mutates**: nothing (read-only verification)
 
@@ -1174,7 +1228,7 @@
 - **purpose**: `DELETE /v1/credentials/:id` — marks credential as revoked in DB, writes audit entry.
 - **inputs**: `State(state)`, `tenant`, `Path(id)`
 - **outputs**: `ApiResult<StatusCode>`
-- **calls**: `sqlx::query`
+- **calls**: `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`credentials.revoked`, `audit_entries`)
 
@@ -1299,7 +1353,7 @@
 ### `PROBE_PORTS`
 - **type**: variable (constant array)
 - **file**: `crates/hsip-api/src/routes/agents.rs`
-- **purpose**: List of 12 localhost ports probed for running AI agents: Ollama, LM Studio, Jupyter, Vite, CRA, Next.js, FastAPI, Flask, Express, Deno, Node-RED, Gradio.
+- **purpose**: List of 12 localhost ports probed for running AI agents: Ollama (11434), Vite (5173), wrangler (8787), generic HTTP agent (8080), uvicorn (8000), Flask (5000), generic agent (4000, 9000), dashboard (3001), dev-api (3000), LM Studio (1234), Jupyter (8888).
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1343,7 +1397,7 @@
 ### `AuditEntry`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/audit.rs`
-- **purpose**: Serialised audit row: id, action, details, timestamp.
+- **purpose**: Serialised audit row: id, action, peer_verify_key, details, timestamp, prev_hash, entry_hash. The last two are `None` for rows written before the audit hash chain existed.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1353,13 +1407,32 @@
 ### `list` (audit)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/audit.rs`
-- **purpose**: `GET /v1/audit` — returns paginated, optionally filtered audit log entries for the tenant.
+- **purpose**: `GET /v1/audit` — returns paginated, optionally filtered audit log entries for the tenant, including chain fields.
 - **inputs**: `State(state)`, `tenant`, `Query(params)`
 - **outputs**: `ApiResult<Json<Vec<AuditEntry>>>`
-- **calls**: `sqlx::query_as`
+- **calls**: `sqlx::query`
 - **called_by**: Axum router
 - **mutates**: nothing
 
+### `AuditVerifyResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/audit.rs`
+- **purpose**: Response for `GET /v1/audit/verify`: valid, checked (chained entries checked), unchained (pre-migration entries skipped), first_break_id.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `verify_chain` (audit route)
+- **mutates**: nothing
+
+### `verify_chain` (audit route)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/audit.rs`
+- **purpose**: `GET /v1/audit/verify` — fetches the tenant's audit rows in chain order and recomputes the BLAKE3 hash chain server-side, reporting whether it's intact. Detects tampering by an attacker with direct DB write access, which application-level access controls alone cannot.
+- **inputs**: `State(state)`, `tenant`
+- **outputs**: `ApiResult<Json<AuditVerifyResponse>>`
+- **calls**: `sqlx::query`, `audit_log::verify_chain`
+- **called_by**: Axum router
+- **mutates**: nothing
 
 ---
 
@@ -1744,7 +1817,7 @@
 - **purpose**: `POST /v1/trust/peer` — validates key bytes, upserts trusted peer, writes `trust.peer_added` audit entry.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<TrustedPeer>>`
-- **calls**: `hex::decode`, `ed25519_dalek::VerifyingKey::from_bytes`, `sqlx::query`
+- **calls**: `hex::decode`, `ed25519_dalek::VerifyingKey::from_bytes`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`trusted_peers`, `audit_entries`)
 
@@ -1764,7 +1837,7 @@
 - **purpose**: `DELETE /v1/trust/peers/:id` — removes a trusted peer and writes `trust.peer_removed` audit entry.
 - **inputs**: `State(state)`, `tenant`, `Path(id)`
 - **outputs**: `ApiResult<StatusCode>`
-- **calls**: `sqlx::query`
+- **calls**: `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`trusted_peers`, `audit_entries`)
 
@@ -1774,7 +1847,7 @@
 - **purpose**: `POST /v1/trust/verify` — looks up peer by label, verifies Ed25519 signature, writes `trust.verify_ok` or `trust.verify_failed` audit entry.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<TrustVerifyResponse>>`
-- **calls**: `sqlx::query`, `hex::decode`, `ed25519_dalek::VerifyingKey::verify`
+- **calls**: `sqlx::query`, `hex::decode`, `ed25519_dalek::VerifyingKey::verify`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`audit_entries`)
 
@@ -1836,7 +1909,7 @@
 - **purpose**: `POST /v1/sandbox/provision` — no auth required. Creates an isolated tenant + 24-hour trial API key. Returns credentials with embedded quickstart curl commands. Only active when `HSIP_SANDBOX=true` env var is set. Rate-limited to 5 provisions per source IP per hour.
 - **inputs**: `State<AppState>`, `HeaderMap`
 - **outputs**: `ApiResult<Json<ProvisionResponse>>`
-- **calls**: `client_ip`, `check_provision_rate`, `now_ms`, `hash_key`, `ms_to_iso`, sqlx queries (INSERT tenants, INSERT api_keys, INSERT audit_entries)
+- **calls**: `client_ip`, `check_provision_rate`, `now_ms`, `hash_key`, `ms_to_iso`, sqlx queries (INSERT tenants, INSERT api_keys), `audit_log::record`
 - **called_by**: Axum router (`POST /v1/sandbox/provision`)
 - **mutates**: DB (tenants, api_keys, audit_entries), `state.sandbox_rate`
 
@@ -1947,7 +2020,7 @@ its `payload_hash`.
 - **purpose**: `POST /v1/decisions` — resolves the authenticated `api_keys` row, validates fields, builds a `DecisionEnvelope` chained to the tenant's last decision (`prev_hash`), signs its `event_hash` with the tenant's Ed25519 identity, inserts it. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS` (another request extended the chain first). Writes `decision.recorded` audit entry, increments `DECISIONS_RECORDED`.
 - **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`, `Json(req): Json<RecordDecisionRequest>`
 - **outputs**: `ApiResult<Json<RecordDecisionResponse>>`
-- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `ms_to_iso`, `hash_key`, sqlx queries
+- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `ms_to_iso`, `hash_key`, sqlx queries, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`decisions`, `audit_entries`)
 
@@ -2043,7 +2116,7 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **purpose**: `run_anchor_cycle` is the production entry point (default public calendars). `run_anchor_cycle_with_calendars` does the real work: retries stuck OTS submissions, checks whether a batch is due, builds a `MerkleTree` over unanchored decisions' `event_hash`es, signs the root with the anchor identity, submits to OpenTimestamps (proceeding with local-only anchoring if that fails — `ots_status = 'calendar_unreachable'`), inserts `decision_anchors`, stamps `anchor_id`/`merkle_index` onto each covered decision, writes one `decision.anchored` audit entry per distinct tenant touched.
 - **inputs**: `db: &Db`, `master_key: &[u8]`, (`calendars: &[&str]` for the `_with_calendars` form)
 - **outputs**: `anyhow::Result<Option<AnchorSummary>>` (`None` when nothing was due)
-- **calls**: `hsip_core::merkle::MerkleTree`, `anchor::submit_digest_to`, `load_or_create_anchor_identity`
+- **calls**: `hsip_core::merkle::MerkleTree`, `anchor::submit_digest_to`, `load_or_create_anchor_identity`, `audit_log::record`
 - **called_by**: `main.rs`'s spawned anchor loop; integration tests call `run_anchor_cycle_with_calendars` directly against a mock calendar
 - **mutates**: DB (`decision_anchors`, `decisions.anchor_id`/`merkle_index`, `audit_entries`)
 
@@ -2361,6 +2434,26 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **outputs**: `Result<()>`
 - **calls**: `client.get` (health, identity, agents), `println!`
 - **called_by**: `run` (agent)
+- **mutates**: nothing
+
+### `discover` (agent cli)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/agent.rs`
+- **purpose**: `hsip agent discover` — calls `GET /v1/agents/discover`, prints each candidate's URL, hint, description, registration status, and (if unregistered) a suggested `hsip agent register` command.
+- **inputs**: `api_url: Option<String>`, `key: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `client.get`, `println!`
+- **called_by**: `run` (agent)
+- **mutates**: nothing
+
+### `DiscoveredAgent` (cli)
+- **type**: struct
+- **file**: `crates/hsip-cli/src/commands/agent.rs`
+- **purpose**: Deserialises one entry from `GET /v1/agents/discover`: url, hint, description, already_registered, suggested_name.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `discover` (agent cli)
 - **mutates**: nothing
 
 ### `load_admin_key` (agent module — delegates)

@@ -90,16 +90,14 @@ pub async fn sign(
     .execute(&state.db)
     .await?;
 
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, timestamp)
-         VALUES (?, ?, 'message.signed', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "message.signed",
+        Some(&peer),
+        None,
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(&peer)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     metrics::MESSAGES_SIGNED
@@ -161,17 +159,14 @@ pub async fn verify(
     } else {
         "message.verification_failed"
     };
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, timestamp)
-         VALUES (?, ?, ?, ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        action,
+        Some(&req.peer_verify_key),
+        None,
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(action)
-    .bind(&req.peer_verify_key)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(VerifyResponse {

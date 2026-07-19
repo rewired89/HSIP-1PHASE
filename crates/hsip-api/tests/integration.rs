@@ -653,3 +653,96 @@ async fn test_decision_attestation_sign_anchor_verify_end_to_end() {
     assert_eq!(tamper_json["valid"], false);
     assert_eq!(tamper_json["event_hash_matches"], false);
 }
+
+/// `GET /v1/agents/discover` must actually be reachable — it was fully
+/// implemented in routes/agents.rs but never registered in the router, so
+/// the documented `hsip agent discover` / CLAUDE.md route never worked.
+#[tokio::test]
+async fn test_agents_discover_route_is_wired() {
+    let (app, key) = test_app().await;
+
+    let res = app
+        .oneshot(
+            Request::get("/v1/agents/discover")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let discovered: serde_json::Value = body_json(res.into_body()).await;
+    assert!(discovered.is_array());
+}
+
+/// The audit log's BLAKE3 hash chain (`audit_log::record`) must link every
+/// entry to the one before it, and `GET /v1/audit/verify` must be able to
+/// recompute and confirm that chain independently of the raw rows.
+#[tokio::test]
+async fn test_audit_chain_verify_detects_valid_and_tampered_chains() {
+    let (app, key, db, _master_key) = test_app_with_db().await;
+
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Generate several chained audit entries.
+    for _ in 0..3 {
+        app.clone()
+            .oneshot(
+                Request::post("/v1/messages/sign")
+                    .header(header::AUTHORIZATION, bearer(&key))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "content": "hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let verify_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/audit/verify")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(verify_res.status(), StatusCode::OK);
+    let verify_json: serde_json::Value = body_json(verify_res.into_body()).await;
+    assert_eq!(verify_json["valid"], true);
+    assert_eq!(verify_json["unchained"], 0);
+    assert!(verify_json["checked"].as_u64().unwrap() >= 3);
+
+    // Directly tamper with one entry's details, as if via OS-level DB write
+    // access — the scenario THREAT_MODEL.md §4.8 says the chain must catch.
+    use sqlx::Executor;
+    db.execute(sqlx::query(
+        "UPDATE audit_entries SET details = 'tampered' WHERE action = 'message.signed'",
+    ))
+    .await
+    .unwrap();
+
+    let tampered_res = app
+        .oneshot(
+            Request::get("/v1/audit/verify")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let tampered_json: serde_json::Value = body_json(tampered_res.into_body()).await;
+    assert_eq!(tampered_json["valid"], false);
+    assert!(tampered_json["first_break_id"].is_string());
+}

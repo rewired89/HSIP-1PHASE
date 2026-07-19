@@ -212,16 +212,14 @@ pub async fn run_anchor_cycle_with_calendars(
         .await?;
     for row in &tenant_rows {
         let tenant_id: String = row.try_get(0)?;
-        let aid = Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-             VALUES (?, ?, 'decision.anchored', ?, ?)",
+        crate::audit_log::record(
+            db,
+            &tenant_id,
+            "decision.anchored",
+            None,
+            Some(&anchor_id),
+            now,
         )
-        .bind(&aid)
-        .bind(&tenant_id)
-        .bind(&anchor_id)
-        .bind(now)
-        .execute(db)
         .await?;
     }
 

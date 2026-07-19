@@ -49,7 +49,9 @@ pub async fn upload(
         .to_string();
 
     if !content_type.starts_with("image/") {
-        return Err(bad("only image files are accepted (jpeg, png, gif, webp, …)"));
+        return Err(bad(
+            "only image files are accepted (jpeg, png, gif, webp, …)",
+        ));
     }
 
     let data = field

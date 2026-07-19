@@ -1923,7 +1923,6 @@ fn main() {
             eprintln!("[AUDIT] Rebuild with: cargo build --features postgres");
             std::process::exit(1);
         }
-
     }
 }
 

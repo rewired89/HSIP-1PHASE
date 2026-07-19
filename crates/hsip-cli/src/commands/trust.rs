@@ -99,10 +99,17 @@ impl ApiClient {
     }
 
     fn post<B: serde::Serialize, R: serde::de::DeserializeOwned>(
-        &self, path: &str, body: &B,
+        &self,
+        path: &str,
+        body: &B,
     ) -> Result<R> {
         let url = format!("{}{}", self.base, path);
-        let res = self.http.post(&url).bearer_auth(&self.key).json(body).send()
+        let res = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.key)
+            .json(body)
+            .send()
             .with_context(|| format!("POST {url}"))?;
         if !res.status().is_success() {
             let s = res.status();
@@ -114,7 +121,11 @@ impl ApiClient {
 
     fn get<R: serde::de::DeserializeOwned>(&self, path: &str) -> Result<R> {
         let url = format!("{}{}", self.base, path);
-        let res = self.http.get(&url).bearer_auth(&self.key).send()
+        let res = self
+            .http
+            .get(&url)
+            .bearer_auth(&self.key)
+            .send()
             .with_context(|| format!("GET {url}"))?;
         if !res.status().is_success() {
             let s = res.status();
@@ -126,7 +137,11 @@ impl ApiClient {
 
     fn delete(&self, path: &str) -> Result<serde_json::Value> {
         let url = format!("{}{}", self.base, path);
-        let res = self.http.delete(&url).bearer_auth(&self.key).send()
+        let res = self
+            .http
+            .delete(&url)
+            .bearer_auth(&self.key)
+            .send()
             .with_context(|| format!("DELETE {url}"))?;
         if !res.status().is_success() {
             let s = res.status();
@@ -141,12 +156,21 @@ impl ApiClient {
 
 pub fn run(cmd: TrustCmd) -> Result<()> {
     match cmd {
-        TrustCmd::Add { label, verify_key, api_url, key } => add(label, verify_key, api_url, key),
+        TrustCmd::Add {
+            label,
+            verify_key,
+            api_url,
+            key,
+        } => add(label, verify_key, api_url, key),
         TrustCmd::List { api_url, key } => list(api_url, key),
         TrustCmd::Remove { id, api_url, key } => remove(id, api_url, key),
-        TrustCmd::Verify { from, content, signature, api_url, key } => {
-            verify(from, content, signature, api_url, key)
-        }
+        TrustCmd::Verify {
+            from,
+            content,
+            signature,
+            api_url,
+            key,
+        } => verify(from, content, signature, api_url, key),
     }
 }
 
@@ -168,10 +192,16 @@ fn add(
     println!("✓ Trusted peer added.");
     println!("  ID:         {}", peer.id);
     println!("  Label:      {}", peer.label);
-    println!("  Verify key: {}…", &peer.verify_key[..peer.verify_key.len().min(32)]);
+    println!(
+        "  Verify key: {}…",
+        &peer.verify_key[..peer.verify_key.len().min(32)]
+    );
     println!();
     println!("Verify their messages with:");
-    println!("  hsip trust verify --from \"{}\" <content> <signature>", peer.label);
+    println!(
+        "  hsip trust verify --from \"{}\" <content> <signature>",
+        peer.label
+    );
     Ok(())
 }
 
@@ -186,15 +216,27 @@ fn list(api_url: Option<String>, key: Option<String>) -> Result<()> {
     }
 
     println!();
-    println!("{:<36}  {:<20}  {:<26}  {}", "ID", "Label", "Verify key (truncated)", "Added");
+    println!(
+        "{:<36}  {:<20}  {:<26}  {}",
+        "ID", "Label", "Verify key (truncated)", "Added"
+    );
     println!("{}", "─".repeat(94));
     for p in &peers {
         let vk_short = format!("{}…", &p.verify_key[..p.verify_key.len().min(24)]);
         let ago = format_ago(p.added_at);
-        println!("{:<36}  {:<20}  {:<26}  {}", p.id, truncate(&p.label, 20), vk_short, ago);
+        println!(
+            "{:<36}  {:<20}  {:<26}  {}",
+            p.id,
+            truncate(&p.label, 20),
+            vk_short,
+            ago
+        );
     }
     println!();
-    println!("{} trusted peer(s).  Remove: hsip trust remove <id>", peers.len());
+    println!(
+        "{} trusted peer(s).  Remove: hsip trust remove <id>",
+        peers.len()
+    );
     Ok(())
 }
 
@@ -221,12 +263,20 @@ fn verify(
     println!();
     if resp.verified {
         println!("✓ Signature VALID");
-        println!("  From:  {} ({}…)", resp.label, &resp.verify_key[..resp.verify_key.len().min(24)]);
+        println!(
+            "  From:  {} ({}…)",
+            resp.label,
+            &resp.verify_key[..resp.verify_key.len().min(24)]
+        );
         println!("  Message: \"{}\"", truncate(&content, 60));
     } else {
         println!("✗ Signature INVALID");
         println!("  The message may have been tampered with or signed by a different key.");
-        println!("  Claimed peer: {} ({}…)", resp.label, &resp.verify_key[..resp.verify_key.len().min(24)]);
+        println!(
+            "  Claimed peer: {} ({}…)",
+            resp.label,
+            &resp.verify_key[..resp.verify_key.len().min(24)]
+        );
     }
     println!();
     Ok(())
@@ -235,7 +285,11 @@ fn verify(
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+    if s.len() <= max {
+        s
+    } else {
+        &s[..max]
+    }
 }
 
 fn format_ago(ms: i64) -> String {
@@ -243,8 +297,13 @@ fn format_ago(ms: i64) -> String {
     let dt = UNIX_EPOCH + Duration::from_millis(ms as u64);
     let elapsed = SystemTime::now().duration_since(dt).unwrap_or_default();
     let s = elapsed.as_secs();
-    if s < 60       { "just now".to_string() }
-    else if s < 3600  { format!("{}m ago", s / 60) }
-    else if s < 86400 { format!("{}h ago", s / 3600) }
-    else              { format!("{}d ago", s / 86400) }
+    if s < 60 {
+        "just now".to_string()
+    } else if s < 3600 {
+        format!("{}m ago", s / 60)
+    } else if s < 86400 {
+        format!("{}h ago", s / 3600)
+    } else {
+        format!("{}d ago", s / 86400)
+    }
 }

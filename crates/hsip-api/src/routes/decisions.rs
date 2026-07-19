@@ -290,16 +290,14 @@ pub async fn record(
 
         match insert_result {
             Ok(_) => {
-                let aid = Uuid::new_v4().to_string();
-                sqlx::query(
-                    "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-                     VALUES (?, ?, 'decision.recorded', ?, ?)",
+                crate::audit_log::record(
+                    &state.db,
+                    &tenant.0,
+                    "decision.recorded",
+                    None,
+                    Some(&decision_id),
+                    now,
                 )
-                .bind(&aid)
-                .bind(&tenant.0)
-                .bind(&decision_id)
-                .bind(now)
-                .execute(&state.db)
                 .await?;
 
                 metrics::DECISIONS_RECORDED

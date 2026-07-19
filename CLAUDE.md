@@ -94,6 +94,7 @@ state.rs          AppState: DB + DashMap rate limiter + agent tracker + DNS hand
 key_encryption.rs ChaCha20-Poly1305 + HKDF-SHA256 encryption for Ed25519 private keys at rest
 anchor.rs         OpenTimestamps calendar HTTP client (network I/O only, no DB) — see Decision Attestations below
 anchor_job.rs     Batches unanchored decisions into a Merkle tree on a timer, submits root to OpenTimestamps
+audit_log.rs      BLAKE3 hash-chained writes to audit_entries — see Audit Log Hash Chain below
 routes/           One file per domain (see route table below)
 static_files.rs   Serves dashboard/dist/ via rust-embed (only active with embed-dashboard feature)
 ```
@@ -111,6 +112,7 @@ GET       /v1/agents                List ai_agent keys with live velocity stats
 GET       /v1/agents/discover       Probe localhost ports for running AI agents / MCP servers
 GET       /v1/agent/capabilities    Machine-readable HSIP capability spec for AI system prompts
 GET       /v1/audit                 Audit log (filterable, max 500 entries)
+GET       /v1/audit/verify           Recompute this tenant's BLAKE3 audit hash chain and report whether it's intact
 POST/GET  /v1/tenant/*              Tenant info + GDPR erase
 POST/GET  /v1/dns/*                 DNS blocker start/stop/status/log
 POST/GET  /v1/proxy/*               Proxy traffic monitor start/stop/status/log
@@ -311,11 +313,25 @@ CLI: `hsip trust add/list/remove/verify` in `crates/hsip-cli/src/commands/trust.
 
 Probes 12 well-known localhost ports with `tokio::spawn` + 150ms TCP timeout. Returns `DiscoveredAgent` list with `port`, `url`, `hint`, `description`, `already_registered`, `suggested_name`.
 
-Implementation: `crates/hsip-api/src/routes/agents.rs` — `discover()` async handler.
+Implementation: `crates/hsip-api/src/routes/agents.rs` — `discover()` async handler. Registered on the router in `routes/mod.rs` as `.route("/v1/agents/discover", get(agents::discover))`.
 
-Ports probed: Ollama :11434, LM Studio :1234, Jupyter :8888, Vite :5173, Create React App :3000, Next.js :3001, FastAPI/uvicorn :8000, Flask :5000, Express :4000, Deno :8080, Node-RED :1880, Gradio :7860.
+Ports probed: Ollama :11434, Vite :5173, wrangler :8787, generic HTTP :8080, uvicorn :8000, Flask :5000, generic agent :4000/:9000, dashboard :3001, dev-api :3000, LM Studio :1234, Jupyter :8888.
 
-CLI: `hsip agent discover` in `agent.rs`.
+CLI: `hsip agent discover` — `AgentCmd::Discover` in `crates/hsip-cli/src/commands/agent.rs`, calls `GET /v1/agents/discover`.
+
+---
+
+## Audit Log Hash Chain (`GET /v1/audit/verify`)
+
+Every write to `audit_entries` extends a per-tenant BLAKE3 hash chain, so tampering with or deleting a row after the fact breaks every link after it — detectable without trusting the database's own account of what happened. Same threat this closes as Decision Attestations below, applied to the general audit trail instead of just decisions.
+
+**Implementation:**
+- `crates/hsip-api/src/audit_log.rs` — `record()` is the *only* way to write to `audit_entries`. Computes `entry_hash = BLAKE3(prev_hash || id || tenant_id || action || peer_verify_key || details || timestamp)`, chained per tenant. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS`, same optimistic-concurrency pattern as `routes::decisions::record`. `verify_chain()` recomputes and checks a chain given its rows.
+- `crates/hsip-api/src/routes/audit.rs::verify_chain` — `GET /v1/audit/verify` handler. Fetches the tenant's rows in chain order, recomputes the chain server-side, returns `{ valid, checked, unchained, first_break_id }`.
+- `db.rs` — `audit_entries` has `prev_hash`/`entry_hash` columns (nullable — pre-migration rows have neither) and a `UNIQUE(tenant_id, prev_hash)` index enforcing the chain can't fork under concurrent writes.
+- Chain starts at upgrade time, not tenant creation — rows from before this feature existed are counted in `unchained`, not treated as breaks.
+
+**Do not** insert into `audit_entries` directly from a route handler — always call `audit_log::record()`, or the row won't be chained and `verify_chain` will report it as `unchained` (harmless but defeats the point of adding it).
 
 ---
 
@@ -435,6 +451,9 @@ Go: `sdks/go/hsip/client.go`
 - **The anchor identity (`anchor_identity` table) must stay separate from tenant identities.** An anchor batch spans every tenant's decisions; do not sign an anchor root with any one tenant's key.
 - **`POST /v1/decisions/verify` must stay DB-free and auth-free.** It's the one handler in `decisions.rs` deliberately without `TenantId`/`State` — a third party (regulator, acquirer's engineering review) needs to be able to run the equivalent check independently of this server. Don't add a database lookup to it.
 - **`decisions` chain integrity relies on `UNIQUE(tenant_id, prev_hash)`.** Don't remove it or bypass it with raw inserts — it's what prevents the hash chain from forking under concurrent requests.
+- **Never `INSERT INTO audit_entries` directly.** Always call `audit_log::record()` — it's what computes and links `prev_hash`/`entry_hash`. A raw insert produces an unchained (though still functionally fine) row that `GET /v1/audit/verify` will count as `unchained` rather than verify.
+- **Every new API route must actually be registered in `routes/mod.rs`.** A fully implemented handler with no `.route(...)` line compiles clean (Rust doesn't error on an unused `pub` function in a binary crate) and silently 404s — this has happened before (`agents::discover` shipped unwired for at least one prior revision of this file). If you add a handler, grep `routes/mod.rs` afterward to confirm it's there, not just that the crate builds.
+- **CLI subcommands documented in this file must actually exist in the `Subcommand` enum.** `hsip agent discover` was documented here before the `AgentCmd::Discover` variant existed. Cross-check `crates/hsip-cli/src/commands/*.rs` against this file's command tables when either changes.
 
 ---
 
@@ -457,6 +476,10 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Compiler warning cleanup | `proxy.rs`, `static_files.rs`, `main.rs`, `errors.rs`, `key_encryption.rs`, `db.rs` |
 | Windows admin key path fix (`commands/util.rs`) | `commands/util.rs`, `agent.rs`, `trust.rs`, `up.rs`, `mod.rs` |
 | Decision attestations: `/v1/decisions/*` + Merkle anchoring + Python SDK | `hsip-core/src/{merkle,canonical}.rs`, `hsip-api/src/{anchor,anchor_job}.rs`, `routes/decisions.rs`, `db.rs`, `sdks/python/hsip/client.py` |
+| Wired `GET /v1/agents/discover` into the router (was a fully implemented, fully documented, never-registered handler — 404'd in production) | `routes/mod.rs` |
+| Implemented `hsip agent discover` CLI subcommand (documented in this file since the discovery feature shipped, but the `AgentCmd::Discover` variant never existed) | `commands/agent.rs` |
+| Fixed `agent.rs`'s local non-portable `load_admin_key()` (broke Windows for `agent register/list/revoke` + `status` — violated the invariant below) — now uses `commands::util::load_admin_key()` | `commands/agent.rs` |
+| Audit log BLAKE3 hash chain: `audit_log::record()`, `GET /v1/audit/verify`, `UNIQUE(tenant_id, prev_hash)` chain-fork prevention — closes the THREAT_MODEL.md §4.8 gap (chain existed in `hsip-telemetry-guard`, was never wired into the HTTP audit table) | `audit_log.rs`, `routes/audit.rs`, `db.rs`, all route files writing audit entries |
 
 ---
 
@@ -472,6 +495,9 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - Dashboard single-mode refactor (progressive disclosure)
 - SDK parity: Python, Node.js, Go
 - Decision attestations: `/v1/decisions/*`, RFC 6962 Merkle anchoring, OpenTimestamps submission, Python SDK (`record_decision`/`save_receipt`/`get_decision_proof`/`verify_decision`)
+- `GET /v1/agents/discover` actually wired into the router, and `hsip agent discover` actually implemented (both were documented as shipped but weren't connected)
+- `agent.rs` CLI commands fixed to use the platform-aware `commands::util::load_admin_key()` (Windows was broken for the most common commands)
+- Audit log BLAKE3 hash chain wired into the HTTP `audit_entries` table + `GET /v1/audit/verify` — closes THREAT_MODEL.md §4.8's previously-open gap
 
 ### Remaining
 
@@ -479,15 +505,18 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - **Dashboard trust page** — Add a "Trust" tab (Advanced section) showing `GET /v1/trust/peers` with add/remove UI. Wire to the new `/v1/trust/*` routes.
 - **Dashboard discover page** — show `/v1/agents/discover` results with one-click register buttons.
 - **Integration tests for trust routes** — add to `crates/hsip-api/tests/integration.rs` using `test_app()`.
-- **Verify OpenTimestamps connectivity in a non-sandboxed environment** — `anchor.rs` was only tested against a mocked calendar; confirm the real submission protocol works before depending on it for compliance purposes.
+- **Verify OpenTimestamps connectivity in a non-sandboxed environment** — `anchor.rs` was only tested against a mocked calendar; confirm the real submission protocol works before depending on it for compliance purposes. Reconfirmed still blocked as of this revision: outbound HTTPS to `*.calendar.opentimestamps.org` 403s at the proxy in this environment too (see THREAT_MODEL.md §7), same as every prior sandboxed environment this project has been developed in. This needs to be checked from an actually-unrestricted network before v1.0, not re-confirmed as still-blocked from another sandbox.
 - **OpenTimestamps "upgrade" polling** — currently a batch's `ots_proof` is just the calendar's initial pending-commitment bytes; poll calendars later to obtain a fully Bitcoin-confirmed proof and flip `ots_status` to `confirmed`.
 - **Node/Go SDK parity for decision attestation** — `record_decision`/`save_receipt`/`get_decision_proof`/`verify_decision` exist only in the Python SDK; port once a Node/Go caller needs them.
 - **Dashboard decisions page** — show `GET /v1/decisions` with anchor/proof status, similar to the trust/discover pages above.
+- **Dashboard audit verify indicator** — surface `GET /v1/audit/verify`'s `valid`/`unchained` fields somewhere in the Audit tab so a broken chain is visible without calling the API directly.
+- **Externally anchor the audit log hash chain** — decisions get Merkle-batched and submitted to OpenTimestamps (see Decision Attestations above); the audit log's BLAKE3 chain (see Audit Log Hash Chain above) is self-verifiable but not yet anchored outside this database, so an attacker with DB write access can still delete the whole chain undetected, just not alter what remains. Same shape of fix as decisions, not yet done for audit.
+- **Document and test a real SQLite → PostgreSQL migration path** — `DATABASE_URL` pointing at Postgres works for a fresh install (`db::run_migrations()` is backend-agnostic SQL), but there's no tested procedure for moving an existing SQLite deployment's data over. Treat it as a fresh install until this exists.
 
 ### Before adding new API routes
 1. Add the route function in the relevant `crates/hsip-api/src/routes/*.rs` file
-2. Register it in `crates/hsip-api/src/routes/mod.rs`
-3. Add an audit entry write for any state-changing operation
+2. Register it in `crates/hsip-api/src/routes/mod.rs` — **and verify with `grep` that it's actually there**, not just that `cargo build` succeeds. An unregistered `pub async fn` handler compiles fine and silently 404s.
+3. Add an audit entry write for any state-changing operation, via `audit_log::record()` — never a raw `INSERT INTO audit_entries`
 4. Add an integration test in `crates/hsip-api/tests/integration.rs` using `test_app()`
 
 ### Before adding new CLI commands

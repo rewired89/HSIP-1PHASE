@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 mod anchor;
 mod anchor_job;
+mod audit_log;
 mod auth;
 mod config;
 mod db;

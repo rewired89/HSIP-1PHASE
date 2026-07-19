@@ -150,16 +150,14 @@ pub async fn issue(
     .execute(&state.db)
     .await?;
 
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-         VALUES (?, ?, 'credential.issued', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "credential.issued",
+        None,
+        Some(&req.claim),
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(&req.claim)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     metrics::CREDENTIALS_ISSUED
@@ -225,17 +223,14 @@ pub async fn verify(
     } else {
         "credential.verification_failed"
     };
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-         VALUES (?, ?, ?, ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        action,
+        None,
+        Some(&req.credential.claim),
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(action)
-    .bind(&req.credential.claim)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(VerifyResponse {
@@ -263,16 +258,14 @@ pub async fn revoke(
         return Err(ApiError::NotFound("Credential not found".into()));
     }
 
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-         VALUES (?, ?, 'credential.revoked', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "credential.revoked",
+        None,
+        Some(&id),
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(&id)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(serde_json::json!({ "revoked": true, "id": id })))

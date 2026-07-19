@@ -15,6 +15,8 @@ use clap::Subcommand;
 use serde::Deserialize;
 use std::time::Duration;
 
+use super::util::load_admin_key;
+
 const DEFAULT_API_URL: &str = "http://127.0.0.1:7474";
 
 // ── Clap types ────────────────────────────────────────────────────────────────
@@ -46,6 +48,14 @@ pub enum AgentCmd {
     Revoke {
         /// Agent name or key ID to revoke
         target: String,
+        #[arg(long, env = "HSIP_API_URL")]
+        api_url: Option<String>,
+        #[arg(long, env = "HSIP_API_KEY")]
+        key: Option<String>,
+    },
+
+    /// Probe well-known localhost ports for running AI agents / MCP servers
+    Discover {
         #[arg(long, env = "HSIP_API_URL")]
         api_url: Option<String>,
         #[arg(long, env = "HSIP_API_KEY")]
@@ -85,6 +95,15 @@ struct AuditEntry {
     action: String,
     details: Option<String>,
     timestamp: i64,
+}
+
+#[derive(Deserialize, Debug)]
+struct DiscoveredAgent {
+    url: String,
+    hint: String,
+    description: String,
+    already_registered: bool,
+    suggested_name: String,
 }
 
 // ── HTTP client helper ────────────────────────────────────────────────────────
@@ -176,15 +195,28 @@ impl ApiClient {
 
 pub fn run(cmd: AgentCmd) -> Result<()> {
     match cmd {
-        AgentCmd::Register { name, expires_days, api_url, key } => {
-            register(name, expires_days, api_url, key)
-        }
+        AgentCmd::Register {
+            name,
+            expires_days,
+            api_url,
+            key,
+        } => register(name, expires_days, api_url, key),
         AgentCmd::List { api_url, key } => list(api_url, key),
-        AgentCmd::Revoke { target, api_url, key } => revoke(target, api_url, key),
+        AgentCmd::Revoke {
+            target,
+            api_url,
+            key,
+        } => revoke(target, api_url, key),
+        AgentCmd::Discover { api_url, key } => discover(api_url, key),
     }
 }
 
-fn register(name: String, expires_days: Option<i64>, api_url: Option<String>, key: Option<String>) -> Result<()> {
+fn register(
+    name: String,
+    expires_days: Option<i64>,
+    api_url: Option<String>,
+    key: Option<String>,
+) -> Result<()> {
     let client = ApiClient::new(api_url, key)?;
 
     let body = serde_json::json!({
@@ -195,7 +227,8 @@ fn register(name: String, expires_days: Option<i64>, api_url: Option<String>, ke
 
     let resp: CreateKeyResponse = client.post("/v1/keys", &body)?;
 
-    let expiry_str = resp.expires_at
+    let expiry_str = resp
+        .expires_at
         .map(|ms| format_timestamp(ms))
         .unwrap_or_else(|| "never".to_string());
 
@@ -205,7 +238,10 @@ fn register(name: String, expires_days: Option<i64>, api_url: Option<String>, ke
     println!("╠══════════════════════════════════════════════════════════════╣");
     println!("║  Name:       {:<48}  ║", resp.name);
     println!("║  Type:       {:<48}  ║", resp.agent_type);
-    println!("║  ID:         {:<48}  ║", &resp.id[..resp.id.len().min(48)]);
+    println!(
+        "║  ID:         {:<48}  ║",
+        &resp.id[..resp.id.len().min(48)]
+    );
     println!("║  Expires:    {:<48}  ║", expiry_str);
     println!("╠══════════════════════════════════════════════════════════════╣");
     println!("║  API Key (save this — shown only once):                     ║");
@@ -214,7 +250,10 @@ fn register(name: String, expires_days: Option<i64>, api_url: Option<String>, ke
     println!("║                                                              ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
     println!("║  Add to your agent's environment:                           ║");
-    println!("║    export HSIP_AGENT_KEY=\"{}\"", &resp.key[..resp.key.len().min(42)]);
+    println!(
+        "║    export HSIP_AGENT_KEY=\"{}\"",
+        &resp.key[..resp.key.len().min(42)]
+    );
     println!("║                                                              ║");
     println!("║  To revoke instantly:                                       ║");
     println!("║    hsip agent revoke \"{}\"", name);
@@ -236,8 +275,10 @@ fn list(api_url: Option<String>, key: Option<String>) -> Result<()> {
     }
 
     println!();
-    println!("{:<36}  {:<20}  {:<6}  {:<8}  {:<8}",
-        "Key ID", "Name", "Active", "Req/min", "Anomaly");
+    println!(
+        "{:<36}  {:<20}  {:<6}  {:<8}  {:<8}",
+        "Key ID", "Name", "Active", "Req/min", "Anomaly"
+    );
     println!("{}", "─".repeat(84));
 
     for a in &agents {
@@ -281,13 +322,20 @@ fn revoke(target: String, api_url: Option<String>, key: Option<String>) -> Resul
     if matched.len() > 1 {
         bail!(
             "Multiple agents match \"{target}\". Use the key ID instead:\n{}",
-            matched.iter().map(|a| format!("  {} ({})", a.key_id, a.name)).collect::<Vec<_>>().join("\n")
+            matched
+                .iter()
+                .map(|a| format!("  {} ({})", a.key_id, a.name))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
 
     let agent = matched[0];
     if !agent.active {
-        println!("Agent \"{}\" ({}) is already revoked.", agent.name, agent.key_id);
+        println!(
+            "Agent \"{}\" ({}) is already revoked.",
+            agent.name, agent.key_id
+        );
         return Ok(());
     }
 
@@ -299,6 +347,39 @@ fn revoke(target: String, api_url: Option<String>, key: Option<String>) -> Resul
     println!("  Key ID:  {}", agent.key_id);
     println!("  All in-flight requests from this agent are now blocked.");
     println!("  The action has been recorded in the audit log.");
+
+    Ok(())
+}
+
+fn discover(api_url: Option<String>, key: Option<String>) -> Result<()> {
+    let client = ApiClient::new(api_url, key)?;
+    let found: Vec<DiscoveredAgent> = client.get("/v1/agents/discover")?;
+
+    if found.is_empty() {
+        println!("No AI agents or MCP servers found on well-known localhost ports.");
+        return Ok(());
+    }
+
+    println!();
+    println!("Found {} candidate agent(s) on localhost:", found.len());
+    println!();
+    for a in &found {
+        let status = if a.already_registered {
+            "already registered"
+        } else {
+            "not registered"
+        };
+        println!("  • {}  ({})", a.url, a.hint);
+        println!("      {}", a.description);
+        println!("      {}", status);
+        if !a.already_registered {
+            println!(
+                "      Register with:  hsip agent register {}",
+                a.suggested_name
+            );
+        }
+        println!();
+    }
 
     Ok(())
 }
@@ -323,7 +404,10 @@ pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
     match identity {
         Ok(id) => {
             println!("  Identity:   ✓ active");
-            println!("  Public key: {}…", &id.verify_key[..id.verify_key.len().min(24)]);
+            println!(
+                "  Public key: {}…",
+                &id.verify_key[..id.verify_key.len().min(24)]
+            );
             println!("  Created:    {}", format_timestamp(id.created_at));
         }
         Err(_) => {
@@ -344,8 +428,17 @@ pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
                 println!("              Register one with: hsip agent register <name>");
             } else {
                 for a in &active {
-                    let anomaly_flag = if a.anomaly_count > 0 { " ⚠ anomaly" } else { "" };
-                    println!("    • {}  [{} req/min{}]", truncate(&a.name, 24), a.request_count, anomaly_flag);
+                    let anomaly_flag = if a.anomaly_count > 0 {
+                        " ⚠ anomaly"
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "    • {}  [{} req/min{}]",
+                        truncate(&a.name, 24),
+                        a.request_count,
+                        anomaly_flag
+                    );
                 }
             }
         }
@@ -365,7 +458,13 @@ pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
                 } else {
                     format!(" — {}", truncate(detail, 40))
                 };
-                println!("    {} {}  {}{}", format_timestamp(e.timestamp), " ", e.action, detail_str);
+                println!(
+                    "    {} {}  {}{}",
+                    format_timestamp(e.timestamp),
+                    " ",
+                    e.action,
+                    detail_str
+                );
             }
         }
         Ok(_) => println!("  Recent activity: (none yet)"),
@@ -381,34 +480,6 @@ pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-
-fn load_admin_key() -> Result<String> {
-    let home = dirs::home_dir().context("cannot resolve home directory")?;
-    let key_path = home.join(".hsip").join("admin.key");
-
-    if !key_path.exists() {
-        bail!(
-            "No API key found.\n\
-             Provide one with --key or HSIP_API_KEY env var,\n\
-             or check that HSIP has been started at least once (key saved to {}).",
-            key_path.display()
-        );
-    }
-
-    let key = std::fs::read_to_string(&key_path)
-        .with_context(|| format!("failed to read {}", key_path.display()))?;
-
-    let key = key.trim().to_string();
-    if key.is_empty() {
-        bail!(
-            "Admin key file is empty: {}\n\
-             Start HSIP once to generate the key, or provide --key manually.",
-            key_path.display()
-        );
-    }
-
-    Ok(key)
-}
 
 fn format_timestamp(ms: i64) -> String {
     use std::time::SystemTime;

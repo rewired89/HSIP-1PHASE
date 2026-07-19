@@ -1,7 +1,7 @@
 # HSIP Threat Model
 
-**Version:** 0.3-draft  
-**Date:** 2026-06-21  
+**Version:** 0.4-draft  
+**Date:** 2026-07-19  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
 
@@ -143,13 +143,18 @@ An expired consent returns the same response as a revoked consent. There is no g
 
 *Source: `crates/hsip-api/src/routes/consent.rs`*
 
-### 4.8 Append-Only Audit Log
+### 4.8 Append-Only Audit Log, Now BLAKE3 Hash-Chained
 
 The `audit_entries` table in the HTTP API is append-only by design: there is no `UPDATE` or `DELETE` endpoint for audit records, and no application code path removes entries. An attacker using only the API cannot erase or alter the audit history.
 
-**Scope limitation:** The audit log is append-only by policy, not by cryptographic chain. An attacker with direct SQLite write access (i.e., OS-level compromise) can modify or delete rows without leaving a detectable fingerprint. BLAKE3 hash chaining exists in the `hsip-telemetry-guard` crate but is not currently wired into the HTTP API audit table.
+As of this revision, every write also extends a per-tenant BLAKE3 hash chain: `entry_hash = BLAKE3(prev_hash || id || tenant_id || action || peer_verify_key || details || timestamp)`. `GET /v1/audit/verify` recomputes the chain server-side and reports whether it's intact — an attacker with direct database write access (OS-level compromise) can no longer alter or delete a row without breaking every link after it, detectably. This closes the gap previously documented here: BLAKE3 hash chaining existed in the `hsip-telemetry-guard` crate but was not wired into the HTTP API's own audit table.
 
-For environments requiring tamper-evidence against database-level compromise, the mitigation is filesystem-level immutability (append-only S3 bucket, WORM storage, or periodic signed export to an external log sink).
+*Source: `crates/hsip-api/src/audit_log.rs`, `crates/hsip-api/src/routes/audit.rs::verify_chain`*
+
+**Scope limitations that remain:**
+- **The chain starts at upgrade time, not at tenant creation.** Rows written before this migration have NULL `prev_hash`/`entry_hash` and are excluded from verification (`unchained` count in the `/v1/audit/verify` response) — there is no retroactive integrity proof for history older than the chain itself.
+- **This proves tamper-*evidence*, not tamper-*prevention*.** An attacker with DB write access can still delete the *entire* chain (not just alter it undetected) and there is nothing here that stops that, or that anchors the chain outside this database. For that, see the anchoring approach already used for decision attestations (§ Decision Attestations in `CLAUDE.md`) — the audit log is not yet anchored to an external timestamping service the way decisions are.
+- For environments requiring protection against total chain deletion, the mitigation is still filesystem-level immutability (append-only S3 bucket, WORM storage, or periodic signed export to an external log sink) — the hash chain detects alteration of what remains, it doesn't prevent removal.
 
 ### 4.9 Credential Integrity: Ed25519 Signatures
 
@@ -227,12 +232,16 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Gap | Risk | Mitigation path |
 |---|---|---|
 | No third-party security audit | Medium | Planned before v1.0. Codebase is open source and auditable now. |
+| **Single maintainer, no succession plan** | Medium | Relevant to any team evaluating HSIP for compliance-grade audit trails: patch timelines and long-term availability are best-effort, not contractual (see §9). No code fix for this — flagged here for buyer due diligence, not left implicit in the disclosure section alone. |
 | Master key on filesystem (no HSM) | Medium | Use `HSIP_MASTER_KEY` env var + external secrets manager for production |
+| **SQLite → PostgreSQL migration path is undocumented and untested** | Medium | `DATABASE_URL` pointing at PostgreSQL is supported by `db.rs`'s `AnyPool`, but no migration tooling or tested procedure exists for moving an existing SQLite deployment's data over. Treat a PostgreSQL deployment as a fresh install, not an upgrade, until this is tested. |
+| **OpenTimestamps calendar submission unverified end-to-end** | Medium | `anchor.rs`'s HTTP client logic is unit-tested against a mock server only. Outbound HTTPS to `*.calendar.opentimestamps.org` has been confirmed blocked in every sandboxed environment this project has been developed in to date (including this session's, via a 403 on the CONNECT tunnel) — real-network submission has never been observed to complete. Verify from an unrestricted network before relying on it for compliance purposes. |
 | In-memory rate limiter resets on restart | Low | A burst attack timed around a restart or deploy can temporarily exceed rate limits |
 | SQLite without WAL under write contention | Low | Low risk for single-tenant deployments; use `DATABASE_URL` pointing at PostgreSQL for high-concurrency |
 | No mutual TLS between federated HSIP nodes | Low | Federated trust uses explicit Ed25519 verify key registration; no automatic peer auth at the transport layer |
-| Audit log not externally anchored | Low | BLAKE3 chain is self-verifiable; no blockchain or transparency log integration yet |
-| Clock skew affects consent/credential expiry | Low | Use NTP synchronization in production |
+| Audit log hash chain not externally anchored | Low | The BLAKE3 chain (§4.8) is self-verifiable and now wired into the HTTP audit table, but — like decisions before anchoring — an attacker who deletes the whole chain leaves no internal trace; no blockchain or transparency log integration for the audit log yet (decisions already have one, see `CLAUDE.md`). |
+| Clock skew affects consent, credential, *and* decision-chain ordering | Low | All three subsystems trust the server's wall clock for expiry/ordering, not just consent. Use NTP synchronization in production. |
+| Post-quantum crypto (ML-KEM-768/ML-DSA-65) is not part of the default build | Informational, not a gap | These live in `hsip-verify`, excluded from the workspace (requires Z3 built from source — see `CLAUDE.md`). For HSIP's actual threat model — API-key theft, filesystem/DB compromise — this matters far less than the items above; don't let its prominence in dependency lists (§4.11) imply it's closer to production-ready than the excluded-crate status indicates. |
 
 ---
 
@@ -241,8 +250,9 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Item | Status |
 |---|---|
 | Third-party security audit | Not yet completed — planned for v1.0 |
-| Formal verification of protocol properties | `hsip-verify` crate uses Z3 SMT solver for cryptographic protocol proofs |
+| Formal verification of protocol properties | `hsip-verify` crate uses Z3 SMT solver for cryptographic protocol proofs. **Excluded from the workspace build and from `cargo test --workspace`** — its guarantees do not currently run in CI. |
 | RFC compliance test vectors | RFC 8439 (ChaCha20-Poly1305), RFC 8032 (Ed25519) vectors pass in CI |
+| Audit log hash chain integrity | Covered by `hsip-api/tests/integration.rs::test_audit_chain_verify_detects_valid_and_tampered_chains` — writes a chain, verifies it, then directly tampers with a row via SQL (simulating OS-level DB compromise) and confirms `GET /v1/audit/verify` detects it. |
 | Dependency vulnerability scanning | `cargo audit` runs on every build |
 | Minimum supported Rust version | 1.88.0 |
 
