@@ -284,6 +284,28 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Federated trust store (see routes/trust.rs and CLAUDE.md's "Federated
+    // Trust" section) — a tenant's locally-registered Ed25519 verify keys
+    // for other HSIP nodes/peers, keyed by a human-readable label. This
+    // table was documented and routed (POST /v1/trust/peer,
+    // GET /v1/trust/peers, DELETE /v1/trust/peers/:id,
+    // POST /v1/trust/verify) but never actually created here — every one
+    // of those routes has 500'd with "no such table" since the feature
+    // shipped, on every fresh database. UNIQUE(tenant_id, verify_key)
+    // backs trust::add's ON CONFLICT upsert.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS trusted_peers (
+            id         TEXT PRIMARY KEY,
+            tenant_id  TEXT NOT NULL,
+            label      TEXT NOT NULL,
+            verify_key TEXT NOT NULL,
+            added_at   BIGINT NOT NULL,
+            UNIQUE(tenant_id, verify_key)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS credentials (
             id                TEXT PRIMARY KEY,
@@ -468,6 +490,7 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     // Indexes on tenant_id for all high-traffic tables (L4)
     let indexes = [
         "CREATE INDEX IF NOT EXISTS idx_contacts_tenant     ON contacts (tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_trusted_peers_tenant ON trusted_peers (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_api_keys_tenant    ON api_keys (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_consents_tenant    ON consents (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_messages_tenant    ON messages (tenant_id)",

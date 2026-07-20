@@ -7,6 +7,9 @@ import Audit           from './pages/Audit';
 import Keys            from './pages/Keys';
 import Credentials     from './pages/Credentials';
 import Decisions       from './pages/Decisions';
+import Trust           from './pages/Trust';
+import Discover        from './pages/Discover';
+import Admin           from './pages/Admin';
 import HomeDashboard   from './pages/HomeDashboard';
 import ProveIt         from './pages/ProveIt';
 import ConsentWallet   from './pages/ConsentWallet';
@@ -38,8 +41,11 @@ const EXPERT_TABS = [
   { id: 'messages',    icon: '💬', label: 'Messages',    subtitle: 'Sign & verify signatures' },
   { id: 'credentials', icon: '🏅', label: 'Credentials', subtitle: 'Issue verifiable credentials' },
   { id: 'decisions',   icon: '📈', label: 'Decisions',   subtitle: 'Audit AI-agent trading decisions' },
+  { id: 'trust',       icon: '🤝', label: 'Trust',       subtitle: 'Trusted peers (federated trust)' },
+  { id: 'discover',    icon: '🛰️',  label: 'Discover',    subtitle: 'Find local AI agents to govern' },
   { id: 'audit',       icon: '📋', label: 'Audit',       subtitle: 'Append-only action log' },
   { id: 'keys',        icon: '🔑', label: 'Keys',        subtitle: 'Manage API keys' },
+  { id: 'admin',       icon: '🛠️',  label: 'Admin',       subtitle: 'Master key & root-admin management' },
 ];
 
 export default function App() {
@@ -240,8 +246,11 @@ export default function App() {
               {tab === 'messages'    && <Messages    apiKey={apiKey} />}
               {tab === 'credentials' && <Credentials apiKey={apiKey} />}
               {tab === 'decisions'   && <Decisions   apiKey={apiKey} />}
+              {tab === 'trust'       && <Trust       apiKey={apiKey} />}
+              {tab === 'discover'    && <Discover    apiKey={apiKey} />}
               {tab === 'audit'       && <Audit       apiKey={apiKey} />}
               {tab === 'keys'        && <Keys        apiKey={apiKey} />}
+              {tab === 'admin'       && <Admin       apiKey={apiKey} />}
             </>
           )}
         </main>

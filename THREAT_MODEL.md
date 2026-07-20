@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.14-draft  
+**Version:** 0.15-draft  
 **Date:** 2026-07-20  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -311,6 +311,20 @@ It's now a normal workspace member. No code inside `hsip-verify` changed (only w
 
 ---
 
+### 4.18 Dashboard UI Gaps Closed, and a Federated-Trust Table That Was Never Created
+
+Five dashboard gaps tracked in CLAUDE.md's roadmap are closed: a Trust page (add/list/remove a federated-trust peer, verify a signature by peer label), a Discover page (one-click registration for detected local AI agents), an Admin page (master-key fingerprint/rotate, root-admin list/grant/revoke), a `role` column and selector on the Keys page, and a hash-chain-intact/broken indicator on the Audit page. All Expert-mode-only, matching where comparably sensitive existing pages (Credentials, Keys, Audit) already live — none of this is exposed to the consumer-facing Simple mode.
+
+Building the Trust page surfaced a real, previously-undiscovered bug, not a UI gap: **`trusted_peers` — the table every handler in `routes/trust.rs` queries — was never created by `db::run_migrations()`.** Federated trust (§ Federated Trust in `CLAUDE.md`) has been documented, routed, and reachable via both the CLI (`hsip trust add/list/remove/verify`) and the API since it shipped, but every one of those calls has 500'd with "no such table" on any database created since — nothing had ever exercised the full add → list → verify → remove lifecycle against a real, freshly-migrated database until the new dashboard page did. This means the "Trusted peer (federated trust)" row in §5's trust-boundaries table below, and the "no live channel between HSIP instances, federated trust is offline key registration" framing in §4.15, described a mechanism that could not actually be used — not a working mitigation with caveats, a non-functional one.
+
+**Fixed:** added the missing table (plus its tenant index) to `db::run_migrations`, and added `trusted_peers` to `bin/hsip_migrate.rs`'s `TABLES` list per the invariant that governs it (a table present in the schema but missing from that list silently isn't migrated — this bug is exactly why that invariant exists). Zero existing databases had usable `trusted_peers` data to lose, since no write to the table could ever have succeeded.
+
+**Verified, not just patched:** a new integration test, `tests/integration.rs::test_trust_add_list_verify_remove`, exercises the full lifecycle over the real HTTP stack — add a peer, confirm it lists, verify a real Ed25519 signature (both the valid and deliberately-tampered case), then remove it — where zero trust-route tests existed before. Also verified end-to-end against a real running server: signed into the dashboard, added a real trust peer through the fixed backend, confirmed it persisted and listed correctly, and confirmed the Discover/Audit/Keys/Admin pages all render live data with zero failed `/v1/*` requests (checked via full browser automation, not just visual inspection).
+
+*Source: `crates/hsip-api/src/db.rs`, `crates/hsip-api/src/bin/hsip_migrate.rs`, `crates/hsip-api/tests/integration.rs`, `dashboard/src/App.jsx`, `dashboard/src/pages/{Trust,Discover,Admin,Keys,Audit}.jsx`*
+
+---
+
 ## 5. Trust Boundaries
 
 | Boundary | Trust level | Notes |
@@ -322,7 +336,7 @@ It's now a normal workspace member. No code inside `hsip-verify` changed (only w
 | Root-admin key holder (`is_root_admin=1`, any tenant) | Full node-level — master key rotation + granting/revoking root-admin on other keys | As of §4.13/§4.14, can rotate the node's master key (a system-wide operation touching every tenant's identity) and grant/revoke the flag itself. No longer tied to a single hardcoded key — the bootstrap admin key starts with it, but any root admin can add more. Still one flat capability, not a real RBAC system — protect every root-admin key like the master key itself. |
 | Owner-role key holder (`role='owner'`, own tenant) | Full within its own tenant's key management | Can create and revoke keys — including granting `owner` to others — in its own tenant. Cannot see or touch another tenant's keys, and cannot reach node-level operations without also holding `is_root_admin`. |
 | AI agent key holder | Scoped | Velocity-limited, auto-revoked at 1000 req/min |
-| Trusted peer (federated trust) | Explicit | Verify key manually registered; messages verified locally |
+| Trusted peer (federated trust) | Explicit | Verify key manually registered; messages verified locally. §4.18 fixed a bug (`trusted_peers` table never created) that meant this mechanism could not actually be used before — treat any deployment older than that fix as never having had working federated trust. |
 
 ---
 
@@ -380,6 +394,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Master key fingerprint endpoint | Covered by `test_master_key_fingerprint_is_read_only_and_admin_gated` — proves it's idempotent (repeated calls return the identical fingerprint, i.e. no mutation) and rejects a non-root-admin key. |
 | Mutual TLS (`client_ca_path`) | Unit-tested in `mtls.rs` against real X.509 certificates generated via the system `openssl` CLI (not mocked). Also manually verified end-to-end against a real running server in server mode: a client certificate signed by the configured CA (with the required `clientAuth` EKU) connects and receives a genuine response; a certificate from an untrusted CA, and a request with no client certificate at all, are both rejected at the TLS handshake itself, confirmed via `curl`'s verbose TLS trace. |
 | PostgreSQL schema/query compatibility | `crates/hsip-api/tests/postgres_compat.rs` (`#[ignore]`-by-default, run against `HSIP_TEST_POSTGRES_URL`) — proves `run_migrations` succeeds and a real epoch-ms timestamp / `BYTEA` blob round-trip correctly. Also manually verified end-to-end against a real PostgreSQL 16 instance: full server lifecycle (identity, messages, consent, decisions, audit chain) against a Postgres-backed server, `hsip-migrate` run against a populated SQLite database, and a fresh server started against the migrated Postgres database confirming the same tenant/identity, the original admin key, an intact audit hash chain, and a successful anchor-job run — see §4.16. |
+| Federated trust (`/v1/trust/*`) | Previously **zero** integration coverage — the missing-table bug in §4.18 went undetected precisely because nothing exercised these routes end-to-end. `tests/integration.rs::test_trust_add_list_verify_remove` now covers add/list/verify (valid and tampered signature)/remove over the real HTTP stack. Also manually verified through the dashboard's new Trust page against a real running server. |
 | Dependency vulnerability scanning | `cargo audit` runs on every build |
 | Minimum supported Rust version | 1.88.0 |
 

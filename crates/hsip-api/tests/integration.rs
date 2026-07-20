@@ -1996,3 +1996,133 @@ async fn test_audit_proof_not_found_for_unknown_id() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+// Federated trust (`/v1/trust/*`) had no integration coverage at all —
+// `trusted_peers` was documented, routed, and referenced by every handler in
+// `routes/trust.rs`, but never actually created by `db::run_migrations`, so
+// every one of these calls 500'd with "no such table" on any fresh
+// database. Found by exercising the dashboard's new Trust page against a
+// real server. This test exercises the full add/list/verify/remove
+// lifecycle end-to-end so a regression here fails loudly instead of only
+// showing up as a runtime 500 nobody notices until they click the page.
+#[tokio::test]
+async fn test_trust_add_list_verify_remove() {
+    let (app, key) = test_app().await;
+
+    // A real Ed25519 keypair so `verify` can check a real signature, not
+    // just exercise the "peer not found" / bad-encoding error paths.
+    use ed25519_dalek::{Signer, SigningKey};
+    let mut csprng = rand::rngs::OsRng;
+    let signing_key = SigningKey::generate(&mut csprng);
+    let verify_key_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        signing_key.verifying_key().to_bytes(),
+    );
+
+    // add
+    let add_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/trust/peer")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"label":"alice","verify_key":"{verify_key_b64}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        add_res.status(),
+        StatusCode::OK,
+        "trust peer add must not 500"
+    );
+    let added = body_json(add_res.into_body()).await;
+    assert_eq!(added["label"], "alice");
+    let peer_id = added["id"].as_str().unwrap().to_string();
+
+    // list — the added peer must actually be there
+    let list_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/trust/peers")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_res.status(), StatusCode::OK);
+    let list = body_json(list_res.into_body()).await;
+    let peers = list.as_array().unwrap();
+    assert_eq!(peers.len(), 1);
+    assert_eq!(peers[0]["label"], "alice");
+
+    // verify — a real signature over real content must check out
+    let content = "hello from alice";
+    let signature = signing_key.sign(content.as_bytes());
+    let signature_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        signature.to_bytes(),
+    );
+    let verify_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/trust/verify")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"label":"alice","content":"{content}","signature":"{signature_b64}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(verify_res.status(), StatusCode::OK);
+    let verified = body_json(verify_res.into_body()).await;
+    assert_eq!(verified["verified"], true);
+
+    // verify with a tampered signature must fail closed, not error
+    let bad_verify_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/trust/verify")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"label":"alice","content":"tampered content","signature":"{signature_b64}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_verify_res.status(), StatusCode::OK);
+    let not_verified = body_json(bad_verify_res.into_body()).await;
+    assert_eq!(not_verified["verified"], false);
+
+    // remove
+    let remove_res = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/v1/trust/peers/{peer_id}"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(remove_res.status(), StatusCode::OK);
+
+    let list_after_res = app
+        .oneshot(
+            Request::get("/v1/trust/peers")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_after = body_json(list_after_res.into_body()).await;
+    assert_eq!(list_after.as_array().unwrap().len(), 0);
+}

@@ -133,6 +133,16 @@ const TABLES: &[Table] = &[
         ],
     },
     Table {
+        name: "trusted_peers",
+        columns: &[
+            ("id", Col::Text),
+            ("tenant_id", Col::Text),
+            ("label", Col::Text),
+            ("verify_key", Col::Text),
+            ("added_at", Col::Int),
+        ],
+    },
+    Table {
         name: "credentials",
         columns: &[
             ("id", Col::Text),

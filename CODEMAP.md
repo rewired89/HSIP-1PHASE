@@ -536,7 +536,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `trusted_peers` (`id`, `tenant_id`, `label`, `verify_key`, `added_at BIGINT`, `UNIQUE(tenant_id, verify_key)`) — federated trust store for `routes/trust.rs` — was documented here and in `CLAUDE.md`'s schema table as if it already existed, but this line was aspirational until it was actually added: the table itself was missing from this function since the federated-trust feature shipped, so every `/v1/trust/*` call 500'd with "no such table" on any real database. Found while building the dashboard's Trust page; fixed by actually adding the `CREATE TABLE`. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -4455,64 +4455,68 @@ formatting.
 
 ## `dashboard/src/App.jsx`
 
+Navigation is a **Simple/Expert mode toggle**, not progressive disclosure — this section previously documented an earlier progressive-disclosure refactor (`SIMPLE_TABS`/`EXPERT_TABS` described as "primary"/"Advanced behind a toggle", `showAdv`, `navigateTo`) that a later UI-redesign commit reintroduced the mode split on top of, without this file being updated. Rewritten here to match what's actually in the file — see "Dashboard" in `CLAUDE.md` for the same correction and why.
+
 ### `App`
 - **type**: function (React component)
 - **file**: `dashboard/src/App.jsx`
-- **purpose**: Root application component: manages login state, navigation between tabs, and progressive disclosure of Advanced tabs.
+- **purpose**: Root application component: login screen (with the Simple/Expert mode toggle), sidebar nav, and renders the active tab's page component for whichever mode is active.
 - **inputs**: none
 - **outputs**: JSX
-- **calls**: `handleLogin`, `logout`, `navigateTo`, `switchMode`
+- **calls**: `handleLogin`, `handleGetTrialKey`, `logout`, `switchMode`
 - **called_by**: `main.jsx` (React root)
-- **mutates**: `localStorage` (api key, onboarding state)
+- **mutates**: `localStorage` (`hsip_api_key`, `hsip_mode`, `hsip_onboarding_done`)
 
 ### `SIMPLE_TABS`
 - **type**: variable (constant array)
 - **file**: `dashboard/src/App.jsx`
-- **purpose**: 8 primary nav tabs always visible: Home, Messages, Traffic Monitor, Alibi, Consents, AI Watch, Trackers, Protection.
-- **inputs**: none
-- **outputs**: none
-- **calls**: none
-- **called_by**: `App`
-- **mutates**: nothing
+- **purpose**: The 10 "For Everyone" (consumer-facing) nav tabs: Home, Finance, Messages, Traffic, Alibi, Consents, AI Watch, AI Decisions, Trackers, Protection.
+- **called_by**: `App` (when `mode === 'simple'`)
 
 ### `EXPERT_TABS`
 - **type**: variable (constant array)
 - **file**: `dashboard/src/App.jsx`
-- **purpose**: 5 Advanced nav tabs shown behind toggle: Identity, Consent, Credentials, Keys, Audit.
-- **inputs**: none
-- **outputs**: none
-- **calls**: none
-- **called_by**: `App`
-- **mutates**: nothing
+- **purpose**: The 10 "Developer" nav tabs: Identity, Consent, Messages, Credentials, Decisions, Trust, Discover, Audit, Keys, Admin. Trust/Discover/Admin added to close dashboard UI gaps — see `CLAUDE.md`.
+- **called_by**: `App` (when `mode === 'expert'`)
 
 ### `switchMode`
 - **type**: function
 - **file**: `dashboard/src/App.jsx`
-- **purpose**: Toggles the `showAdv` state to expand/collapse the Advanced section.
-- **inputs**: none
+- **purpose**: Switches between `'simple'`/`'expert'`, persists the choice to `localStorage('hsip_mode')`, and resets the active tab to that mode's default landing tab (`home` / `identity`).
+- **inputs**: `m: 'simple' | 'expert'`
 - **outputs**: none
-- **calls**: `setShowAdv`
-- **called_by**: "Advanced ▾" button in nav
-- **mutates**: React state (`showAdv`)
+- **calls**: `setMode`, `localStorage.setItem`, `setTab`
+- **called_by**: login-screen mode buttons, sidebar footer "Dev Mode"/"Simple Mode" button
+- **mutates**: `localStorage`, React state (`mode`, `tab`)
 
 ### `handleLogin`
 - **type**: function (async)
 - **file**: `dashboard/src/App.jsx`
-- **purpose**: Validates API key via `GET /health`, stores key in localStorage on success.
-- **inputs**: `key: string`
+- **purpose**: Validates the entered key via `POST /v1/identity` (auto-creates an identity if none exists yet), stores it in `localStorage` on success, and shows onboarding on first Simple-mode login.
+- **inputs**: form submit event
 - **outputs**: none
 - **calls**: `request`, `localStorage.setItem`
 - **called_by**: login form submit
-- **mutates**: `localStorage`
+- **mutates**: `localStorage`, React state
+
+### `handleGetTrialKey`
+- **type**: function (async)
+- **file**: `dashboard/src/App.jsx`
+- **purpose**: Calls `POST /v1/sandbox/provision` for a one-click 24-hour trial key, then signs in with it automatically.
+- **inputs**: none
+- **outputs**: none
+- **calls**: `fetch`, `request`, `localStorage.setItem`
+- **called_by**: "Try it free" button on the login screen
+- **mutates**: `localStorage`, React state
 
 ### `logout`
 - **type**: function
 - **file**: `dashboard/src/App.jsx`
-- **purpose**: Clears API key from localStorage and resets app to login screen.
+- **purpose**: Clears the API key from `localStorage` and resets the app to the login screen.
 - **inputs**: none
 - **outputs**: none
-- **calls**: `localStorage.removeItem`, `setApiKey`
-- **called_by**: logout button
+- **calls**: `localStorage.removeItem`, `setAuthed`
+- **called_by**: sidebar "Sign out" button
 - **mutates**: `localStorage`, React state
 
 
@@ -5259,12 +5263,74 @@ formatting.
 ### `Keys`
 - **type**: function (React component)
 - **file**: `dashboard/src/pages/Keys.jsx`
-- **purpose**: API key management page: create, list, and revoke API keys for human/service/ai_agent types.
+- **purpose**: API key management page: create, list, and revoke API keys for human/service/ai_agent types. Also shows/sets each key's tenant `role` ('owner'/'member') — previously invisible in the dashboard, curl/CLI-only.
 - **inputs**: none
 - **outputs**: JSX
-- **calls**: `request`
+- **calls**: `request` (`GET/POST/DELETE /v1/keys*`)
 - **called_by**: `App`
-- **mutates**: DB via API (api_keys)
+- **mutates**: DB via API (`api_keys`)
+
+---
+
+## `dashboard/src/pages/Trust.jsx`
+
+### `Trust`
+- **type**: function (React component)
+- **file**: `dashboard/src/pages/Trust.jsx`
+- **purpose**: Federated trust management: add/list/remove a trusted peer's Ed25519 verify key by label (`POST /v1/trust/peer`, `GET /v1/trust/peers`, `DELETE /v1/trust/peers/:id`), plus a "verify a signature from a trusted peer" tool (`POST /v1/trust/verify`) showing valid/invalid without needing to re-paste the raw key. New — closes a dashboard UI gap; building this surfaced that `trusted_peers` was never created by `db::run_migrations` (see `db.rs`'s entry and CLAUDE.md's "Dashboard" section).
+- **inputs**: `apiKey: string`
+- **outputs**: JSX
+- **calls**: `request`
+- **called_by**: `App` (Expert mode, `trust` tab)
+- **mutates**: DB via API (`trusted_peers`), writes `trust.*` audit entries (server-side)
+
+---
+
+## `dashboard/src/pages/Discover.jsx`
+
+### `Discover`
+- **type**: function (React component)
+- **file**: `dashboard/src/pages/Discover.jsx`
+- **purpose**: Scans well-known localhost ports for running AI agents/MCP servers (`GET /v1/agents/discover`) and offers a one-click "Register key" button per unregistered result (`POST /v1/keys` with `agent_type: "ai_agent"`, `name` from the probe's `suggested_name`). New — closes a dashboard UI gap; previously this data was only reachable via `hsip agent discover`.
+- **inputs**: `apiKey: string`
+- **outputs**: JSX
+- **calls**: `request`
+- **called_by**: `App` (Expert mode, `discover` tab)
+- **mutates**: DB via API (`api_keys`, when registering)
+
+---
+
+## `dashboard/src/pages/Admin.jsx`
+
+Node-level administration: master key fingerprint/rotation and root-admin list/grant/revoke. New — closes a dashboard UI gap; both operations were previously curl/CLI-only (`hsip keys master-fingerprint`/`rotate-master`, `hsip keys list-root-admins`/`grant-root-admin`/`revoke-root-admin`). Both sub-components independently surface "your key isn't a root admin" rather than a raw error when `require_root_admin` rejects the signed-in key, since every endpoint here is root-admin-gated.
+
+### `MasterKeyCard`
+- **type**: function (React component, internal to `Admin.jsx`)
+- **file**: `dashboard/src/pages/Admin.jsx`
+- **purpose**: Shows the running master key's fingerprint/source/rotation-availability (`GET /v1/admin/master-key/fingerprint`) and a rotate button gated behind an inline confirm step (`POST /v1/admin/master-key/rotate`) — mirrors the CLI's interactive `yes` confirmation.
+- **inputs**: `apiKey: string`
+- **outputs**: JSX
+- **calls**: `request`
+- **called_by**: `Admin`
+- **mutates**: DB via API (re-encrypts every tenant's `identities` row on rotate), the running process's in-memory master key
+
+### `RootAdminsCard`
+- **type**: function (React component, internal to `Admin.jsx`)
+- **file**: `dashboard/src/pages/Admin.jsx`
+- **purpose**: Lists active root-admin keys (`GET /v1/admin/root-admins`), grants root-admin to a key by ID (`POST /v1/admin/root-admins/grant`), and revokes it (`POST /v1/admin/root-admins/revoke`) — the Revoke button is disabled client-side when only one root admin remains, mirroring the server's last-root-admin lockout guard (the server remains the source of truth for this check).
+- **inputs**: `apiKey: string`
+- **outputs**: JSX
+- **calls**: `request`
+- **called_by**: `Admin`
+- **mutates**: DB via API (`api_keys.is_root_admin`)
+
+### `Admin`
+- **type**: function (React component)
+- **file**: `dashboard/src/pages/Admin.jsx`
+- **purpose**: Composes `MasterKeyCard` + `RootAdminsCard`.
+- **inputs**: `apiKey: string`
+- **outputs**: JSX
+- **called_by**: `App` (Expert mode, `admin` tab)
 
 ---
 
@@ -5273,10 +5339,10 @@ formatting.
 ### `Audit`
 - **type**: function (React component)
 - **file**: `dashboard/src/pages/Audit.jsx`
-- **purpose**: Audit log viewer: paginated, filterable list of all audit entries for the tenant.
-- **inputs**: none
+- **purpose**: Audit log viewer: filterable list of audit entries for the tenant, plus a hash-chain-intact/broken indicator (`GET /v1/audit/verify` — `valid`/`checked`/`unchained`/`first_break_id`) with a manual re-check button. The indicator is new — closes a dashboard UI gap; previously a broken chain was only visible by calling the API directly.
+- **inputs**: `apiKey: string`
 - **outputs**: JSX
-- **calls**: `request`
+- **calls**: `request` (`GET /v1/audit`, `GET /v1/audit/verify`)
 - **called_by**: `App`
 - **mutates**: nothing
 

@@ -396,6 +396,8 @@ Implementation: `crates/hsip-api/src/routes/trust.rs`
 
 CLI: `hsip trust add/list/remove/verify` in `crates/hsip-cli/src/commands/trust.rs`
 
+Dashboard: `dashboard/src/pages/Trust.jsx` (Expert mode) — see "Dashboard" below.
+
 ---
 
 ## Mutual TLS (`[server.tls] client_ca_path`)
@@ -545,14 +547,20 @@ Extension targets `http://127.0.0.1:7474` (desktop default). `manifest.json` als
 - `npm run build` → `dashboard/dist/` → embedded via `rust-embed` with `--features embed-dashboard`
 - `dashboard/src/api.js` — single `request()` helper used by all pages
 
-**The Simple/Expert mode split has been removed.** The dashboard now uses progressive disclosure:
-- `PRIMARY_TABS` (8 tabs, always visible): Home, Messages, Traffic Monitor, Alibi, Consents, AI Watch, Trackers, Protection
-- `ADVANCED_TABS` (5 dev tabs, behind toggle): Identity, Consent, Messages, Credentials, Audit, Keys
-- `showAdv` boolean state — toggled by "Advanced ▾" button in the nav
-- `navigateTo(id)` helper auto-expands Advanced section when navigating to an advanced tab
-- No `localStorage('hsip_mode')` — the old mode toggle is gone
+**Navigation is a Simple/Expert mode toggle** (`dashboard/src/App.jsx`), not progressive disclosure — an earlier revision of this file documented a progressive-disclosure refactor (`PRIMARY_TABS`/`ADVANCED_TABS`, a `showAdv` toggle, no mode split) that a later commit (`830117a`, "comprehensive UI visual redesign") reintroduced the mode split on top of, without this file being updated to match. Corrected here rather than re-doing that refactor — the mode split is the actual, currently-shipped design:
+- `SIMPLE_TABS` (10 tabs) — the "For Everyone" consumer-facing mode: Home, Finance, Messages, Traffic, Alibi, Consents, AI Watch, AI Decisions, Trackers, Protection.
+- `EXPERT_TABS` (10 tabs) — the "Developer" mode: Identity, Consent, Messages, Credentials, Decisions, Trust, Discover, Audit, Keys, Admin.
+- `mode` state, persisted to `localStorage('hsip_mode')`; `switchMode()` resets the active tab to that mode's default (`home` / `identity`). The toggle lives on the login screen (`For Everyone` / `Developer` buttons) and again in the sidebar footer once signed in.
 
-`dashboard/src/App.css` has `.adv-toggle` and `.adv-tab` styles for the advanced section.
+**Expert-mode pages added to close prior dashboard gaps** (`dashboard/src/pages/`):
+- `Trust.jsx` — `GET /v1/trust/peers` list, add (`POST /v1/trust/peer`) / remove (`DELETE /v1/trust/peers/:id`) a peer, and a "verify a signature from a trusted peer" tool (`POST /v1/trust/verify`).
+- `Discover.jsx` — `GET /v1/agents/discover` results with a one-click "Register key" button per unregistered agent (`POST /v1/keys` with `agent_type: "ai_agent"`).
+- `Admin.jsx` — master key fingerprint + rotate (`GET`/`POST /v1/admin/master-key/*`, with a confirm step before rotating) and root-admin list/grant/revoke (`GET/POST /v1/admin/root-admins*`). Both sections independently surface "your key isn't a root admin" rather than a raw error if the signed-in key lacks the flag.
+- `Keys.jsx` — now shows and sets `role` (`owner`/`member`) per key, previously invisible in the UI.
+- `Audit.jsx` — now shows a hash-chain-intact/broken indicator (`GET /v1/audit/verify`'s `valid`/`checked`/`unchained`/`first_break_id`) above the log table, with a manual re-check button.
+- `Decisions.jsx` (pre-existing, not new) already covers anchor/proof status — a stale roadmap item claiming this was missing has been corrected.
+
+**A real bug found while building the Trust page, not a pre-existing doc-only issue:** `trusted_peers` — the table every `routes/trust.rs` handler queries — was never created by `db::run_migrations()`. Every `/v1/trust/*` call 500'd with "no such table" on any fresh database since the federated-trust feature shipped; nothing had ever exercised it end-to-end before the dashboard's new Trust page did. Fixed in `db.rs` (added the table + its tenant index) and `bin/hsip_migrate.rs` (added to the migration tool's `TABLES` list, per the invariant below). Covered now by `tests/integration.rs::test_trust_add_list_verify_remove` — add/list/verify (valid and tampered signature)/remove, end-to-end over the real HTTP stack — where zero trust-route tests existed before.
 
 ---
 
@@ -666,6 +674,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Mutual TLS: new `mtls.rs` + `[server.tls] client_ca_path` config option — server requires and verifies a client certificate signed by a configured CA before completing the TLS handshake, closing THREAT_MODEL.md's "no peer auth at transport layer" gap. Fully opt-in (`None` = byte-for-byte unchanged behavior). Also fixed a pre-existing latent panic: `reqwest`/`axum-server` enable different rustls crypto-provider features, so the first TLS operation in the process would have panicked the moment `[server.tls]` was ever actually enabled — now a default provider is installed explicitly at startup | `mtls.rs`, `config.rs`, `main.rs`, `config.example.toml` |
 | SQLite → PostgreSQL migration tooling: new `hsip-migrate` binary copies an existing SQLite deployment into PostgreSQL, reusing `db::run_migrations` for the target schema. Found and fixed **two bugs that meant PostgreSQL had never actually worked at all**, fresh install or migration: every ms-epoch column was `INTEGER` (4-byte `int4` on Postgres, overflows on real timestamps — widened to `BIGINT`), `uploads.data`/`ots_proof` used the SQLite-only `BLOB` type (doesn't exist on Postgres — changed to `BYTEA`), and every one of ~150 parameterized queries used `?` placeholders (`sqlx::Any` doesn't rewrite these per backend — Postgres syntax-errors on `?` — rewritten to `$1, $2, ...`, which SQLite also accepts identically). Verified end-to-end against a real PostgreSQL 16 instance: populated a SQLite deployment via a real running server, migrated it, and confirmed the migrated server preserved identity/keys/audit-chain-validity and its anchor job ran successfully against Postgres | `db.rs`, `bin/hsip_migrate.rs`, `Cargo.toml`, `tests/postgres_compat.rs`, and every route/module file containing a `sqlx::query` call |
 | `hsip-verify` (Z3 formal verification of consent non-forgery/temporal consistency/identity-binding soundness) is now a real workspace member instead of being excluded — `cargo build --workspace`/`cargo test --workspace` build and run its 9 unit + 10 integration tests, so its guarantees actually run in CI for the first time. No code changes inside the crate itself (only `cargo fmt`, since it had never been subject to this repo's formatting check before). Along the way, corrected a stale THREAT_MODEL.md claim that misattributed HSIP's post-quantum crypto (ML-KEM-768/ML-DSA-65) to `hsip-verify` — it actually lives in `hsip-core::pqc`, which was never excluded | root `Cargo.toml`, `crates/hsip-verify/` (formatting only) |
+| Dashboard UI gaps: new Expert-mode Trust page (add/list/remove/verify a federated-trust peer), Discover page (one-click AI-agent key registration), and Admin page (master-key fingerprint/rotate + root-admin list/grant/revoke); `role` now shown/settable on the Keys page; a hash-chain-intact/broken indicator added to the Audit page. Corrected two stale docs claims found in the process: the Dashboard section's "progressive disclosure" description (a later UI-redesign commit reintroduced the Simple/Expert mode split without updating this file) and the roadmap's "Dashboard decisions page" item (it already existed). **Found and fixed a real bug** while building the Trust page: `trusted_peers` — the table every `routes/trust.rs` handler queries — was never created by `db::run_migrations`, so every `/v1/trust/*` call had 500'd since the feature shipped; nothing had exercised it end-to-end before. Verified against a real running server (not just unit tests): logged into the dashboard, added/listed a real trust peer over the fixed backend, confirmed the audit-verify indicator and admin panels render real data with zero failed requests | `db.rs`, `bin/hsip_migrate.rs`, `dashboard/src/App.jsx`, `dashboard/src/pages/{Trust,Discover,Admin,Keys,Audit}.jsx`, `tests/integration.rs` |
 
 ---
 
@@ -696,22 +705,16 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - Mutual TLS — opt-in `[server.tls] client_ca_path`, closes the "no peer auth at transport layer" gap for HSIP's HTTPS server; also fixed a pre-existing latent crypto-provider panic that would have hit the very first production use of `[server.tls]`
 - SQLite → PostgreSQL migration tooling: `hsip-migrate` binary, plus the two underlying bugs (`INTEGER`/`BLOB` schema types, `?` vs `$N` bind placeholders) that meant PostgreSQL had never actually worked for any HSIP deployment — see "SQLite → PostgreSQL Migration" above. Verified end-to-end against a real PostgreSQL 16 instance, not just unit tests.
 - `hsip-verify` included in the build — moved from excluded (`cargo build -p hsip-verify` only) to a real workspace member, so its Z3-backed formal-verification tests run under `cargo build --workspace`/`cargo test --workspace` like everything else. See "Including hsip-verify in the Build" above.
+- Dashboard UI gaps closed: new Expert-mode Trust page (`Trust.jsx`, add/list/remove/verify), Discover page (`Discover.jsx`, one-click agent registration), Admin page (`Admin.jsx`, master-key fingerprint/rotate + root-admin list/grant/revoke), `role` column + selector added to Keys.jsx, hash-chain-intact/broken indicator added to Audit.jsx. Also corrected the Dashboard section's stale "progressive disclosure" claim (a later UI-redesign commit reintroduced the Simple/Expert mode split without updating docs — see "Dashboard" above) and the roadmap's stale "Dashboard decisions page" item (already existed). Found and fixed a real bug while building the Trust page: `trusted_peers` was never created by `db::run_migrations`, so every `/v1/trust/*` call had 500'd since the feature shipped — now fixed and covered by `test_trust_add_list_verify_remove`, the first integration test this route ever had.
 
 ### Remaining
 
 - **`hsip up` federated-trust onboarding** — after `hsip up` succeeds, print: "Share your verify key with peers: `hsip status` shows it. They run `hsip trust add <label> <key>` to trust your messages."
-- **Dashboard trust page** — Add a "Trust" tab (Advanced section) showing `GET /v1/trust/peers` with add/remove UI. Wire to the new `/v1/trust/*` routes.
-- **Dashboard discover page** — show `/v1/agents/discover` results with one-click register buttons.
-- **Integration tests for trust routes** — add to `crates/hsip-api/tests/integration.rs` using `test_app()`.
 - **Verify OpenTimestamps connectivity in a non-sandboxed environment** — `anchor.rs` was only tested against a mocked calendar; confirm the real submission protocol works before depending on it for compliance purposes. Reconfirmed still blocked as of this revision: outbound HTTPS to `*.calendar.opentimestamps.org` 403s at the proxy in this environment too (see THREAT_MODEL.md §7), same as every prior sandboxed environment this project has been developed in. This needs to be checked from an actually-unrestricted network before v1.0, not re-confirmed as still-blocked from another sandbox.
 - **OpenTimestamps "upgrade" polling** — currently a batch's `ots_proof` is just the calendar's initial pending-commitment bytes; poll calendars later to obtain a fully Bitcoin-confirmed proof and flip `ots_status` to `confirmed`. Applies equally to `decision_anchors` and the new `audit_anchors`.
 - **Node/Go SDK parity for decision attestation** — `record_decision`/`save_receipt`/`get_decision_proof`/`verify_decision` exist only in the Python SDK; port once a Node/Go caller needs them.
-- **Dashboard decisions page** — show `GET /v1/decisions` with anchor/proof status, similar to the trust/discover pages above.
-- **Dashboard audit verify indicator** — surface `GET /v1/audit/verify`'s `valid`/`unchained` fields somewhere in the Audit tab so a broken chain is visible without calling the API directly.
-- **Dashboard: surface master key rotation + its audit trail** — no UI for `POST /v1/admin/master-key/rotate` yet; an admin has to call it directly.
 - **SDK/CLI adoption of `x-hsip-timestamp`/`x-hsip-nonce`** — the server-side replay-protection check exists, but no HSIP-authored client sends these headers yet. Port once a caller (SDK or CLI) actually needs replay protection, same pattern as decision-attestation SDK parity above — don't add it speculatively to every SDK before there's a caller who needs it.
 - **Real scoped-permission RBAC beyond flat `role`/`is_root_admin`** — the current model is deliberately two flat capabilities (tenant owner/member, node root-admin/not), not per-action scoped grants ("can rotate the master key but not grant root-admin to others," "can create ai_agent keys but not human keys," etc.). Fits everything HSIP needs today cleanly; revisit only when an operation shows up that the flat model genuinely can't express, same reasoning as before this round of work — don't bolt on a scoped-permissions engine speculatively.
-- **Dashboard: surface tenant `role` and root-admin management** — no UI yet for seeing/changing a key's `role`, or for `GET/POST /v1/admin/root-admins*`; both are curl/CLI-only today.
 
 ### Before adding new API routes
 1. Add the route function in the relevant `crates/hsip-api/src/routes/*.rs` file
