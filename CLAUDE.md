@@ -139,8 +139,21 @@ Every protected endpoint flows through `TenantId` extractor in `auth.rs`:
 2. SHA-256 hash it — raw tokens never stored
 3. DB lookup `key_hash` → check `active=1` and `expires_at`
 4. Check `pending_revocation` DashSet (immediate in-memory block before DB write)
-5. Per-key rate limit (300 req/min default, `RATE_LIMIT_RPM` env overrides)
-6. `agent_type='ai_agent'` only: velocity check (>100/min logs anomaly; >1000/min auto-revokes)
+5. Opt-in HTTP replay protection (see below) — only runs if the caller sent both replay headers
+6. Per-key rate limit (300 req/min default, `RATE_LIMIT_RPM` env overrides)
+7. `agent_type='ai_agent'` only: velocity check (>100/min logs anomaly; >1000/min auto-revokes)
+
+### HTTP Replay Protection (opt-in)
+
+A bearer token proves *who* sent a request; it doesn't prove a captured copy of that exact request hasn't been resent. `auth.rs::check_replay_protection` closes that gap, but only for callers who opt in — sending neither header is a complete no-op, so no existing SDK/CLI/dashboard caller is affected until updated to use it.
+
+- Send both `x-hsip-timestamp` (Unix seconds) and `x-hsip-nonce` (opaque string, 1-128 chars) to opt in.
+- Sending only one of the two is `400 Bad Request` — never silently ignored, so a caller can't mistakenly believe it's protected.
+- Timestamp must be within 5 minutes of server time (`REPLAY_TOLERANCE_SECS` in `auth.rs`) or `401`.
+- The `(key_id, nonce)` pair must not have been seen before within that window, or `401` (`"Duplicate x-hsip-nonce"`). Dedup is scoped per `key_id` — two different tenants can reuse the same nonce value without colliding.
+- Seen nonces live in `AppState.replay_nonces` (`Arc<DashMap<String, i64>>`, expiry timestamp as the value), swept every 60s by a background task in `main.rs` so it can't grow unbounded. Entries are retained for 10 minutes (2x the tolerance window).
+- `metrics::REPLAY_REJECTED` (labels: `malformed_headers`, `timestamp_out_of_window`, `duplicate_nonce`) — near-zero unless something is actually opted in and being replayed or misconfigured.
+- **Not yet sent by any of HSIP's own SDKs, CLI, or dashboard** — this pass is the server-side check only. A caller who wants replay protection today constructs the headers itself.
 
 ### Database Schema
 
@@ -483,6 +496,7 @@ Go: `sdks/go/hsip/client.go`
 - **`ALTER TABLE ... ADD COLUMN` migration lines must end in `.await;`, not `.await?;`.** The `let _ = sqlx::query(...).execute(pool).await?;` pattern still propagates the error via `?` even though the value is discarded — this broke every test with "duplicate column name" the first time it was gotten wrong in this file's history. Always double-check against the working `api_keys`/`audit_entries` examples already in `run_migrations()`.
 - **Consent grant/revoke must record `granted_by_key_type`/`revoked_by=` (via `resolve_granting_key_type`).** Consent is the one place HSIP claims to represent authorization — losing track of whether a human or an AI agent (acting on its own credential) was the actor defeats the point of calling it "consent."
 - **`HSIP_ROTATION_HOOK` must receive the key on stdin, never as a CLI argument.** Process arguments are visible via `ps`/process listings on some systems; stdin is not. Don't add a `--key <hex>`-style invocation as a "convenience" later. HSIP must never hold Vault/AWS/etc. credentials itself — the hook is the operator's own trusted tooling, not a new secret HSIP manages; don't add vendor SDKs to `hsip-api` to "simplify" this.
+- **HTTP replay protection (`x-hsip-timestamp`/`x-hsip-nonce`) must stay fully opt-in.** `check_replay_protection` in `auth.rs` is a no-op when neither header is present — do not make either header mandatory, or every existing caller (all current SDKs, the CLI, the dashboard) breaks. If only one of the two is sent, that's a `400`, never silently treated as "not opted in" — a caller must not be able to think it's protected when it isn't.
 
 ---
 
@@ -518,6 +532,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Master key rotation: `POST /v1/admin/master-key/rotate`, `AppState.master_key` now `Arc<RwLock<Vec<u8>>>`, transactional re-encryption of `identities`/`anchor_identity`, staging-file + atomic-rename key persistence — the master key previously had no rotation path at all | `routes/admin.rs`, `state.rs`, `main.rs`, all master-key read sites |
 | Read-only `GET /v1/admin/master-key/fingerprint` + `hsip keys master-fingerprint`/`rotate-master` CLI (interactive y/N confirm, `--yes` for scripts) — closed the gap where rotation and fingerprinting were only reachable by hand-rolling `curl` with bearer auth, unreachable for HSIP's original non-technical-user audience | `routes/admin.rs`, `commands/keys.rs`, `main.rs` |
 | `HSIP_ROTATION_HOOK`: vendor-agnostic auto-rotation for `HSIP_MASTER_KEY`-sourced keys. Rotation no longer unconditionally refuses when the key is env-var-sourced — a configured hook script receives the new key on stdin and is trusted by exit code only; HSIP never holds Vault/AWS/etc. credentials itself | `routes/admin.rs` |
+| HTTP replay protection: opt-in `x-hsip-timestamp`/`x-hsip-nonce` headers checked in the `TenantId` extractor, per-key nonce dedup in a swept `DashMap`, `metrics::REPLAY_REJECTED` — previously the HTTP API had no defense against a captured request being resent verbatim (THREAT_MODEL.md §4.3's documented gap), only rate limiting and key expiry | `auth.rs`, `state.rs`, `main.rs`, `metrics.rs` |
 
 ---
 
@@ -541,6 +556,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - Master key rotation: `POST /v1/admin/master-key/rotate`
 - `GET /v1/admin/master-key/fingerprint` (read-only) + `hsip keys master-fingerprint` / `hsip keys rotate-master` CLI — closes the "admin has to hand-roll curl with bearer auth" gap for the audience HSIP was originally built for
 - `HSIP_ROTATION_HOOK` — vendor-agnostic auto-rotation for `HSIP_MASTER_KEY`-sourced deployments, without HSIP ever holding secrets-manager credentials
+- HTTP replay protection — opt-in `x-hsip-timestamp`/`x-hsip-nonce` headers, closes THREAT_MODEL.md §4.3's previously-open "HTTP API has no per-request replay defense" gap without breaking any existing caller
 
 ### Remaining
 
@@ -557,6 +573,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - **Document and test a real SQLite → PostgreSQL migration path** — `DATABASE_URL` pointing at Postgres works for a fresh install (`db::run_migrations()` is backend-agnostic SQL), but there's no tested procedure for moving an existing SQLite deployment's data over. Treat it as a fresh install until this exists.
 - **Real RBAC beyond "the bootstrap admin key"** — `routes::admin::require_root_admin` is a single global admin tied to the first tenant ever created, not a proper permissions system. Deliberately not built out further yet: two node-level operations (rotate + fingerprint) both fit the same single-admin gate cleanly, and a real permissions model (roles, scoped grants, multiple admins) is real design work that shouldn't be bolted on speculatively before there's a second *kind* of operation that actually needs it. Revisit when one shows up — likely the first candidate for HSIP's enterprise-readiness track, since "single root credential, no RBAC" is a real objection in an enterprise security review.
 - **Dashboard: surface master key rotation + its audit trail** — no UI for `POST /v1/admin/master-key/rotate` yet; an admin has to call it directly.
+- **SDK/CLI adoption of `x-hsip-timestamp`/`x-hsip-nonce`** — the server-side replay-protection check exists, but no HSIP-authored client sends these headers yet. Port once a caller (SDK or CLI) actually needs replay protection, same pattern as decision-attestation SDK parity above — don't add it speculatively to every SDK before there's a caller who needs it.
 
 ### Before adding new API routes
 1. Add the route function in the relevant `crates/hsip-api/src/routes/*.rs` file

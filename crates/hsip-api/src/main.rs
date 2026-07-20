@@ -219,6 +219,22 @@ async fn run() -> Result<()> {
         });
     }
 
+    // Sweep expired replay-protection nonces so opt-in callers using
+    // x-hsip-timestamp/x-hsip-nonce (see auth.rs::check_replay_protection)
+    // don't leave the tracker growing unbounded. No-op for deployments where
+    // nobody sends those headers — the map just stays empty.
+    {
+        let replay_nonces = state.replay_nonces.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let now = db::now_ms();
+                replay_nonces.retain(|_, expiry_ms| *expiry_ms > now);
+            }
+        });
+    }
+
     // Build CORS layer from config
     let cors = build_cors_layer(&config.cors);
 

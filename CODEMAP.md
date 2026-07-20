@@ -39,12 +39,12 @@
 ### `run`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves.
+- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Also spawns two background loops: the decision-anchoring cycle (`anchor_job::run_anchor_cycle`, ~10s poll) and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded.
 - **inputs**: none
 - **outputs**: `Result<()>`
-- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`
+- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `db::now_ms`
 - **called_by**: `main`
-- **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows)
+- **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows), `state.replay_nonces` DashMap (sweep removes expired entries)
 
 ### `init_logging`
 - **type**: function
@@ -432,12 +432,22 @@
 ### `TenantId::from_request_parts`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/auth.rs`
-- **purpose**: Implements `FromRequestParts`: extracts Bearer token, hashes it, looks up in DB, checks active/expiry/pending-revocation, enforces rate limit and AI velocity check.
+- **purpose**: Implements `FromRequestParts`: extracts Bearer token, hashes it, looks up in DB, checks active/expiry/pending-revocation, enforces opt-in replay protection, rate limit, and AI velocity check.
 - **inputs**: `parts: &mut Parts`, `state: &AppState`
 - **outputs**: `Result<Self, ApiError>`
-- **calls**: `hash_key`, `check_rate_limit`, `check_agent_velocity`, `sqlx::query`
+- **calls**: `hash_key`, `check_replay_protection`, `check_rate_limit`, `check_agent_velocity`, `sqlx::query`
 - **called_by**: Axum extractor machinery
-- **mutates**: `rate_limiter` DashMap (inserts/updates window), `agent_tracker` DashMap
+- **mutates**: `rate_limiter` DashMap (inserts/updates window), `agent_tracker` DashMap, `replay_nonces` DashMap
+
+### `check_replay_protection`
+- **type**: function
+- **file**: `crates/hsip-api/src/auth.rs`
+- **purpose**: Opt-in HTTP replay protection. No-op unless the caller sends both `x-hsip-timestamp` and `x-hsip-nonce`; if only one is present, rejects with 400. If both present, rejects with 401 when the timestamp is outside `REPLAY_TOLERANCE_SECS` (5 min) of server time, or when the `(key_id, nonce)` pair has already been seen within that window (checked via `DashMap::entry` for atomic check-and-insert).
+- **inputs**: `key_id: &str`, `parts: &Parts`, `state: &AppState`
+- **outputs**: `Result<(), ApiError>`
+- **calls**: `now_ms`, `DashMap::entry`, `metrics::REPLAY_REJECTED`
+- **called_by**: `TenantId::from_request_parts`
+- **mutates**: `replay_nonces` DashMap (inserts new `(key_id, nonce)` entries with an expiry timestamp)
 
 ### `check_rate_limit`
 - **type**: function
@@ -667,10 +677,20 @@
 - **called_by**: `AppState`
 - **mutates**: nothing
 
+### `ReplayNonceTracker`
+- **type**: variable (type alias)
+- **file**: `crates/hsip-api/src/state.rs`
+- **purpose**: `Arc<DashMap<String, i64>>` keyed by `"{key_id}:{nonce}"`, value is the ms timestamp after which the entry may be swept. Opt-in — only populated for requests sending both `x-hsip-timestamp` and `x-hsip-nonce`. A background sweep task in `main.rs` (60s interval) removes expired entries so this can't grow unbounded.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `AppState`, `auth.rs::check_replay_protection`, `main.rs` sweep task
+- **mutates**: nothing
+
 ### `AppState`
 - **type**: struct
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: Axum shared state: DB pool, master key, rate limiter, agent tracker, pending revocations, DNS state, proxy shared buffer, sandbox provision rate limiter. `master_key` is `Arc<RwLock<Vec<u8>>>` (not a plain `Arc<Vec<u8>>`) so `routes::admin::rotate_master_key` can swap it live without a restart; every handler that used to deref it directly now takes a short-lived `.read().await` guard first. `master_key_path: Option<Arc<String>>` is `Some` only when the key came from a file (vs. `HSIP_MASTER_KEY`) — that's what rotation checks before running.
+- **purpose**: Axum shared state: DB pool, master key, rate limiter, agent tracker, pending revocations, replay-protection nonce tracker, DNS state, proxy shared buffer, sandbox provision rate limiter. `master_key` is `Arc<RwLock<Vec<u8>>>` (not a plain `Arc<Vec<u8>>`) so `routes::admin::rotate_master_key` can swap it live without a restart; every handler that used to deref it directly now takes a short-lived `.read().await` guard first. `master_key_path: Option<Arc<String>>` is `Some` only when the key came from a file (vs. `HSIP_MASTER_KEY`) — that's what rotation checks before running.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -690,7 +710,7 @@
 ### `AppState::new_with_master_key_path`
 - **type**: function
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: Constructs `AppState`, wrapping `master_key` in `Arc<RwLock<_>>` and storing `master_key_path` (file path the key can be durably rewritten to, or `None` if sourced from `HSIP_MASTER_KEY`). Initialises all DashMaps including `sandbox_rate`.
+- **purpose**: Constructs `AppState`, wrapping `master_key` in `Arc<RwLock<_>>` and storing `master_key_path` (file path the key can be durably rewritten to, or `None` if sourced from `HSIP_MASTER_KEY`). Initialises all DashMaps including `sandbox_rate` and `replay_nonces`.
 - **inputs**: `db: Db`, `master_key: Vec<u8>`, `master_key_path: Option<String>`
 - **outputs**: `Self`
 - **calls**: `DashMap::new`, `DashSet::new`, `ProxyShared::new`, `RwLock::new`
@@ -940,6 +960,16 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **outputs**: none
 - **calls**: none
 - **called_by**: `routes::admin::rotate_master_key`
+- **mutates**: counter value
+
+### `REPLAY_REJECTED`
+- **type**: variable (static `CounterVec`, label `reason`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Count of requests rejected by the opt-in replay-protection check, by `reason` (`malformed_headers`, `timestamp_out_of_window`, `duplicate_nonce`). Zero unless a caller opts in by sending `x-hsip-timestamp`/`x-hsip-nonce`.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `auth.rs::check_replay_protection`
 - **mutates**: counter value
 
 ### `init` (metrics)

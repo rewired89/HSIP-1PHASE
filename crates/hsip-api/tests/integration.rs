@@ -1244,3 +1244,196 @@ async fn test_master_key_rotation_hook_for_env_sourced_key() {
     std::env::remove_var("HSIP_ROTATION_HOOK");
     let _ = std::fs::remove_dir_all(&work_dir);
 }
+
+// ── HTTP replay protection (opt-in x-hsip-timestamp / x-hsip-nonce) ────────────
+
+#[tokio::test]
+async fn test_replay_protection_absent_headers_unaffected() {
+    // No replay-protection headers at all — must behave exactly like every
+    // other test in this file that doesn't know these headers exist.
+    let (app, key) = test_app().await;
+    let res = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_replay_protection_valid_headers_accepted() {
+    let (app, key) = test_app().await;
+    let now_secs = hsip_api::db::now_ms() / 1000;
+    let res = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header("x-hsip-timestamp", now_secs.to_string())
+                .header("x-hsip-nonce", "nonce-valid-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Passed the replay check; 404 because no identity was created yet.
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_replay_protection_duplicate_nonce_rejected() {
+    let (app, key) = test_app().await;
+    let now_secs = hsip_api::db::now_ms() / 1000;
+
+    let r1 = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header("x-hsip-timestamp", now_secs.to_string())
+                .header("x-hsip-nonce", "nonce-replay-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), StatusCode::NOT_FOUND);
+
+    // Same (key, nonce) pair again — must be rejected even though the
+    // timestamp is still well within the tolerance window.
+    let r2 = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header("x-hsip-timestamp", now_secs.to_string())
+                .header("x-hsip-nonce", "nonce-replay-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), StatusCode::UNAUTHORIZED);
+    let json = body_json(r2.into_body()).await;
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("Duplicate x-hsip-nonce"));
+}
+
+#[tokio::test]
+async fn test_replay_protection_stale_timestamp_rejected() {
+    let (app, key) = test_app().await;
+    let stale_secs = hsip_api::db::now_ms() / 1000 - 1000; // 1000s ago, outside the 300s window
+    let res = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header("x-hsip-timestamp", stale_secs.to_string())
+                .header("x-hsip-nonce", "nonce-stale-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let json = body_json(res.into_body()).await;
+    assert!(json["error"].as_str().unwrap().contains("window"));
+}
+
+#[tokio::test]
+async fn test_replay_protection_partial_headers_rejected() {
+    let (app, key) = test_app().await;
+    let now_secs = hsip_api::db::now_ms() / 1000;
+
+    // Timestamp without nonce
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header("x-hsip-timestamp", now_secs.to_string())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Nonce without timestamp
+    let res2 = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header("x-hsip-nonce", "nonce-only")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_replay_protection_different_keys_can_reuse_same_nonce() {
+    // Nonce dedup is scoped per key_id, not global — two keys in the same
+    // running server sending the same nonce value must not collide.
+    let (app, key_a, db, _master_key) = test_app_with_db().await;
+
+    let other_tenant_id = uuid::Uuid::new_v4().to_string();
+    let key_b_raw = format!("hsip_{}", hex::encode([42u8; 32]));
+    let key_b_hash = hsip_api::auth::hash_key(&key_b_raw);
+    let now = hsip_api::db::now_ms();
+    use sqlx::Executor;
+    db.execute(
+        sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'other', ?)")
+            .bind(&other_tenant_id)
+            .bind(now),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        sqlx::query(
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+             VALUES (?, ?, ?, 'test-b', 'human', ?, 1)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&other_tenant_id)
+        .bind(&key_b_hash)
+        .bind(now),
+    )
+    .await
+    .unwrap();
+
+    let now_secs = hsip_api::db::now_ms() / 1000;
+
+    let res_a = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key_a))
+                .header("x-hsip-timestamp", now_secs.to_string())
+                .header("x-hsip-nonce", "shared-nonce")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res_a.status(), StatusCode::NOT_FOUND);
+
+    // Same nonce, different key — must NOT be rejected as a duplicate.
+    let res_b = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key_b_raw))
+                .header("x-hsip-timestamp", now_secs.to_string())
+                .header("x-hsip-nonce", "shared-nonce")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res_b.status(), StatusCode::NOT_FOUND);
+}

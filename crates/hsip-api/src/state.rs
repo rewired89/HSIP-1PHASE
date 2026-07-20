@@ -87,12 +87,20 @@ pub type DnsState = Arc<Mutex<Option<hsip_dns::DnsHandle>>>;
 /// IP-keyed provision rate limiter for the sandbox endpoint (5/hour per IP).
 pub type SandboxRate = Arc<DashMap<String, RateWindow>>;
 
+/// Replay-protection nonce tracker, keyed by `"{key_id}:{nonce}"`, value is
+/// the ms timestamp after which the entry may be swept. Opt-in — only
+/// populated for requests that send both `x-hsip-timestamp` and
+/// `x-hsip-nonce` (see `auth.rs::check_replay_protection`). A background
+/// sweep in `main.rs` removes expired entries so this can't grow unbounded.
+pub type ReplayNonceTracker = Arc<DashMap<String, i64>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Db,
     pub agent_tracker: AgentTracker,
     pub rate_limiter: RateLimiter,
     pub pending_revocation: PendingRevocation,
+    pub replay_nonces: ReplayNonceTracker,
     /// Loaded at startup from `HSIP_MASTER_KEY` env var or the master key
     /// file (see `main.rs::load_master_key`). Behind a lock, not a plain
     /// `Arc<Vec<u8>>`, so `POST /v1/admin/master-key/rotate` can swap it for
@@ -127,6 +135,7 @@ impl AppState {
             agent_tracker: Arc::new(DashMap::new()),
             rate_limiter: Arc::new(DashMap::new()),
             pending_revocation: Arc::new(DashSet::new()),
+            replay_nonces: Arc::new(DashMap::new()),
             master_key: Arc::new(RwLock::new(master_key)),
             master_key_path: master_key_path.map(Arc::new),
             dns: Arc::new(Mutex::new(None)),

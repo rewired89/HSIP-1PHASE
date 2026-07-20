@@ -23,6 +23,13 @@ fn rate_limit_rpm() -> u64 {
         .unwrap_or(300)
 }
 
+// Replay protection (opt-in via x-hsip-timestamp + x-hsip-nonce headers).
+// Tolerance window applies in both directions (clock skew); nonces are
+// retained for double this so a nonce can't become valid again the instant
+// it's swept while its timestamp is still inside the tolerance window.
+const REPLAY_TOLERANCE_SECS: i64 = 300; // 5 minutes
+const REPLAY_NONCE_MAX_LEN: usize = 128;
+
 #[derive(Clone, Debug)]
 pub struct TenantId(pub String);
 
@@ -88,6 +95,11 @@ impl FromRequestParts<AppState> for TenantId {
             return Err(ApiError::Unauthorized("API key has been revoked".into()));
         }
 
+        // Opt-in replay protection: only checked when the caller sends both
+        // x-hsip-timestamp and x-hsip-nonce. Absent headers = zero behavior
+        // change from before this existed.
+        check_replay_protection(&key_id, parts, state)?;
+
         // Per-key rate limiting for all key types
         check_rate_limit(&key_id, state)?;
 
@@ -101,6 +113,80 @@ impl FromRequestParts<AppState> for TenantId {
             .with_label_values(&["auth", "ok"])
             .inc();
         Ok(TenantId(tenant_id))
+    }
+}
+
+/// Opt-in replay protection. If neither `x-hsip-timestamp` nor `x-hsip-nonce`
+/// is present, this is a no-op — existing callers are entirely unaffected.
+/// If a caller sends both, the timestamp must be within
+/// `REPLAY_TOLERANCE_SECS` of server time and the (key_id, nonce) pair must
+/// not have been seen before within that window. A signature alone can't
+/// stop a captured request from being replayed verbatim; this closes that
+/// gap for callers who opt in without breaking anyone who doesn't.
+fn check_replay_protection(key_id: &str, parts: &Parts, state: &AppState) -> Result<(), ApiError> {
+    let ts_header = parts
+        .headers
+        .get("x-hsip-timestamp")
+        .and_then(|v| v.to_str().ok());
+    let nonce_header = parts
+        .headers
+        .get("x-hsip-nonce")
+        .and_then(|v| v.to_str().ok());
+
+    let (ts_str, nonce) = match (ts_header, nonce_header) {
+        (None, None) => return Ok(()),
+        (Some(t), Some(n)) => (t, n),
+        _ => {
+            metrics::REPLAY_REJECTED
+                .with_label_values(&["malformed_headers"])
+                .inc();
+            return Err(ApiError::BadRequest(
+                "x-hsip-timestamp and x-hsip-nonce must both be present, or neither".into(),
+            ));
+        }
+    };
+
+    if nonce.is_empty() || nonce.len() > REPLAY_NONCE_MAX_LEN {
+        metrics::REPLAY_REJECTED
+            .with_label_values(&["malformed_headers"])
+            .inc();
+        return Err(ApiError::BadRequest(format!(
+            "x-hsip-nonce must be 1-{REPLAY_NONCE_MAX_LEN} characters"
+        )));
+    }
+
+    let ts: i64 = ts_str.parse().map_err(|_| {
+        metrics::REPLAY_REJECTED
+            .with_label_values(&["malformed_headers"])
+            .inc();
+        ApiError::BadRequest("x-hsip-timestamp must be a Unix timestamp in seconds".into())
+    })?;
+
+    let now_secs = now_ms() / 1000;
+    if (now_secs - ts).abs() > REPLAY_TOLERANCE_SECS {
+        metrics::REPLAY_REJECTED
+            .with_label_values(&["timestamp_out_of_window"])
+            .inc();
+        return Err(ApiError::Unauthorized(format!(
+            "x-hsip-timestamp outside the allowed {REPLAY_TOLERANCE_SECS}s window"
+        )));
+    }
+
+    let dedup_key = format!("{key_id}:{nonce}");
+    let expiry_ms = now_ms() + REPLAY_TOLERANCE_SECS * 2 * 1000;
+    match state.replay_nonces.entry(dedup_key) {
+        dashmap::mapref::entry::Entry::Occupied(_) => {
+            metrics::REPLAY_REJECTED
+                .with_label_values(&["duplicate_nonce"])
+                .inc();
+            Err(ApiError::Unauthorized(
+                "Duplicate x-hsip-nonce for this key — request already processed".into(),
+            ))
+        }
+        dashmap::mapref::entry::Entry::Vacant(v) => {
+            v.insert(expiry_ms);
+            Ok(())
+        }
     }
 }
 

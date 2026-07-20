@@ -130,6 +130,18 @@ pub static CHAIN_WRITE_RETRIES: Lazy<CounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Requests rejected by the opt-in replay-protection check (x-hsip-timestamp
+/// + x-hsip-nonce headers). Zero unless a caller opts in, since the headers
+/// are entirely optional — see `auth.rs::check_replay_protection`.
+pub static REPLAY_REJECTED: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "hsip_replay_rejected_total",
+        "Requests rejected by opt-in replay protection, by reason",
+        &["reason"]
+    )
+    .unwrap()
+});
+
 /// Force initialization of all metrics at startup
 pub fn init() {
     Lazy::force(&REQUESTS_TOTAL);
@@ -146,6 +158,7 @@ pub fn init() {
     Lazy::force(&ANCHOR_CALENDAR_UNREACHABLE);
     Lazy::force(&CHAIN_WRITE_RETRIES);
     Lazy::force(&MASTER_KEY_ROTATIONS);
+    Lazy::force(&REPLAY_REJECTED);
 }
 
 /// Render all metrics as Prometheus text format

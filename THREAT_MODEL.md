@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.7-draft  
+**Version:** 0.8-draft  
 **Date:** 2026-07-20  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -77,7 +77,7 @@ A stolen database contains only hashes — not usable API keys.
 
 *Source: `crates/hsip-api/src/auth.rs` — `hash_key()`*
 
-### 4.3 Replay Prevention: Protocol Layer (UDP Sessions)
+### 4.3 Replay Prevention: Protocol Layer (UDP Sessions) and HTTP (Opt-In)
 
 The `hsip-core` crate implements a 64-packet sliding window nonce tracker for the UDP consent and session protocol:
 
@@ -85,9 +85,22 @@ The `hsip-core` crate implements a 64-packet sliding window nonce tracker for th
 - Any previously seen nonce is rejected (`NonceError::Replay`)
 - Nonces more than 64 positions behind the current maximum are rejected (`NonceError::TooOld`)
 
-**Scope limitation:** This nonce window is used in the UDP session layer (`hsip-core`). The HTTP REST API does not enforce per-request nonce replay prevention. An attacker who captures a valid HTTP request with a stolen API key can replay it until the key is revoked. The defense against this at the HTTP layer is the rate limiter (Section 4.6) and short-lived key expiry.
-
 *Source: `crates/hsip-core/src/nonce.rs`*
+
+**HTTP REST API:** as of this revision, a caller can opt a request into replay protection by sending two headers:
+
+- `x-hsip-timestamp` — Unix timestamp in seconds
+- `x-hsip-nonce` — an opaque string, 1–128 characters, unique per request
+
+If both are present, `auth.rs::check_replay_protection` rejects the request (401) unless the timestamp is within 5 minutes of server time and the `(key_id, nonce)` pair has not been seen before within that window. Deduplication is scoped per `key_id`, not global, so two different tenants can safely reuse the same nonce value. Nonces are tracked in an in-memory `DashMap` (`AppState.replay_nonces`), swept every 60s by a background task in `main.rs` to bound memory growth — entries live for 10 minutes (twice the tolerance window) before being eligible for sweep.
+
+**This is opt-in, not mandatory** — a request with neither header behaves exactly as before this feature existed, and every existing SDK/CLI caller is unaffected until it's updated to send them. Sending only one of the two headers is a 400 (malformed), not silently ignored, so a caller can't accidentally think it's protected when it isn't.
+
+**What this does and doesn't defend against:** a signature (or a bearer token) proves who sent a request; it says nothing about whether that exact request has been sent before. Without these headers, an attacker who captures a valid HTTP request (e.g. via a compromised proxy, logging pipeline, or MITM before TLS termination) can resend it verbatim until the key is revoked or the rate limiter kicks in (Section 4.6) — replaying it is otherwise indistinguishable from the original call. With these headers, that captured request stops working the moment its nonce is reused or its timestamp ages out of the window, without requiring a key rotation. This does **not** protect against a stolen API key being used for *new*, non-replayed requests — that's a key-theft problem, not a replay problem, and is out of scope for this mechanism (see the rate limiter and key expiry as the relevant mitigations there).
+
+**Not yet adopted by HSIP's own SDKs/CLI/dashboard** — this pass wires the server-side check only; none of `sdks/python`, `sdks/node`, `sdks/go`, `hsip-cli`, or the dashboard send these headers yet. A caller who wants replay protection today constructs them directly.
+
+*Source: `crates/hsip-api/src/auth.rs::check_replay_protection`, `crates/hsip-api/src/state.rs::ReplayNonceTracker`, `crates/hsip-api/src/main.rs` (sweep task)*
 
 ### 4.4 Tenant Isolation at the Query Level
 
