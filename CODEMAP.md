@@ -9,12 +9,12 @@
 ### `main`
 - **type**: function
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Binary entry point; sets up Tokio runtime and calls `run()`, writing any fatal error to disk.
+- **purpose**: Binary entry point; sets up Tokio runtime and calls `run()`, writing any fatal error to disk. First installs the process-wide default rustls `CryptoProvider` (`aws_lc_rs`) before anything else — both `axum-server` (server TLS) and `reqwest` (HTTP client TLS, used for OpenTimestamps submission) enable different rustls crypto-provider features (`aws-lc-rs` vs `ring`), so more than one is compiled into this binary and rustls can't auto-select a default; without this call, the first TLS operation anywhere in the process panics. `install_default()`'s `Err` (meaning something else already won the race) is ignored.
 - **inputs**: none
 - **outputs**: `std::process::ExitCode`
-- **calls**: `run`, `fatal`, `write_error_log`
+- **calls**: `rustls::crypto::aws_lc_rs::default_provider().install_default`, `run`, `fatal`, `write_error_log`
 - **called_by**: OS
-- **mutates**: nothing (delegates to `run`)
+- **mutates**: process-wide rustls `CryptoProvider` default (once); otherwise delegates to `run`
 
 ### `fatal`
 - **type**: function
@@ -39,10 +39,10 @@
 ### `run`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns three background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded.
+- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns three background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded. When `[server.tls]` is configured, delegates cert/key (and optional mutual-TLS client-CA) loading to `mtls::build_rustls_config` instead of calling `RustlsConfig::from_pem_file` directly — logs "Mutual TLS enabled" when `tls_config.client_ca_path` is set.
 - **inputs**: none
 - **outputs**: `Result<()>`
-- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`
+- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`, `mtls::build_rustls_config`
 - **called_by**: `main`
 - **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows, `rate_limit_state` snapshots), `state.replay_nonces` DashMap (sweep removes expired entries), `state.rate_limiter`/`agent_tracker`/`sandbox_rate` (populated from persisted state at startup)
 
@@ -183,11 +183,11 @@
 ### `TlsConfig`
 - **type**: struct
 - **file**: `crates/hsip-api/src/config.rs`
-- **purpose**: Paths to TLS cert/key files and whether to require HTTPS.
+- **purpose**: Paths to TLS cert/key files, whether to require HTTPS, and optional `client_ca_path` (mutual TLS — see `mtls.rs`). `client_ca_path: None` (default) is server-only TLS, unchanged from before mTLS existed.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
-- **called_by**: `ServerConfig`
+- **called_by**: `ServerConfig`, `main.rs::run` (reads `client_ca_path` when starting the TLS listener), `mtls::build_rustls_config`
 - **mutates**: nothing
 
 ### `DatabaseConfig`
@@ -1030,6 +1030,71 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **outputs**: `String`
 - **calls**: `prometheus::gather`, `TextEncoder::encode`
 - **called_by**: `metrics_handler`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-api/src/mtls.rs`
+
+Optional mutual TLS for the HTTPS server (`[server.tls] client_ca_path`).
+HSIP has no dedicated node-to-node network protocol — "federated trust"
+(`routes::trust`) is offline key registration, not a live channel — but
+the existing `[server.tls]` HTTPS server only ever authenticated itself
+to clients, never the reverse. When `client_ca_path` is set, the server
+refuses to complete a TLS handshake with any client that doesn't present
+a certificate signed by that CA, on top of (not instead of) bearer-token
+auth. `client_ca_path: None` (the default) takes the exact same code
+path (`RustlsConfig::from_pem_file`) as before this module existed —
+fully backward compatible.
+
+### `build_rustls_config`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/mtls.rs`
+- **purpose**: Entry point called from `main.rs`. `client_ca_path: None` → delegates directly to `RustlsConfig::from_pem_file` (unchanged pre-mTLS behavior). `client_ca_path: Some` → builds a `rustls::ServerConfig` with client-cert verification on a blocking thread, then wraps it via `RustlsConfig::from_config`.
+- **inputs**: `cert_path: &str`, `key_path: &str`, `client_ca_path: Option<&str>`
+- **outputs**: `Result<RustlsConfig>`
+- **calls**: `RustlsConfig::from_pem_file`, `tokio::task::spawn_blocking`, `build_server_config`, `RustlsConfig::from_config`
+- **called_by**: `main.rs::run`
+- **mutates**: nothing
+
+### `build_server_config`
+- **type**: function
+- **file**: `crates/hsip-api/src/mtls.rs`
+- **purpose**: Loads the server cert chain, private key, and client verifier, then builds a `rustls::ServerConfig` requiring client certificates. Sets `alpn_protocols` to `[h2, http/1.1]` — the same set axum-server's own `from_pem_file` path sets, otherwise HTTP/2 negotiation would silently not offer h2 on this hand-built config.
+- **inputs**: `cert_path: &str`, `key_path: &str`, `ca_path: &str`
+- **outputs**: `Result<ServerConfig>`
+- **calls**: `load_certs`, `load_private_key`, `load_client_verifier`, `ServerConfig::builder`
+- **called_by**: `build_rustls_config` (inside `spawn_blocking`)
+- **mutates**: nothing
+
+### `load_certs`
+- **type**: function
+- **file**: `crates/hsip-api/src/mtls.rs`
+- **purpose**: Parses a PEM file into one or more `CertificateDer` (the server's own cert chain).
+- **inputs**: `path: &str`
+- **outputs**: `Result<Vec<CertificateDer<'static>>>`
+- **calls**: `std::fs::read`, `CertificateDer::pem_slice_iter`
+- **called_by**: `build_server_config`
+- **mutates**: nothing
+
+### `load_private_key`
+- **type**: function
+- **file**: `crates/hsip-api/src/mtls.rs`
+- **purpose**: Scans a PEM file for the first parseable private key (a PEM file may have other sections, e.g. a cert, before the key) — mirrors axum-server's own `config_from_pem` key-scanning behavior.
+- **inputs**: `path: &str`
+- **outputs**: `Result<PrivateKeyDer<'static>>`
+- **calls**: `std::fs::read`, `PrivateKeyDer::pem_slice_iter`
+- **called_by**: `build_server_config`
+- **mutates**: nothing
+
+### `load_client_verifier`
+- **type**: function
+- **file**: `crates/hsip-api/src/mtls.rs`
+- **purpose**: Parses one or more CA certificates from `client_ca_path` into a `RootCertStore` and builds a `WebPkiClientVerifier` that *requires* (not merely allows) every connecting client to present a certificate chaining to one of them. Kept separate from TLS-listener setup so it's unit-testable without binding a real socket. Note for operators: client certs must carry the `clientAuth` Extended Key Usage extension or `rustls-webpki` rejects them with a "certificate unknown" TLS alert even when correctly chained to a trusted CA — see `config.example.toml`.
+- **inputs**: `ca_path: &str`
+- **outputs**: `Result<Arc<dyn rustls::server::danger::ClientCertVerifier>>`
+- **calls**: `std::fs::read`, `CertificateDer::pem_slice_iter`, `RootCertStore::add`, `WebPkiClientVerifier::builder`
+- **called_by**: `build_server_config`
 - **mutates**: nothing
 
 ---

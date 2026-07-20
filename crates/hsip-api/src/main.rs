@@ -28,6 +28,7 @@ mod db;
 mod errors;
 mod key_encryption;
 mod metrics;
+mod mtls;
 mod rate_limit_persistence;
 mod routes;
 mod state;
@@ -52,6 +53,18 @@ fn fatal(msg: &str) -> ! {
 
 #[tokio::main]
 async fn main() {
+    // Must happen before any rustls ServerConfig/ClientConfig is built
+    // (TLS server binding below, or reqwest's TLS client used elsewhere in
+    // this process for OpenTimestamps submission). Both `axum-server`
+    // (server TLS) and `reqwest` (HTTP client TLS) enable a rustls crypto
+    // provider feature — `aws-lc-rs` and `ring` respectively — so more than
+    // one is compiled into this binary and rustls can't auto-select a
+    // default; without this, the first TLS operation anywhere in the
+    // process panics with "Could not automatically determine the
+    // process-level CryptoProvider". Ignore the Err: it only means some
+    // other call already won the race to install one, which is fine.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // On Windows desktop builds: self-install on first run (creates shortcuts,
     // copies exe to %LOCALAPPDATA%\HSIP, then re-launches from there).
     #[cfg(all(windows, feature = "embed-dashboard"))]
@@ -316,10 +329,15 @@ async fn run() -> Result<()> {
         tracing::info!("🔒 TLS enabled");
         tracing::info!("   Certificate: {}", tls_config.cert_path);
         tracing::info!("   Private key: {}", tls_config.key_path);
+        if let Some(ref ca_path) = tls_config.client_ca_path {
+            tracing::info!("🔐 Mutual TLS enabled — client certificate required");
+            tracing::info!("   Client CA: {}", ca_path);
+        }
 
-        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+        let rustls_config = mtls::build_rustls_config(
             &tls_config.cert_path,
             &tls_config.key_path,
+            tls_config.client_ca_path.as_deref(),
         )
         .await
         .context("Failed to load TLS certificates")?;

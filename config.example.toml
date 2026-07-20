@@ -10,6 +10,22 @@ port = 3000
 # cert_path = "cert.pem"
 # key_path = "key.pem"
 # require_https = true
+#
+# Optional mutual TLS: uncomment client_ca_path to require every connecting
+# client to present a certificate signed by this CA before the TLS handshake
+# completes — on top of, not instead of, the usual bearer-token auth. Useful
+# when HSIP nodes (or a partner/regulator's system) connect to each other's
+# APIs over HTTPS and you want peer authentication enforced at the transport
+# layer, not just the application layer.
+# client_ca_path = "client-ca.pem"
+#
+# Client certificates MUST include the "TLS Web Client Authentication"
+# Extended Key Usage (clientAuth EKU) or the handshake will be rejected —
+# most CA tooling (step-ca, OpenSSL with an appropriate extfile, a private
+# PKI) sets this by default for client certs, but a bare
+# `openssl req -x509 -newkey ...` with no extensions will NOT and will fail
+# with a "certificate unknown" TLS alert. Example extfile line:
+#   extendedKeyUsage = clientAuth
 
 [database]
 # SQLite in-memory for testing (data lost on restart)

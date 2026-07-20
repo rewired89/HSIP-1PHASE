@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.11-draft  
+**Version:** 0.12-draft  
 **Date:** 2026-07-20  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -259,13 +259,29 @@ Auditing the model above surfaced two gaps at once, both closed this revision: (
 
 *Source: `crates/hsip-api/src/routes/keys.rs`, `crates/hsip-api/src/routes/admin.rs`, `crates/hsip-api/src/db.rs`, `crates/hsip-cli/src/commands/keys.rs`*
 
+### 4.15 Mutual TLS (`[server.tls] client_ca_path`)
+
+HSIP has no dedicated node-to-node network protocol as of this writing — federated trust (§ Federated Trust in `CLAUDE.md`) is offline Ed25519 verify-key registration plus local signature verification, not a live channel between HSIP instances. The gap previously documented here (§7's residual-risk table: "no automatic peer auth at the transport layer") was nonetheless real and generic: HSIP's own HTTPS server, when `[server.tls]` is configured, only ever authenticated itself to connecting clients, never the reverse. Any TLS client holding a valid bearer token could connect with nothing enforced at the transport layer.
+
+`client_ca_path`, when set to a CA certificate file, closes that: the server now requires and verifies a client certificate chaining to that CA before the TLS handshake completes, on top of (not instead of) the bearer-token auth every request still goes through afterward. This is what an operator running multiple HSIP nodes — or a partner/regulator's system — that connect to each other's APIs over HTTPS would configure identically on both ends to authenticate each other at the transport layer. It is not restricted to HSIP-to-HSIP traffic specifically, since no such specific protocol exists to scope it to; it is the direct, generic fix for the gap as documented.
+
+**Fully opt-in, backward compatible:** `client_ca_path: None` (the default, and the only option before this revision) takes the exact same `RustlsConfig::from_pem_file` code path as before — byte-for-byte unchanged. No existing TLS-enabled deployment is affected until an operator deliberately sets the new option.
+
+**A pre-existing latent panic, found and fixed along the way:** `reqwest` (this process's HTTP client, used for OpenTimestamps submission) and `axum-server` (this process's TLS server) enable *different* rustls crypto-provider features — `ring` and `aws-lc-rs` respectively. Both end up compiled into the same binary, so rustls cannot auto-select a default provider, and the first `ServerConfig`/`ClientConfig` builder call anywhere in the process would panic with "Could not automatically determine the process-level CryptoProvider." This was not introduced by this work — the pre-existing plain-TLS code path already called the same underlying builder internally, and would have panicked the moment any deployment actually enabled `[server.tls]` in production. It had simply never been exercised by any existing test or by this project's dev/desktop-mode-only environment. Fixed by explicitly installing the `aws-lc-rs` provider as the process-wide default at the top of `main()`, before any TLS code runs.
+
+**Operational gotcha, discovered during verification:** client certificates must carry the `clientAuth` Extended Key Usage extension (OID 1.3.6.1.5.5.7.3.2) or the handshake fails with a "certificate unknown" TLS alert, even when the certificate correctly chains to the configured trusted CA — `rustls-webpki` enforces EKU for client certificates. A first attempt at end-to-end verification, using a quick `openssl req -x509 -newkey ...` test certificate with no extensions, reproduced exactly this failure; documented in `config.example.toml` so operators don't have to rediscover it.
+
+**Verified:** unit tests (`mtls.rs`) build real X.509 certificates via the system `openssl` CLI (not mocked bytes) and confirm the CA-loading/verifier-building logic accepts valid input and rejects garbage. Full end-to-end verification against a real running server in server mode (not just unit tests): a client certificate signed by the configured CA, with the `clientAuth` EKU, connects successfully and receives a genuine `200 {"status":"ok",...}` response; a certificate signed by a *different*, untrusted CA, and a connection attempt presenting no client certificate at all, are both rejected — confirmed via `curl`'s verbose TLS trace that rejection happens during the TLS handshake itself (the client never reaches the point of successfully sending an HTTP request), not as an application-layer 401/403.
+
+*Source: `crates/hsip-api/src/mtls.rs`, `crates/hsip-api/src/config.rs` (`TlsConfig::client_ca_path`), `crates/hsip-api/src/main.rs` (crypto provider install + TLS branch)*
+
 ---
 
 ## 5. Trust Boundaries
 
 | Boundary | Trust level | Notes |
 |---|---|---|
-| HTTPS client → HSIP API | Authenticated | Valid bearer key required for all `/v1/*` endpoints |
+| HTTPS client → HSIP API | Authenticated | Valid bearer key required for all `/v1/*` endpoints. If `[server.tls] client_ca_path` is configured (§4.15), a client certificate signed by that CA is also required before the TLS handshake completes — opt-in, off by default. |
 | HSIP server → SQLite | Trusted | Database must not be publicly accessible |
 | Master key storage → HSIP server | Critical | Compromise = all signing keys exposed |
 | Tenant A ↔ Tenant B | Untrusted | Isolated by `tenant_id` on every query |
@@ -310,7 +326,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | **OpenTimestamps calendar submission unverified end-to-end** | Medium | `anchor.rs`'s HTTP client logic is unit-tested against a mock server only. Outbound HTTPS to `*.calendar.opentimestamps.org` has been confirmed blocked in every sandboxed environment this project has been developed in to date (including this session's, via a 403 on the CONNECT tunnel) — real-network submission has never been observed to complete. Verify from an unrestricted network before relying on it for compliance purposes. |
 | Rate-limit/velocity snapshot interval (was: full reset on restart) | Low | §4.6 closed the "in-memory only, full reset on every restart" gap — `rate_limit_state` now persists rate-limit, AI-agent-velocity, and sandbox-provisioning counters across restarts. Residual window: up to `SNAPSHOT_INTERVAL_SECS` (30s) of state can still be lost on a crash or unclean restart, since this is a periodic snapshot rather than a write-through on every request. |
 | SQLite without WAL under write contention | Low | Low risk for single-tenant deployments; use `DATABASE_URL` pointing at PostgreSQL for high-concurrency |
-| No mutual TLS between federated HSIP nodes | Low | Federated trust uses explicit Ed25519 verify key registration; no automatic peer auth at the transport layer |
+| Mutual TLS is opt-in, not enforced by default (was: no peer auth at the transport layer at all) | Low | §4.15 closed the "no automatic peer auth at the transport layer" gap — `[server.tls] client_ca_path` lets an operator require and verify client certificates. What remains by design: it's off by default (as TLS itself always has been for HSIP, a self-hosted/desktop-first product), and HSIP does not run its own CA or issue certificates — the operator brings their own PKI. |
 | Audit log anchor cadence window | Low | §4.8.1 closed the "chain not anchored outside this database" gap — an attacker who deletes the whole chain *after* its last anchor is now detectable by comparing the anchored root against what remains. The residual window is the same shape as decisions' own: a chain deleted *before* its next anchor cycle runs (bounded by `INTERVAL_TRIGGER_MS` = 5 min) is still undetectable by this mechanism alone. |
 | Clock skew affects consent, credential, *and* decision-chain ordering | Low | All three subsystems trust the server's wall clock for expiry/ordering, not just consent. Use NTP synchronization in production. |
 | Post-quantum crypto (ML-KEM-768/ML-DSA-65) is not part of the default build | Informational, not a gap | These live in `hsip-verify`, excluded from the workspace (requires Z3 built from source — see `CLAUDE.md`). For HSIP's actual threat model — API-key theft, filesystem/DB compromise — this matters far less than the items above; don't let its prominence in dependency lists (§4.11) imply it's closer to production-ready than the excluded-crate status indicates. |
@@ -328,6 +344,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Master key rotation | Covered by `hsip-api/tests/integration.rs::test_master_key_rotation_reencrypts_and_swaps_live_key` — proves actual re-encryption (old key stops decrypting, the key now on disk decrypts), live in-memory key swap on the *same running process* (not just DB/file state), and rejection of a non-root-admin key. Also manually verified end-to-end against a running server: real `hsip keys rotate-master`/`master-fingerprint` CLI invocations, confirming fingerprints change, the key file on disk is rewritten, and `POST /v1/messages/sign` keeps working transparently across the rotation. |
 | `HSIP_ROTATION_HOOK` rotation | Covered by `test_master_key_rotation_hook_for_env_sourced_key` (Unix-only) — proves refusal with no hook configured, a succeeding hook receives exactly the new key and the DB genuinely re-encrypts, and — the safety-critical case — a *failing* hook (non-zero exit) leaves the database completely untouched rather than partially rotated. Also manually verified end-to-end against a running server with `HSIP_MASTER_KEY` and `HSIP_ROTATION_HOOK` both set, with the hook's output independently re-hashed and confirmed to match the reported fingerprint. |
 | Master key fingerprint endpoint | Covered by `test_master_key_fingerprint_is_read_only_and_admin_gated` — proves it's idempotent (repeated calls return the identical fingerprint, i.e. no mutation) and rejects a non-root-admin key. |
+| Mutual TLS (`client_ca_path`) | Unit-tested in `mtls.rs` against real X.509 certificates generated via the system `openssl` CLI (not mocked). Also manually verified end-to-end against a real running server in server mode: a client certificate signed by the configured CA (with the required `clientAuth` EKU) connects and receives a genuine response; a certificate from an untrusted CA, and a request with no client certificate at all, are both rejected at the TLS handshake itself, confirmed via `curl`'s verbose TLS trace. |
 | Dependency vulnerability scanning | `cargo audit` runs on every build |
 | Minimum supported Rust version | 1.88.0 |
 

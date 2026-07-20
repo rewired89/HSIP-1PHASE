@@ -18,6 +18,7 @@ embed-dashboard = ["rust-embed", "mime_guess"]
 [dependencies]
 axum             = { version = "0.7", features = ["multipart"] }
 axum-server      = { version = "0.8", features = ["tls-rustls"] }
+rustls           = "0.23"
 tokio            = { version = "1", features = ["full"] }
 tower-http       = { version = "0.5", features = ["cors", "limit", "request-id"] }
 serde            = { version = "1", features = ["derive"] }

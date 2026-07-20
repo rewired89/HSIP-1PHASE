@@ -27,6 +27,14 @@ pub struct TlsConfig {
     pub key_path: String,
     #[serde(default = "default_true")]
     pub require_https: bool,
+    /// Path to a CA certificate (PEM, may contain multiple CAs). When set,
+    /// mutual TLS is enabled: every client must present a certificate
+    /// signed by one of these CAs before the TLS handshake completes, on
+    /// top of (not instead of) the existing bearer-token auth. `None`
+    /// (default) preserves today's server-only-TLS behavior exactly — see
+    /// `mtls.rs`.
+    #[serde(default)]
+    pub client_ca_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -172,6 +180,11 @@ impl Config {
             }
             if !Path::new(&tls.key_path).exists() {
                 bail!("TLS private key file not found: {}", tls.key_path);
+            }
+            if let Some(ref ca_path) = tls.client_ca_path {
+                if !Path::new(ca_path).exists() {
+                    bail!("TLS client_ca_path file not found: {}", ca_path);
+                }
             }
         }
 
