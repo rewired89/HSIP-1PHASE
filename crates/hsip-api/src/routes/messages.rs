@@ -67,8 +67,11 @@ pub async fn sign(
     let encrypted_b64: String = row.try_get(0)?;
 
     // The signing key is stored encrypted — decrypt it with the master key.
-    let key_bytes = decrypt_signing_key(&encrypted_b64, &state.master_key)
-        .map_err(|e| ApiError::Internal(format!("key decryption failed: {e}")))?;
+    let key_bytes = {
+        let master_key = state.master_key.read().await;
+        decrypt_signing_key(&encrypted_b64, &master_key)
+    }
+    .map_err(|e| ApiError::Internal(format!("key decryption failed: {e}")))?;
 
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let signature = signing_key.sign(req.content.as_bytes());
@@ -90,16 +93,14 @@ pub async fn sign(
     .execute(&state.db)
     .await?;
 
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, timestamp)
-         VALUES (?, ?, 'message.signed', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "message.signed",
+        Some(&peer),
+        None,
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(&peer)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     metrics::MESSAGES_SIGNED
@@ -161,17 +162,14 @@ pub async fn verify(
     } else {
         "message.verification_failed"
     };
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, timestamp)
-         VALUES (?, ?, ?, ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        action,
+        Some(&req.peer_verify_key),
+        None,
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(action)
-    .bind(&req.peer_verify_key)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(VerifyResponse {

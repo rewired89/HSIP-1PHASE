@@ -158,7 +158,7 @@ HSIP is not certified against any regulatory framework. It provides cryptographi
 
 | Capability | What it does |
 |---|---|
-| **Append-only audit log** | No delete or update endpoint exists. Every entry signed with Ed25519. Exportable for auditors. |
+| **Append-only, hash-chained audit log** | No delete or update endpoint exists. Every entry extends a per-tenant BLAKE3 hash chain (`GET /v1/audit/verify` recomputes and checks it), so altering or deleting a row breaks every link after it. Exportable for auditors. |
 | **Ed25519-signed actions** | Every control action signed with the institution's key. Timestamp + signature = non-repudiable record. |
 | **Time-bounded consent grants** | Machine-readable grants with scope, expiry, and revocation via `POST /v1/consent/grant`. |
 | **Right-to-erasure** | `DELETE /v1/tenant/erase` permanently removes all tenant data and logs the erasure event. |
@@ -223,6 +223,23 @@ POST   /v1/trust/verify        Verify a signed message from a named counterparty
 
 ---
 
+### Master key rotation and backups
+
+The master key encrypts every tenant's private signing key at rest. It's generated automatically on first boot — back it up, and rotate it on whatever schedule your compliance policy requires:
+
+```bash
+# Confirm your backup file actually matches what's running — no key exposure, no rotation
+hsip keys master-fingerprint
+
+# Rotate on a schedule: re-encrypts every identity, swaps live, no restart, no downtime
+hsip keys rotate-master
+#   → asks for confirmation before doing anything; pass --yes for scripted/scheduled runs
+```
+
+Admin key only. Requires the master key to be file-backed (the default) rather than sourced from `HSIP_MASTER_KEY` — if you're pointing that at your own secrets manager, rotate it there instead, then restart.
+
+---
+
 ### Financial services API examples
 
 ```bash
@@ -261,10 +278,12 @@ HSIP uses audited [RustCrypto](https://github.com/RustCrypto) libraries througho
 | Identity & signatures | Ed25519 | RFC 8032 | Used by Signal, Tor, SSH, TLS 1.3, OpenSSH, and most modern HSMs. 128-bit security level. Deterministic — no randomness failure mode. |
 | Key encryption at rest | ChaCha20-Poly1305 | RFC 8439 | Constant-time implementation. No timing side-channels. Used in TLS 1.3, WireGuard, Signal. AEAD — encryption and authentication in one operation. |
 | Key derivation | HKDF-SHA-256 | RFC 5869 | Derives encryption keys from the master key. Standard, audited, used in TLS 1.3 and Signal Protocol. |
-| Audit log integrity | BLAKE3 (identity hashing) | — | Used for identity and consent record fingerprinting. The HTTP API audit log is append-only by policy — no delete or update endpoints exist. Cryptographic hash chaining of the audit log is on the roadmap. |
+| Audit log integrity | BLAKE3 hash chain | — | Every `audit_entries` row links to the previous one via `entry_hash = BLAKE3(prev_hash \|\| ...)`. `GET /v1/audit/verify` recomputes the chain server-side; altering or deleting a row breaks every link after it. Append-only by policy (no delete/update endpoint) *and* now tamper-evident by hash chain. |
 | Session key exchange | X25519 ephemeral | RFC 7748 | Elliptic-curve Diffie-Hellman on Curve25519. New session key per connection = perfect forward secrecy. Past sessions cannot be decrypted if long-term keys are compromised. |
-| **Post-quantum identity** | **ML-DSA-65 (Dilithium)** | **NIST FIPS 204** | **"Harvest now, decrypt later" resistant. A quantum computer cannot forge signatures even with the public key.** |
-| **Post-quantum key exchange** | **ML-KEM-768 (Kyber)** | **NIST FIPS 203** | **Encapsulation mechanism secure against Shor's algorithm. Enable for long-lived key material that must survive 2030+.** |
+| **Post-quantum identity** † | **ML-DSA-65 (Dilithium)** | **NIST FIPS 204** | **"Harvest now, decrypt later" resistant. A quantum computer cannot forge signatures even with the public key.** |
+| **Post-quantum key exchange** † | **ML-KEM-768 (Kyber)** | **NIST FIPS 203** | **Encapsulation mechanism secure against Shor's algorithm. Enable for long-lived key material that must survive 2030+.** |
+
+† Lives in the `hsip-verify` crate, which is **excluded from the default workspace build** (it requires the Z3 SMT solver built from source — see `cargo build -p hsip-verify` in Build Commands). Everything else in this table ships in the default `hsip-api` binary; post-quantum support does not, yet.
 
 ### Why these choices matter for financial institutions
 
@@ -272,21 +291,21 @@ HSIP uses audited [RustCrypto](https://github.com/RustCrypto) libraries througho
 
 **ChaCha20-Poly1305 vs AES-GCM:** AES-GCM is vulnerable to nonce reuse. ChaCha20-Poly1305 degrades gracefully. More importantly, ChaCha20 has no timing side-channel — AES on CPUs without hardware acceleration leaks key material through cache timing. HSIP uses constant-time implementations throughout.
 
-**Append-only audit log:** The HTTP API has no delete or update endpoint for audit records — omission or alteration requires direct database access, which is an OS-level compromise. Every audit entry is Ed25519-signed, so authorship is cryptographically verifiable even if the entry is later copied to an external log sink. Cryptographic hash chaining of audit entries (linking each record to the hash of the previous one) is on the roadmap for v1.0.
+**Append-only, hash-chained audit log:** The HTTP API has no delete or update endpoint for audit records — omission or alteration requires direct database access, which is an OS-level compromise. Every audit entry now also links to the previous one via a BLAKE3 hash chain (`entry_hash = BLAKE3(prev_hash || id || tenant_id || action || peer_verify_key || details || timestamp)`), verifiable on demand via `GET /v1/audit/verify` — so even an attacker with direct database write access cannot alter or delete a row without breaking the chain for everything after it. This does not (yet) prevent deleting the *entire* chain undetected — see the anchoring note below and `THREAT_MODEL.md` §4.8 for the remaining scope.
 
 **Post-quantum timeline:** NIST finalized ML-KEM and ML-DSA in 2024. The NSA's CNSA 2.0 suite requires post-quantum algorithms for TOP SECRET material by 2030 and recommends migration now. HSIP builds in both algorithms today, disabled by default, enabled with one config flag — so institutions can begin PQ migration on their own timeline without a software upgrade.
 
 ### Key storage architecture
 
 ```
-Master key → never touches disk
+Master key (file, or HSIP_MASTER_KEY from a secrets manager)
     ↓ HKDF-SHA-256 derivation
 Wrapping key
     ↓ ChaCha20-Poly1305 encryption
 Encrypted Ed25519 private key → stored in SQLite
 ```
 
-The master key lives only in memory (or at a configured path with filesystem permissions). Compromise of the database file does not expose private keys — an attacker also needs the master key. API keys are stored as SHA-256 hashes only; the raw key is shown once at creation and never stored.
+By default the master key lives in a file with restrictive filesystem permissions (`~/.hsip/master.key`, or a configured path); set `HSIP_MASTER_KEY` to source it from a secrets manager instead and keep it off this machine's disk entirely. Either way, compromise of the database file alone does not expose private keys — an attacker also needs the master key. `POST /v1/admin/master-key/rotate` can replace it live without a restart. API keys are stored as SHA-256 hashes only; the raw key is shown once at creation and never stored.
 
 ### Formal verification
 
@@ -369,7 +388,7 @@ docker compose up
 ```
 
 **Built for regulated environments:**
-- **Append-only audit log** — no delete or update endpoint. Every action signed with Ed25519. Bulk export via `GET /v1/audit`.
+- **Append-only, hash-chained audit log** — no delete or update endpoint. Every entry extends a BLAKE3 hash chain, verifiable via `GET /v1/audit/verify`. Bulk export via `GET /v1/audit`.
 - **Non-repudiable signed actions** — Ed25519 signature proves authorization, identity, and timestamp for every instruction or consent action.
 - **Time-bounded consent grants** — scoped, machine-readable, revocable. `POST /v1/consent/grant` with `expires_in_seconds`.
 - **Right-to-erasure** — `DELETE /v1/tenant/erase` permanently removes all tenant data and writes a signed erasure event to the audit log.
@@ -454,21 +473,24 @@ cargo test --workspace
 
 Everything runs in a single binary for desktop/on-premise use. Switch to PostgreSQL and multi-tenancy for production financial deployments with no code changes — just a `config.toml`.
 
-16 specialized crates. 238 tests. RFC 8032 (Ed25519) + RFC 8439 (ChaCha20-Poly1305) + RFC 5869 (HKDF) + RFC 7748 (X25519) compliance verified. NIST FIPS 203 + 204 post-quantum algorithms built in. Audited RustCrypto primitives throughout — no custom cryptography.
+16 specialized crates. 261 tests (`cargo test --workspace`; `hsip-verify` excluded, see above, has its own suite). RFC 8032 (Ed25519) + RFC 8439 (ChaCha20-Poly1305) + RFC 5869 (HKDF) + RFC 7748 (X25519) compliance verified. NIST FIPS 203 + 204 post-quantum algorithms available via `hsip-verify` (not part of the default build). Audited RustCrypto primitives throughout — no custom cryptography.
 
 ---
 
 ## Security
 
-- **Private keys encrypted at rest** — ChaCha20-Poly1305 + HKDF-SHA-256. Master key never touches disk. Compromise of the database file does not expose private keys.
+- **Private keys encrypted at rest** — ChaCha20-Poly1305 + HKDF-SHA-256. Compromise of the database file alone does not expose private keys — the master key is also required. By default the master key lives in a file on disk (`~/.hsip/master.key` or a configured path); point `HSIP_MASTER_KEY` at a secrets manager (Vault, AWS KMS, etc.) instead if you don't want that.
+- **Master key rotation** — `hsip keys rotate-master` (or `POST /v1/admin/master-key/rotate` directly; bootstrap admin key only) re-encrypts every identity under a fresh key and swaps it live, no restart. Previously there was no rotation path at all. `hsip keys master-fingerprint` lets you verify a backup file matches the running key without exposing or rotating anything.
 - **API keys stored as SHA-256 hashes only** — raw key shown once at creation, never stored. Compromise of the database does not expose API credentials.
 - **Rate limiting on all endpoints** — 300 req/min default per key, configurable via `RATE_LIMIT_RPM`.
-- **AI agent velocity monitoring** — anomaly logged at >100 req/min; key auto-revoked at >1,000 req/min with immediate in-memory block before DB write.
-- **Append-only audit trail** — no delete or update endpoint exists. Every entry signed with Ed25519. Tamper requires OS-level DB access, not just API access.
-- **Replay attack prevention** — monotonic nonce counters. Replayed requests are rejected even if the signature is valid.
+- **AI agent velocity monitoring** — anomaly logged at >100 req/min; key auto-revoked at >1,000 req/min with immediate in-memory block before DB write, and the DB write that makes revocation durable past a restart now retries with backoff and logs loudly if it still fails.
+- **Append-only, hash-chained audit trail** — no delete or update endpoint exists. Every entry extends a BLAKE3 hash chain (`GET /v1/audit/verify` recomputes and checks it). Tamper requires OS-level DB access, not just API access, and is detectable if attempted.
+- **Consent records who authorized it** — every grant/revoke stores which kind of key (human / service / ai_agent) did it, so "consent" can't quietly mean "an AI agent approved its own action" without that being visible.
+- **Replay attack prevention on the UDP session/consent protocol** — monotonic nonce counters (`hsip-core`) reject zero, previously-seen, and stale nonces. **This does not currently cover the HTTP REST API** — a captured HTTP request with a valid API key can be replayed until the key expires or is revoked; the mitigations there are the rate limiter and key expiry, not per-request nonces. See `THREAT_MODEL.md` §4.3.
 - **Instant revocation** — `pending_revocation` DashSet blocks in-flight requests in memory before the async DB write completes. No race window.
 - **No telemetry, no analytics, no phone-home** — ever. Verified by code review: no outbound connections except DNS forwarding (1.1.1.1:53) when the DNS blocker is enabled.
-- **Formal verification available** — optional Z3 SMT solver module (`hsip-verify`) provides machine-checked proofs of security properties, not just tests.
+- **`HSIP_SANDBOX=true` is loudly flagged** — it opens the one endpoint in the API requiring no bearer key at all (a rate-limited, capped, 24h trial provisioner meant for a public demo deployment). Enabling it logs an unmissable startup warning and increments a dedicated metric.
+- **Formal verification available for the protocol layer, not yet part of CI** — optional Z3 SMT solver module (`hsip-verify`) provides machine-checked proofs of security properties, not just tests. Excluded from the default workspace build (`cargo build`/`cargo test --workspace` don't touch it) — build and test it explicitly with `cargo build -p hsip-verify`.
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) for a full breakdown of what HSIP protects against and what it does not.
 

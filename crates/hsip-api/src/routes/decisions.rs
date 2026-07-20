@@ -222,7 +222,10 @@ pub async fn record(
         .ok_or_else(|| ApiError::Internal("authenticated key vanished mid-request".into()))?;
     let agent_key_id: String = key_row.try_get(0)?;
 
-    let signing_key = load_signing_key(&state.db, &tenant.0, &state.master_key).await?;
+    let signing_key = {
+        let master_key = state.master_key.read().await;
+        load_signing_key(&state.db, &tenant.0, &master_key).await?
+    };
     let issuer_verify_b64 = BASE64.encode(signing_key.verifying_key().to_bytes());
 
     for attempt in 1..=MAX_ATTEMPTS {
@@ -290,16 +293,14 @@ pub async fn record(
 
         match insert_result {
             Ok(_) => {
-                let aid = Uuid::new_v4().to_string();
-                sqlx::query(
-                    "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-                     VALUES (?, ?, 'decision.recorded', ?, ?)",
+                crate::audit_log::record(
+                    &state.db,
+                    &tenant.0,
+                    "decision.recorded",
+                    None,
+                    Some(&decision_id),
+                    now,
                 )
-                .bind(&aid)
-                .bind(&tenant.0)
-                .bind(&decision_id)
-                .bind(now)
-                .execute(&state.db)
                 .await?;
 
                 metrics::DECISIONS_RECORDED
@@ -316,11 +317,15 @@ pub async fn record(
                 }));
             }
             Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+                metrics::CHAIN_WRITE_RETRIES
+                    .with_label_values(&["decisions"])
+                    .inc();
                 if attempt == MAX_ATTEMPTS {
                     return Err(ApiError::Conflict(
                         "could not extend decision chain after several attempts — high contention on this tenant's decision log".into(),
                     ));
                 }
+                crate::audit_log::chain_retry_backoff(attempt).await;
                 continue;
             }
             Err(e) => return Err(e.into()),

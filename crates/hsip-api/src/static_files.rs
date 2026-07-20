@@ -36,7 +36,11 @@ pub async fn serve(uri: Uri) -> impl IntoResponse {
         match embedded::Assets::get(path) {
             Some(file) => {
                 let mime = mime_guess::from_path(path).first_or_octet_stream();
-                let cache = if path == "index.html" { "no-cache" } else { "public, max-age=31536000, immutable" };
+                let cache = if path == "index.html" {
+                    "no-cache"
+                } else {
+                    "public, max-age=31536000, immutable"
+                };
                 Response::builder()
                     .status(StatusCode::OK)
                     .header("content-type", mime.as_ref())

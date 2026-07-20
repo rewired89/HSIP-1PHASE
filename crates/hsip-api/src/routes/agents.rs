@@ -151,18 +151,18 @@ pub async fn list(
 
 /// Well-known localhost ports where AI agents / MCP servers commonly listen.
 static PROBE_PORTS: &[(u16, &str, &str)] = &[
-    (11434, "ollama",      "Ollama local LLM server"),
-    (5173,  "vite",        "Vite dev server (MCP plugin likely)"),
-    (8787,  "wrangler",    "Cloudflare Workers (wrangler dev)"),
-    (8080,  "http-agent",  "Generic HTTP agent / proxy"),
-    (8000,  "uvicorn",     "FastAPI / Django / Python agent"),
-    (5000,  "flask",       "Flask API / Python agent"),
-    (4000,  "agent",       "Generic agent port"),
-    (3001,  "dashboard",   "Secondary dev server"),
-    (3000,  "dev-api",     "Generic dev API / Next.js"),
-    (9000,  "agent",       "Generic agent port"),
-    (1234,  "lmstudio",    "LM Studio local LLM API"),
-    (8888,  "jupyter",     "Jupyter notebook server"),
+    (11434, "ollama", "Ollama local LLM server"),
+    (5173, "vite", "Vite dev server (MCP plugin likely)"),
+    (8787, "wrangler", "Cloudflare Workers (wrangler dev)"),
+    (8080, "http-agent", "Generic HTTP agent / proxy"),
+    (8000, "uvicorn", "FastAPI / Django / Python agent"),
+    (5000, "flask", "Flask API / Python agent"),
+    (4000, "agent", "Generic agent port"),
+    (3001, "dashboard", "Secondary dev server"),
+    (3000, "dev-api", "Generic dev API / Next.js"),
+    (9000, "agent", "Generic agent port"),
+    (1234, "lmstudio", "LM Studio local LLM API"),
+    (8888, "jupyter", "Jupyter notebook server"),
 ];
 
 const PROBE_TIMEOUT_MS: u64 = 150;

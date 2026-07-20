@@ -103,19 +103,20 @@ pub async fn provision(
     .await?;
 
     // Audit trail entry for this provision event.
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-         VALUES (?, ?, 'sandbox.provision', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant_id,
+        "sandbox.provision",
+        None,
+        Some(&format!("trial_key_issued ip={ip}")),
+        now,
     )
-    .bind(Uuid::new_v4().to_string())
-    .bind(&tenant_id)
-    .bind(format!("trial_key_issued ip={ip}"))
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
-    let base_url = std::env::var("HSIP_PUBLIC_URL")
-        .unwrap_or_else(|_| "https://demo.hsip.io".to_string());
+    crate::metrics::SANDBOX_PROVISIONS.inc();
+
+    let base_url =
+        std::env::var("HSIP_PUBLIC_URL").unwrap_or_else(|_| "https://demo.hsip.io".to_string());
 
     let key = raw_key.clone();
     let qs = Quickstart {
@@ -199,16 +200,46 @@ async fn cleanup_expired_sandboxes(db: &Db) {
     // Delete all tenant data in dependency order. Errors are silently ignored
     // (cleanup is best-effort; the next provision call will retry).
     for id in &ids {
-        let _ = sqlx::query("DELETE FROM messages      WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM consents      WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM identities    WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM contacts      WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM credentials   WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM audit_entries WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM trusted_peers WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM uploads       WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM api_keys      WHERE tenant_id = ?").bind(id).execute(db).await;
-        let _ = sqlx::query("DELETE FROM tenants       WHERE id = ?").bind(id).execute(db).await;
+        let _ = sqlx::query("DELETE FROM messages      WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM consents      WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM identities    WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM contacts      WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM credentials   WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM audit_entries WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM trusted_peers WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM uploads       WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM api_keys      WHERE tenant_id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
+        let _ = sqlx::query("DELETE FROM tenants       WHERE id = ?")
+            .bind(id)
+            .execute(db)
+            .await;
     }
 }
 

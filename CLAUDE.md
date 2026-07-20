@@ -94,6 +94,7 @@ state.rs          AppState: DB + DashMap rate limiter + agent tracker + DNS hand
 key_encryption.rs ChaCha20-Poly1305 + HKDF-SHA256 encryption for Ed25519 private keys at rest
 anchor.rs         OpenTimestamps calendar HTTP client (network I/O only, no DB) — see Decision Attestations below
 anchor_job.rs     Batches unanchored decisions into a Merkle tree on a timer, submits root to OpenTimestamps
+audit_log.rs      BLAKE3 hash-chained writes to audit_entries — see Audit Log Hash Chain below
 routes/           One file per domain (see route table below)
 static_files.rs   Serves dashboard/dist/ via rust-embed (only active with embed-dashboard feature)
 ```
@@ -111,6 +112,7 @@ GET       /v1/agents                List ai_agent keys with live velocity stats
 GET       /v1/agents/discover       Probe localhost ports for running AI agents / MCP servers
 GET       /v1/agent/capabilities    Machine-readable HSIP capability spec for AI system prompts
 GET       /v1/audit                 Audit log (filterable, max 500 entries)
+GET       /v1/audit/verify           Recompute this tenant's BLAKE3 audit hash chain and report whether it's intact
 POST/GET  /v1/tenant/*              Tenant info + GDPR erase
 POST/GET  /v1/dns/*                 DNS blocker start/stop/status/log
 POST/GET  /v1/proxy/*               Proxy traffic monitor start/stop/status/log
@@ -122,6 +124,8 @@ POST      /v1/trust/verify          Verify a message signature from a trusted pe
 POST/GET  /v1/decisions             Sign + chain an AI-agent decision attestation / list this tenant's decisions
 GET       /v1/decisions/:id/proof   Full self-contained verification bundle (signature + Merkle proof + anchor)
 POST      /v1/decisions/verify      Pure verification of a bundle — no auth, no DB call, runnable by anyone
+POST      /v1/admin/master-key/rotate  Rotate the master key (bootstrap admin key only) — see Master Key Rotation below
+GET       /v1/admin/master-key/fingerprint  SHA-256 fingerprint of the running master key — read-only, no mutation, admin key only
 GET       /health                   {"status":"ok","version":"0.2.0"}
 GET       /metrics                  Prometheus metrics
 GET       /openapi.json             OpenAPI 3.0 spec
@@ -147,9 +151,9 @@ All tables created at startup in `db::run_migrations()` — **no separate migrat
 | `tenants` | id, name, created_at | — |
 | `api_keys` | id, tenant_id, key_hash, name, agent_type, expires_at, active | Raw key never stored |
 | `identities` | tenant_id, signing_key_b64, verify_key_b64 | Private key encrypted with ChaCha20-Poly1305 |
-| `consents` | id, tenant_id, peer_verify_key, status, expires_ms | UNIQUE(tenant_id, peer_verify_key) |
+| `consents` | id, tenant_id, peer_verify_key, status, expires_ms, granted_by_key_type | UNIQUE(tenant_id, peer_verify_key). `granted_by_key_type` (human/service/ai_agent) records which kind of key authorized the grant — nullable, pre-migration rows are NULL. |
 | `messages` | id, tenant_id, content, signature, timestamp | — |
-| `audit_entries` | id, tenant_id, action, details, timestamp | Append-only — never delete |
+| `audit_entries` | id, tenant_id, action, peer_verify_key, details, timestamp, prev_hash, entry_hash | Append-only — never delete. `prev_hash`/`entry_hash` form a per-tenant BLAKE3 hash chain (nullable — pre-migration rows unchained); write only via `audit_log::record()`, never a raw INSERT. |
 | `contacts` | id, tenant_id, nickname, verify_key | — |
 | `credentials` | id, tenant_id, claim, user_token, issuer_verify_key, signature, revoked | — |
 | `trusted_peers` | id, tenant_id, label, verify_key, added_at | UNIQUE(tenant_id, verify_key). Federated trust store. |
@@ -159,9 +163,27 @@ All tables created at startup in `db::run_migrations()` — **no separate migrat
 
 ### Master Key Sources (in priority order)
 
-1. Key file at path from `config.toml` → `[security] master_key_path` (server mode)
-2. `~/.hsip/master.key` (Linux/macOS) or `%APPDATA%\HSIP\master.key` (Windows) — desktop mode
-3. `HSIP_MASTER_KEY` env var (hex string) — legacy fallback
+1. `HSIP_MASTER_KEY` env var (hex string) — takes precedence when set; point this at a secrets manager (Vault, AWS KMS, etc.) for production. **This is actually read now** — for a while `main.rs::load_master_key` only ever read the file, and the only code that read `HSIP_MASTER_KEY` was a `#[allow(dead_code)]` function in `key_encryption.rs` that nothing called. Removed; `main.rs::load_master_key` is the one implementation.
+2. Key file at path from `config.toml` → `[security] master_key_path` (server mode)
+3. `~/.hsip/master.key` (Linux/macOS) or `%APPDATA%\HSIP\master.key` (Windows) — desktop mode
+
+A SHA-256 fingerprint (first 8 bytes, hex) of the loaded key is logged at startup either way — never the key itself — so an operator can confirm a backup matches what's actually running. When loaded from a file, a "back this up now, it's unrecoverable if lost" warning logs alongside it.
+
+### Master Key Rotation (`POST /v1/admin/master-key/rotate`)
+
+Was previously impossible — the master key was loaded once into an `Arc<Vec<u8>>` at startup and never changed. Now `AppState.master_key` is `Arc<RwLock<Vec<u8>>>`, and the bootstrap admin key can rotate it live, no restart required.
+
+**What it does, in order:** generates a new 32-byte key → re-encrypts every tenant's `identities.signing_key_b64` and the singleton `anchor_identity` row inside one DB transaction → writes the new key to a staging file next to the real master key path and `fsync`s it → commits the transaction → atomically renames the staging file onto the real path → swaps the in-memory key. A `state.master_key.write().await` guard is held for the *entire* operation, not just the final swap — without that, a concurrent identity creation could encrypt a new row under the old key after this function's read but before the in-memory swap, permanently orphaning that one row. Writes a `master_key.rotated` audit entry per tenant touched and returns SHA-256 fingerprints (never the raw key) of the old and new key.
+
+**Gating:** `require_root_admin()` in `routes/admin.rs` — requires the calling key's `name == "admin"` *and* its tenant to be the very first tenant ever created. HSIP has no first-class superuser concept distinct from "the bootstrap admin key," so this is deliberately stricter than "any key named admin" (a tenant in a multi-tenant deployment must not be able to grant itself global authority by naming one of its own keys "admin"). Documented limitation, not a full RBAC system.
+
+**Refuses to run** if the master key came from `HSIP_MASTER_KEY` (`state.master_key_path` is `None`) — there's no file this process can durably rewrite in that case; rotate wherever that env var's value is managed instead, then restart.
+
+**Residual risk, by design, documented rather than hidden:** if the process crashes in the narrow window between the DB transaction committing and the staging-file rename completing, the DB holds ciphertext under the new key but the real key file still has the old one. The staging file (`{path}.rotating`) is deliberately left in place rather than cleaned up, specifically so that window is recoverable — an operator moves it into place manually. Covered by `crates/hsip-api/tests/integration.rs::test_master_key_rotation_reencrypts_and_swaps_live_key`, which proves actual re-encryption (old key stops decrypting, disk key decrypts), live in-memory swap (signing keeps working on the same running process), and rejection of a non-root-admin key.
+
+**Read-only companion:** `GET /v1/admin/master-key/fingerprint` — same `require_root_admin()` gate, no mutation, returns the current key's fingerprint and `master_key_path`. Exists because before it did, the *only* way to see a fingerprint was the startup log or a rotation response — there was no way to check "does my backup file actually match what's running right now" without either grepping server logs or triggering a real rotation. Covered by `test_master_key_fingerprint_is_read_only_and_admin_gated` — proves it's idempotent (same fingerprint on repeated calls) and admin-gated the same way rotation is.
+
+**CLI:** `hsip keys master-fingerprint` and `hsip keys rotate-master` in `crates/hsip-cli/src/commands/keys.rs`. `rotate-master` prints what it's about to do and requires typing `yes` at an interactive prompt before calling the API — `--yes` skips that for scripts/automation. This was deliberately built as a CLI command and not left as "call the HTTP endpoint yourself" — HSIP's original design point was non-technical users, and requiring hand-rolled `curl` with bearer auth for a rotation operation would have made it unreachable for exactly that audience, while `--yes` keeps it scriptable for the enterprise/ops use case the CLI also needs to serve.
 
 ### Admin Key Location (platform-aware)
 
@@ -206,6 +228,10 @@ hsip trust add <label> <verify-key> [--api-url URL] [--key K]
 hsip trust list [--api-url URL] [--key K]
 hsip trust remove <id> [--api-url URL] [--key K]
 hsip trust verify --from <label> <content> <signature> [--api-url URL] [--key K]
+
+# Master key inspection/rotation (admin key only)
+hsip keys master-fingerprint [--api-url URL] [--key K]
+hsip keys rotate-master [--yes] [--api-url URL] [--key K]
 ```
 
 The existing commands in `main.rs` handle: keygen, init, key import/export (plain + encrypted), consent over UDP, session management, token issue/verify, discovery, reputation, daemon, audit export/verify/query. Do not delete these — they are separate functionality.
@@ -229,6 +255,7 @@ crates/hsip-cli/src/commands/
   util.rs       admin_key_path() + load_admin_key() — platform-aware, shared by all commands
   agent.rs      AgentCmd enum: Register, List, Revoke, Discover + status() pub fn
   trust.rs      TrustCmd enum: Add, List, Remove, Verify
+  keys.rs       KeysCmd enum: MasterFingerprint, RotateMaster (interactive y/N confirm, --yes to skip)
   up.rs         UpArgs + run() — onboarding wizard
   diag.rs       Diagnostics (pre-existing)
   handshake.rs  UDP handshake (pre-existing)
@@ -311,11 +338,25 @@ CLI: `hsip trust add/list/remove/verify` in `crates/hsip-cli/src/commands/trust.
 
 Probes 12 well-known localhost ports with `tokio::spawn` + 150ms TCP timeout. Returns `DiscoveredAgent` list with `port`, `url`, `hint`, `description`, `already_registered`, `suggested_name`.
 
-Implementation: `crates/hsip-api/src/routes/agents.rs` — `discover()` async handler.
+Implementation: `crates/hsip-api/src/routes/agents.rs` — `discover()` async handler. Registered on the router in `routes/mod.rs` as `.route("/v1/agents/discover", get(agents::discover))`.
 
-Ports probed: Ollama :11434, LM Studio :1234, Jupyter :8888, Vite :5173, Create React App :3000, Next.js :3001, FastAPI/uvicorn :8000, Flask :5000, Express :4000, Deno :8080, Node-RED :1880, Gradio :7860.
+Ports probed: Ollama :11434, Vite :5173, wrangler :8787, generic HTTP :8080, uvicorn :8000, Flask :5000, generic agent :4000/:9000, dashboard :3001, dev-api :3000, LM Studio :1234, Jupyter :8888.
 
-CLI: `hsip agent discover` in `agent.rs`.
+CLI: `hsip agent discover` — `AgentCmd::Discover` in `crates/hsip-cli/src/commands/agent.rs`, calls `GET /v1/agents/discover`.
+
+---
+
+## Audit Log Hash Chain (`GET /v1/audit/verify`)
+
+Every write to `audit_entries` extends a per-tenant BLAKE3 hash chain, so tampering with or deleting a row after the fact breaks every link after it — detectable without trusting the database's own account of what happened. Same threat this closes as Decision Attestations below, applied to the general audit trail instead of just decisions.
+
+**Implementation:**
+- `crates/hsip-api/src/audit_log.rs` — `record()` is the *only* way to write to `audit_entries`. Computes `entry_hash = BLAKE3(prev_hash || id || tenant_id || action || peer_verify_key || details || timestamp)`, chained per tenant. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS`, same optimistic-concurrency pattern as `routes::decisions::record`. `verify_chain()` recomputes and checks a chain given its rows.
+- `crates/hsip-api/src/routes/audit.rs::verify_chain` — `GET /v1/audit/verify` handler. Fetches the tenant's rows in chain order, recomputes the chain server-side, returns `{ valid, checked, unchained, first_break_id }`.
+- `db.rs` — `audit_entries` has `prev_hash`/`entry_hash` columns (nullable — pre-migration rows have neither) and a `UNIQUE(tenant_id, prev_hash)` index enforcing the chain can't fork under concurrent writes.
+- Chain starts at upgrade time, not tenant creation — rows from before this feature existed are counted in `unchained`, not treated as breaks.
+
+**Do not** insert into `audit_entries` directly from a route handler — always call `audit_log::record()`, or the row won't be chained and `verify_chain` will report it as `unchained` (harmless but defeats the point of adding it).
 
 ---
 
@@ -435,6 +476,12 @@ Go: `sdks/go/hsip/client.go`
 - **The anchor identity (`anchor_identity` table) must stay separate from tenant identities.** An anchor batch spans every tenant's decisions; do not sign an anchor root with any one tenant's key.
 - **`POST /v1/decisions/verify` must stay DB-free and auth-free.** It's the one handler in `decisions.rs` deliberately without `TenantId`/`State` — a third party (regulator, acquirer's engineering review) needs to be able to run the equivalent check independently of this server. Don't add a database lookup to it.
 - **`decisions` chain integrity relies on `UNIQUE(tenant_id, prev_hash)`.** Don't remove it or bypass it with raw inserts — it's what prevents the hash chain from forking under concurrent requests.
+- **Never `INSERT INTO audit_entries` directly.** Always call `audit_log::record()` — it's what computes and links `prev_hash`/`entry_hash`. A raw insert produces an unchained (though still functionally fine) row that `GET /v1/audit/verify` will count as `unchained` rather than verify.
+- **Every new API route must actually be registered in `routes/mod.rs`.** A fully implemented handler with no `.route(...)` line compiles clean (Rust doesn't error on an unused `pub` function in a binary crate) and silently 404s — this has happened before (`agents::discover` shipped unwired for at least one prior revision of this file). If you add a handler, grep `routes/mod.rs` afterward to confirm it's there, not just that the crate builds.
+- **CLI subcommands documented in this file must actually exist in the `Subcommand` enum.** `hsip agent discover` was documented here before the `AgentCmd::Discover` variant existed. Cross-check `crates/hsip-cli/src/commands/*.rs` against this file's command tables when either changes.
+- **`state.master_key` is `Arc<RwLock<Vec<u8>>>`, not a plain `Arc<Vec<u8>>`.** Every read site must take a short-lived `.read().await` guard (don't hold it across unrelated `.await` points, especially network I/O — see the anchor loop in `main.rs` for the pattern of snapshotting instead). `routes::admin::rotate_master_key` is the only writer and holds `.write().await` for its whole operation, not just the final swap — see Master Key Rotation above for why.
+- **`ALTER TABLE ... ADD COLUMN` migration lines must end in `.await;`, not `.await?;`.** The `let _ = sqlx::query(...).execute(pool).await?;` pattern still propagates the error via `?` even though the value is discarded — this broke every test with "duplicate column name" the first time it was gotten wrong in this file's history. Always double-check against the working `api_keys`/`audit_entries` examples already in `run_migrations()`.
+- **Consent grant/revoke must record `granted_by_key_type`/`revoked_by=` (via `resolve_granting_key_type`).** Consent is the one place HSIP claims to represent authorization — losing track of whether a human or an AI agent (acting on its own credential) was the actor defeats the point of calling it "consent."
 
 ---
 
@@ -457,6 +504,18 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Compiler warning cleanup | `proxy.rs`, `static_files.rs`, `main.rs`, `errors.rs`, `key_encryption.rs`, `db.rs` |
 | Windows admin key path fix (`commands/util.rs`) | `commands/util.rs`, `agent.rs`, `trust.rs`, `up.rs`, `mod.rs` |
 | Decision attestations: `/v1/decisions/*` + Merkle anchoring + Python SDK | `hsip-core/src/{merkle,canonical}.rs`, `hsip-api/src/{anchor,anchor_job}.rs`, `routes/decisions.rs`, `db.rs`, `sdks/python/hsip/client.py` |
+| Wired `GET /v1/agents/discover` into the router (was a fully implemented, fully documented, never-registered handler — 404'd in production) | `routes/mod.rs` |
+| Implemented `hsip agent discover` CLI subcommand (documented in this file since the discovery feature shipped, but the `AgentCmd::Discover` variant never existed) | `commands/agent.rs` |
+| Fixed `agent.rs`'s local non-portable `load_admin_key()` (broke Windows for `agent register/list/revoke` + `status` — violated the invariant below) — now uses `commands::util::load_admin_key()` | `commands/agent.rs` |
+| Audit log BLAKE3 hash chain: `audit_log::record()`, `GET /v1/audit/verify`, `UNIQUE(tenant_id, prev_hash)` chain-fork prevention — closes the THREAT_MODEL.md §4.8 gap (chain existed in `hsip-telemetry-guard`, was never wired into the HTTP audit table) | `audit_log.rs`, `routes/audit.rs`, `db.rs`, all route files writing audit entries |
+| Consent grant/revoke now records `granted_by_key_type` (human/service/ai_agent) — the actor behind a "consent" was previously untracked | `routes/consent.rs`, `db.rs` |
+| `HSIP_SANDBOX=true` gets a loud, unmissable startup warning + `metrics::SANDBOX_PROVISIONS` counter | `main.rs`, `metrics.rs`, `routes/sandbox.rs` |
+| OpenTimestamps calendar dependency observability: `metrics::ANCHOR_CALENDAR_UNREACHABLE`, incremented on both the initial submission and retry paths | `metrics.rs`, `anchor_job.rs` |
+| `HSIP_MASTER_KEY` env var now actually read by the real startup path (previously dead code) + SHA-256 fingerprint logging + "back this up" warning | `main.rs`, `key_encryption.rs` |
+| Backoff + `metrics::CHAIN_WRITE_RETRIES` on the `audit_entries`/`decisions` hash-chain retry loops — was a tight no-delay retry loop, a thundering-herd risk at scale | `audit_log.rs`, `routes/decisions.rs` |
+| AI-agent auto-revocation DB write now retries 3x with backoff and logs loudly on final failure instead of a silent fire-and-forget `let _ =` | `auth.rs` |
+| Master key rotation: `POST /v1/admin/master-key/rotate`, `AppState.master_key` now `Arc<RwLock<Vec<u8>>>`, transactional re-encryption of `identities`/`anchor_identity`, staging-file + atomic-rename key persistence — the master key previously had no rotation path at all | `routes/admin.rs`, `state.rs`, `main.rs`, all master-key read sites |
+| Read-only `GET /v1/admin/master-key/fingerprint` + `hsip keys master-fingerprint`/`rotate-master` CLI (interactive y/N confirm, `--yes` for scripts) — closed the gap where rotation and fingerprinting were only reachable by hand-rolling `curl` with bearer auth, unreachable for HSIP's original non-technical-user audience | `routes/admin.rs`, `commands/keys.rs`, `main.rs` |
 
 ---
 
@@ -472,6 +531,13 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - Dashboard single-mode refactor (progressive disclosure)
 - SDK parity: Python, Node.js, Go
 - Decision attestations: `/v1/decisions/*`, RFC 6962 Merkle anchoring, OpenTimestamps submission, Python SDK (`record_decision`/`save_receipt`/`get_decision_proof`/`verify_decision`)
+- `GET /v1/agents/discover` actually wired into the router, and `hsip agent discover` actually implemented (both were documented as shipped but weren't connected)
+- `agent.rs` CLI commands fixed to use the platform-aware `commands::util::load_admin_key()` (Windows was broken for the most common commands)
+- Audit log BLAKE3 hash chain wired into the HTTP `audit_entries` table + `GET /v1/audit/verify` — closes THREAT_MODEL.md §4.8's previously-open gap
+- Consent grant/revoke records `granted_by_key_type` — which kind of key authorized it
+- `HSIP_SANDBOX` startup warning + `SANDBOX_PROVISIONS` metric; `HSIP_MASTER_KEY` env var actually wired + fingerprint logging; hash-chain retry backoff + `CHAIN_WRITE_RETRIES` metric; durable AI-agent auto-revocation writes; `ANCHOR_CALENDAR_UNREACHABLE` metric
+- Master key rotation: `POST /v1/admin/master-key/rotate`
+- `GET /v1/admin/master-key/fingerprint` (read-only) + `hsip keys master-fingerprint` / `hsip keys rotate-master` CLI — closes the "admin has to hand-roll curl with bearer auth" gap for the audience HSIP was originally built for
 
 ### Remaining
 
@@ -479,15 +545,21 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - **Dashboard trust page** — Add a "Trust" tab (Advanced section) showing `GET /v1/trust/peers` with add/remove UI. Wire to the new `/v1/trust/*` routes.
 - **Dashboard discover page** — show `/v1/agents/discover` results with one-click register buttons.
 - **Integration tests for trust routes** — add to `crates/hsip-api/tests/integration.rs` using `test_app()`.
-- **Verify OpenTimestamps connectivity in a non-sandboxed environment** — `anchor.rs` was only tested against a mocked calendar; confirm the real submission protocol works before depending on it for compliance purposes.
+- **Verify OpenTimestamps connectivity in a non-sandboxed environment** — `anchor.rs` was only tested against a mocked calendar; confirm the real submission protocol works before depending on it for compliance purposes. Reconfirmed still blocked as of this revision: outbound HTTPS to `*.calendar.opentimestamps.org` 403s at the proxy in this environment too (see THREAT_MODEL.md §7), same as every prior sandboxed environment this project has been developed in. This needs to be checked from an actually-unrestricted network before v1.0, not re-confirmed as still-blocked from another sandbox.
 - **OpenTimestamps "upgrade" polling** — currently a batch's `ots_proof` is just the calendar's initial pending-commitment bytes; poll calendars later to obtain a fully Bitcoin-confirmed proof and flip `ots_status` to `confirmed`.
 - **Node/Go SDK parity for decision attestation** — `record_decision`/`save_receipt`/`get_decision_proof`/`verify_decision` exist only in the Python SDK; port once a Node/Go caller needs them.
 - **Dashboard decisions page** — show `GET /v1/decisions` with anchor/proof status, similar to the trust/discover pages above.
+- **Dashboard audit verify indicator** — surface `GET /v1/audit/verify`'s `valid`/`unchained` fields somewhere in the Audit tab so a broken chain is visible without calling the API directly.
+- **Externally anchor the audit log hash chain** — decisions get Merkle-batched and submitted to OpenTimestamps (see Decision Attestations above); the audit log's BLAKE3 chain (see Audit Log Hash Chain above) is self-verifiable but not yet anchored outside this database, so an attacker with DB write access can still delete the whole chain undetected, just not alter what remains. Same shape of fix as decisions, not yet done for audit.
+- **Document and test a real SQLite → PostgreSQL migration path** — `DATABASE_URL` pointing at Postgres works for a fresh install (`db::run_migrations()` is backend-agnostic SQL), but there's no tested procedure for moving an existing SQLite deployment's data over. Treat it as a fresh install until this exists.
+- **Real RBAC beyond "the bootstrap admin key"** — `routes::admin::require_root_admin` is a single global admin tied to the first tenant ever created, not a proper permissions system. Deliberately not built out further yet: two node-level operations (rotate + fingerprint) both fit the same single-admin gate cleanly, and a real permissions model (roles, scoped grants, multiple admins) is real design work that shouldn't be bolted on speculatively before there's a second *kind* of operation that actually needs it. Revisit when one shows up — likely the first candidate for HSIP's enterprise-readiness track, since "single root credential, no RBAC" is a real objection in an enterprise security review.
+- **Automated rotation when the master key is `HSIP_MASTER_KEY`-sourced** — `rotate-master` refuses to run in this case by design (no file this process owns to rewrite). Closing this for real means integrating with the specific secrets manager in use (Vault, AWS KMS, ...) to write the new value back programmatically — a real, credentialed integration per provider, not something to stub in speculatively without a specific provider and deployment to build against. Today's answer is manual: rotate at the secrets manager, then restart.
+- **Dashboard: surface master key rotation + its audit trail** — no UI for `POST /v1/admin/master-key/rotate` yet; an admin has to call it directly.
 
 ### Before adding new API routes
 1. Add the route function in the relevant `crates/hsip-api/src/routes/*.rs` file
-2. Register it in `crates/hsip-api/src/routes/mod.rs`
-3. Add an audit entry write for any state-changing operation
+2. Register it in `crates/hsip-api/src/routes/mod.rs` — **and verify with `grep` that it's actually there**, not just that `cargo build` succeeds. An unregistered `pub async fn` handler compiles fine and silently 404s.
+3. Add an audit entry write for any state-changing operation, via `audit_log::record()` — never a raw `INSERT INTO audit_entries`
 4. Add an integration test in `crates/hsip-api/tests/integration.rs` using `test_app()`
 
 ### Before adding new CLI commands

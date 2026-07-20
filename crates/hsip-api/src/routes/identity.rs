@@ -4,7 +4,6 @@ use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use serde::Serialize;
 use sqlx::Row;
-use uuid::Uuid;
 
 use crate::{
     auth::TenantId,
@@ -43,10 +42,12 @@ pub async fn create_or_get(
     let signing_key = SigningKey::generate(&mut OsRng);
     let verify_key = signing_key.verifying_key();
     // C1: encrypt the private key before storing
-    let encrypted_b64 = encrypt_signing_key(&signing_key.to_bytes(), &state.master_key);
+    let encrypted_b64 = {
+        let master_key = state.master_key.read().await;
+        encrypt_signing_key(&signing_key.to_bytes(), &master_key)
+    };
     let verify_b64 = BASE64.encode(verify_key.to_bytes());
     let now = now_ms();
-    let audit_id = Uuid::new_v4().to_string();
 
     sqlx::query(
         "INSERT INTO identities (tenant_id, signing_key_b64, verify_key_b64, created_at)
@@ -59,15 +60,14 @@ pub async fn create_or_get(
     .execute(&state.db)
     .await?;
 
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-         VALUES (?, ?, 'identity.created', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "identity.created",
+        None,
+        Some(&verify_b64),
+        now,
     )
-    .bind(&audit_id)
-    .bind(&tenant.0)
-    .bind(&verify_b64)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(IdentityResponse {
@@ -122,7 +122,10 @@ pub async fn rotate(
     // Generate new keypair
     let new_signing_key = SigningKey::generate(&mut OsRng);
     let new_verify_key = new_signing_key.verifying_key();
-    let new_encrypted = encrypt_signing_key(&new_signing_key.to_bytes(), &state.master_key);
+    let new_encrypted = {
+        let master_key = state.master_key.read().await;
+        encrypt_signing_key(&new_signing_key.to_bytes(), &master_key)
+    };
     let new_verify_b64 = BASE64.encode(new_verify_key.to_bytes());
     let now = now_ms();
 
@@ -135,16 +138,16 @@ pub async fn rotate(
     .execute(&state.db)
     .await?;
 
-    let audit_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-         VALUES (?, ?, 'identity.key_rotated', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "identity.key_rotated",
+        None,
+        Some(&format!(
+            "old_key={old_verify_key} new_key={new_verify_b64}"
+        )),
+        now,
     )
-    .bind(&audit_id)
-    .bind(&tenant.0)
-    .bind(format!("old_key={old_verify_key} new_key={new_verify_b64}"))
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(IdentityResponse {

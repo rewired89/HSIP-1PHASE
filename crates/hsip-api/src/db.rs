@@ -122,11 +122,19 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             expires_ms       INTEGER,
             revoked_at       INTEGER,
             created_at       INTEGER NOT NULL,
+            granted_by_key_type TEXT,
             UNIQUE(tenant_id, peer_verify_key)
         )",
     )
     .execute(pool)
     .await?;
+
+    // Non-fatal: column may already exist on upgraded databases. Distinguishes
+    // whether a consent grant was authorized by a human key, a service key, or
+    // an ai_agent key acting on its own behalf — NULL for pre-migration rows.
+    let _ = sqlx::query("ALTER TABLE consents ADD COLUMN granted_by_key_type TEXT")
+        .execute(pool)
+        .await;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -150,8 +158,30 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             action           TEXT NOT NULL,
             peer_verify_key  TEXT,
             details          TEXT,
-            timestamp        INTEGER NOT NULL
+            timestamp        INTEGER NOT NULL,
+            prev_hash        TEXT,
+            entry_hash       TEXT
         )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Non-fatal: columns may already exist on upgraded databases. Rows written
+    // before this migration have NULL prev_hash/entry_hash — they predate the
+    // hash chain and are excluded from it (see audit_log::verify_chain).
+    let _ = sqlx::query("ALTER TABLE audit_entries ADD COLUMN prev_hash TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE audit_entries ADD COLUMN entry_hash TEXT")
+        .execute(pool)
+        .await;
+
+    // Enforces the hash chain's append-only, non-forking property: two
+    // concurrent writers cannot both extend the same tenant's chain from the
+    // same prev_hash. NULLs (pre-migration rows) are exempt by SQL semantics.
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_chain
+         ON audit_entries (tenant_id, prev_hash)",
     )
     .execute(pool)
     .await?;

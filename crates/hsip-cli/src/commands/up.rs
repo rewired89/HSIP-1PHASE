@@ -23,9 +23,7 @@ struct IdentityResponse {
 }
 
 pub fn run(args: UpArgs) -> Result<()> {
-    let base = args
-        .api_url
-        .unwrap_or_else(|| DEFAULT_API_URL.to_string());
+    let base = args.api_url.unwrap_or_else(|| DEFAULT_API_URL.to_string());
     let base = base.trim_end_matches('/').to_string();
 
     let http = reqwest::blocking::Client::builder()
@@ -50,7 +48,7 @@ pub fn run(args: UpArgs) -> Result<()> {
                     .stderr(std::process::Stdio::null())
                     .spawn()
                 {
-                    Ok(_)  => println!("started"),
+                    Ok(_) => println!("started"),
                     Err(e) => {
                         println!("failed: {e}");
                         print_start_hint(&base);
@@ -165,7 +163,11 @@ fn find_hsip_api_bin() -> Option<std::path::PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
             let c = dir.join("hsip-api");
-            if c.exists() { Some(c) } else { None }
+            if c.exists() {
+                Some(c)
+            } else {
+                None
+            }
         })
     })
 }
@@ -183,7 +185,8 @@ fn get_identity(
     if !res.status().is_success() {
         anyhow::bail!("identity request failed: {}", res.status());
     }
-    res.json::<IdentityResponse>().context("parse identity response")
+    res.json::<IdentityResponse>()
+        .context("parse identity response")
 }
 
 fn open_in_browser(url: &str) {

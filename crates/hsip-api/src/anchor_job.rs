@@ -172,6 +172,7 @@ pub async fn run_anchor_cycle_with_calendars(
                 "OpenTimestamps submission failed for this anchor batch; \
                  local Merkle anchoring proceeds, external anchoring will retry next cycle"
             );
+            metrics::ANCHOR_CALENDAR_UNREACHABLE.inc();
             (None, "calendar_unreachable".to_string())
         }
     };
@@ -212,16 +213,14 @@ pub async fn run_anchor_cycle_with_calendars(
         .await?;
     for row in &tenant_rows {
         let tenant_id: String = row.try_get(0)?;
-        let aid = Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO audit_entries (id, tenant_id, action, details, timestamp)
-             VALUES (?, ?, 'decision.anchored', ?, ?)",
+        crate::audit_log::record(
+            db,
+            &tenant_id,
+            "decision.anchored",
+            None,
+            Some(&anchor_id),
+            now,
         )
-        .bind(&aid)
-        .bind(&tenant_id)
-        .bind(&anchor_id)
-        .bind(now)
-        .execute(db)
         .await?;
     }
 
@@ -280,6 +279,7 @@ async fn retry_pending_ots_submissions(db: &Db, calendars: &[&str]) {
             }
             Err(e) => {
                 tracing::debug!(anchor_id = %anchor_id, error = %e, "OpenTimestamps retry still failing");
+                metrics::ANCHOR_CALENDAR_UNREACHABLE.inc();
             }
         }
     }

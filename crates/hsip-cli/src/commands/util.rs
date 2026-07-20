@@ -28,8 +28,7 @@ pub fn load_admin_key() -> Result<String> {
             path.display()
         );
     }
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     let key = raw.trim().to_string();
     if key.is_empty() {
         bail!(

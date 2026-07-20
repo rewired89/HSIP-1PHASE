@@ -59,11 +59,21 @@
 ### `load_master_key`
 - **type**: function
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Reads master key from file path in config (hex-encoded 32 bytes) or falls back to `HSIP_MASTER_KEY` env var.
-- **inputs**: `config: &Config`
-- **outputs**: `Result<[u8; 32]>`
-- **calls**: `fs::read_to_string`, `hex::decode`
+- **purpose**: `HSIP_MASTER_KEY` env var takes precedence over the file at `path` when set (hex-encoded 32 bytes either way) — this is what makes THREAT_MODEL.md's "point HSIP_MASTER_KEY at a secrets manager" mitigation actually work; previously nothing in the real startup path read that env var (a separate, `#[allow(dead_code)]`, never-called function in `key_encryption.rs` did, and was removed). Logs a SHA-256 fingerprint (never the key) either way, and a "back this up now" warning when loaded from a file. Returns `master_key_path: None` when sourced from the env var — `routes::admin::rotate_master_key` refuses to run when that's `None`, since there's no file this process can durably rewrite.
+- **inputs**: `path: &str`
+- **outputs**: `Result<(Vec<u8>, Option<String>)>`
+- **calls**: `fs::read_to_string`, `hex::decode`, `master_key_fingerprint`
 - **called_by**: `run`
+- **mutates**: nothing
+
+### `master_key_fingerprint`
+- **type**: function
+- **file**: `crates/hsip-api/src/main.rs`
+- **purpose**: SHA-256 of the master key, truncated to first 8 bytes and hex-encoded — safe to log, lets an operator confirm a backup matches the key in use without ever printing the key itself.
+- **inputs**: `key_bytes: &[u8]`
+- **outputs**: `String`
+- **calls**: `sha2::Sha256::digest`
+- **called_by**: `load_master_key`
 - **mutates**: nothing
 
 ### `build_cors_layer`
@@ -343,6 +353,70 @@
 
 ---
 
+## `crates/hsip-api/src/audit_log.rs`
+
+### `record` (audit_log)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: The only sanctioned way to write to `audit_entries`. Reads the tenant's current chain tip (`entry_hash`), computes the new row's `entry_hash = BLAKE3(prev_hash || id || tenant_id || action || peer_verify_key || details || timestamp)`, and inserts. Retries up to `MAX_ATTEMPTS` on a `UNIQUE(tenant_id, prev_hash)` conflict — another concurrent writer extended the chain first, not a real error — mirroring `routes::decisions::record`'s pattern. Each conflict increments `metrics::CHAIN_WRITE_RETRIES{chain="audit"}` and waits via `chain_retry_backoff` before retrying, rather than spinning immediately.
+- **inputs**: `db: &Db`, `tenant_id: &str`, `action: &str`, `peer_verify_key: Option<&str>`, `details: Option<&str>`, `timestamp: i64`
+- **outputs**: `Result<String, sqlx::Error>` (the new entry's id)
+- **calls**: `sqlx::query`, `compute_entry_hash`, `chain_retry_backoff`, `metrics::CHAIN_WRITE_RETRIES`
+- **called_by**: every route handler and background task that writes an audit entry (`consent`, `credentials`, `identity`, `messages`, `trust`, `decisions`, `sandbox`, `auth::check_agent_velocity`, `anchor_job::run_anchor_cycle_with_calendars`)
+- **mutates**: `audit_entries` table
+
+### `chain_retry_backoff`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: `pub(crate)` small randomized delay (`2ms * attempt` + 0-4ms jitter) between hash-chain write retries, shared by `audit_log::record` and `routes::decisions::record`. Without it, concurrent writers on the same tenant's chain retry in a tight loop with no delay — harmless at low volume, a self-inflicted thundering herd at scale.
+- **inputs**: `attempt: u32`
+- **outputs**: `()`
+- **calls**: `rand::thread_rng`, `tokio::time::sleep`
+- **called_by**: `record` (audit_log), `routes::decisions::record`
+- **mutates**: nothing
+
+### `compute_entry_hash`
+- **type**: function
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: Computes one entry's BLAKE3 hash from its chain-linked fields, with `0x00`-byte field separators to avoid concatenation-ambiguity collisions (e.g. `"ab"+"c"` vs `"a"+"bc"`).
+- **inputs**: `prev_hash`, `id`, `tenant_id`, `action`, `peer_verify_key`, `details`, `timestamp`
+- **outputs**: `String` (hex-encoded BLAKE3 digest)
+- **calls**: `blake3::Hasher`
+- **called_by**: `record` (audit_log), `verify_chain` (audit_log)
+- **mutates**: nothing
+
+### `ChainRow`
+- **type**: struct
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: One audit row as read back from the DB for chain verification — mirrors `audit_entries` columns.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `routes::audit::verify_chain`, `verify_chain` (audit_log)
+- **mutates**: nothing
+
+### `VerifyResult`
+- **type**: struct
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: Result of walking a tenant's chain: valid, checked (chained entries confirmed), unchained (pre-migration entries skipped), first_break_id.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `verify_chain` (audit_log)
+- **mutates**: nothing
+
+### `verify_chain` (audit_log)
+- **type**: function
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: Recomputes and checks a hash chain over pre-sorted (`ORDER BY timestamp ASC`) rows. Rows with NULL `entry_hash` (pre-migration) are counted in `unchained` and skipped rather than treated as breaks; any `prev_hash` mismatch or recomputed-hash mismatch stops at the first broken entry.
+- **inputs**: `rows: &[ChainRow]`
+- **outputs**: `VerifyResult`
+- **calls**: `compute_entry_hash`
+- **called_by**: `routes::audit::verify_chain`
+- **mutates**: nothing
+
+---
+
 ## `crates/hsip-api/src/auth.rs`
 
 ### `TenantId`
@@ -376,14 +450,14 @@
 - **mutates**: `RateLimiter` DashMap
 
 ### `check_agent_velocity`
-- **type**: function
+- **type**: function (async)
 - **file**: `crates/hsip-api/src/auth.rs`
-- **purpose**: For `ai_agent` keys: logs anomaly audit entry if >100 req/min, auto-revokes key if >1000 req/min.
-- **inputs**: `key_hash: &str`, `key_id: &str`, `tenant_id: &str`, `agent_tracker: &AgentTracker`, `db: &Db`
-- **outputs**: `Result<(), ApiError>`
-- **calls**: `AgentTracker::entry`, `sqlx::query` (audit insert, key revoke)
+- **purpose**: For `ai_agent` keys: logs `agent.anomaly_detected` audit entry if >100 req/min, auto-revokes key if >1000 req/min. The revocation DB write (`UPDATE api_keys SET active=0`) retries up to 3 times with backoff inside its spawned task — previously fire-and-forget with the `Result` discarded, meaning a failed write (or a crash before it landed) would silently leave `pending_revocation`'s in-memory block as the *only* thing stopping the key, which a process restart would erase with no record of why. On final failure now logs `tracing::error!`, increments `AGENT_ANOMALIES{event_type="auto_revoke_db_write_failed"}`, and writes an `agent.auto_revoke_failed` audit entry instead of claiming success.
+- **inputs**: `key_id: &str`, `tenant_id: &str`, `state: &AppState`
+- **outputs**: `()`
+- **calls**: `AgentTracker::get`/`insert`, `sqlx::query` (key revoke, retried), `audit_log::record`, `metrics::AGENT_ANOMALIES`
 - **called_by**: `TenantId::from_request_parts`
-- **mutates**: `agent_tracker` DashMap, DB (`api_keys` revocation, `audit_entries`)
+- **mutates**: `agent_tracker` DashMap, `pending_revocation` DashSet, DB (`api_keys` revocation, `audit_entries`)
 
 ### `rate_limit_rpm`
 - **type**: function
@@ -452,7 +526,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity). `decision_anchors` holds one row per RFC 6962 Merkle batch (root, signature, OpenTimestamps proof/status). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity). `decision_anchors` holds one row per RFC 6962 Merkle batch (root, signature, OpenTimestamps proof/status). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -596,7 +670,7 @@
 ### `AppState`
 - **type**: struct
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: Axum shared state: DB pool, config, master key, rate limiter, agent tracker, pending revocations, DNS state, proxy shared buffer, sandbox provision rate limiter.
+- **purpose**: Axum shared state: DB pool, master key, rate limiter, agent tracker, pending revocations, DNS state, proxy shared buffer, sandbox provision rate limiter. `master_key` is `Arc<RwLock<Vec<u8>>>` (not a plain `Arc<Vec<u8>>`) so `routes::admin::rotate_master_key` can swap it live without a restart; every handler that used to deref it directly now takes a short-lived `.read().await` guard first. `master_key_path: Option<Arc<String>>` is `Some` only when the key came from a file (vs. `HSIP_MASTER_KEY`) — that's what rotation checks before running.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -606,11 +680,21 @@
 ### `AppState::new`
 - **type**: function
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: Constructs `AppState` from DB pool, config, and master key. Initialises all DashMaps including `sandbox_rate`.
-- **inputs**: `db: Db`, `config: Config`, `master_key: [u8; 32]`
+- **purpose**: Constructs `AppState` with `master_key_path: None` (rotation-via-API disabled). Kept for the two test-harness call sites that don't need a file-backed key; production startup uses `new_with_master_key_path`.
+- **inputs**: `db: Db`, `master_key: Vec<u8>`
 - **outputs**: `Self`
-- **calls**: `DashMap::new`, `DashSet::new`, `ProxyShared::new`
-- **called_by**: `run`
+- **calls**: `Self::new_with_master_key_path`
+- **called_by**: `tests/integration.rs` test helpers
+- **mutates**: nothing
+
+### `AppState::new_with_master_key_path`
+- **type**: function
+- **file**: `crates/hsip-api/src/state.rs`
+- **purpose**: Constructs `AppState`, wrapping `master_key` in `Arc<RwLock<_>>` and storing `master_key_path` (file path the key can be durably rewritten to, or `None` if sourced from `HSIP_MASTER_KEY`). Initialises all DashMaps including `sandbox_rate`.
+- **inputs**: `db: Db`, `master_key: Vec<u8>`, `master_key_path: Option<String>`
+- **outputs**: `Self`
+- **calls**: `DashMap::new`, `DashSet::new`, `ProxyShared::new`, `RwLock::new`
+- **called_by**: `main.rs`'s `run` (production startup), `tests/integration.rs::test_app_with_admin_and_key_file`
 - **mutates**: nothing
 
 ### `SandboxRate`
@@ -627,42 +711,34 @@
 ### `derive_encryption_key`
 - **type**: function
 - **file**: `crates/hsip-api/src/key_encryption.rs`
-- **purpose**: Derives a 32-byte ChaCha20-Poly1305 key from master key + tenant ID via HKDF-SHA256.
-- **inputs**: `master_key: &[u8; 32]`, `tenant_id: &str`
+- **purpose**: Derives a 32-byte ChaCha20-Poly1305 key from the master key via HKDF-SHA256 with a fixed info string. No per-tenant derivation — the master key itself is the only secret input.
+- **inputs**: `master_key: &[u8]`
 - **outputs**: `[u8; 32]`
 - **calls**: `hkdf::Hkdf::new`, `expand`
 - **called_by**: `encrypt_signing_key`, `decrypt_signing_key`
 - **mutates**: nothing
 
-### `load_master_key`
-- **type**: function
-- **file**: `crates/hsip-api/src/key_encryption.rs`
-- **purpose**: Reads hex-encoded 32-byte master key from file, validates length; alias used in tests.
-- **inputs**: `path: &str`
-- **outputs**: `Result<[u8; 32]>`
-- **calls**: `fs::read_to_string`, `hex::decode`
-- **called_by**: test helpers
-- **mutates**: nothing
-
 ### `encrypt_signing_key`
 - **type**: function
 - **file**: `crates/hsip-api/src/key_encryption.rs`
-- **purpose**: Encrypts a 32-byte Ed25519 signing key with ChaCha20-Poly1305 using a random nonce; returns `nonce_hex:ciphertext_hex`.
-- **inputs**: `signing_key: &[u8; 32]`, `master_key: &[u8; 32]`, `tenant_id: &str`
-- **outputs**: `Result<String>`
+- **purpose**: Encrypts a 32-byte Ed25519 signing key with ChaCha20-Poly1305 using a random 12-byte nonce; returns base64 of `nonce || ciphertext+tag`.
+- **inputs**: `key_bytes: &[u8; 32]`, `master_key: &[u8]`
+- **outputs**: `String`
 - **calls**: `derive_encryption_key`, `OsRng`, `ChaCha20Poly1305::encrypt`
-- **called_by**: `identity::create_or_get`, `identity::rotate`
+- **called_by**: `identity::create_or_get`, `identity::rotate`, `routes::admin::rotate_master_key`
 - **mutates**: nothing (returns new string)
 
 ### `decrypt_signing_key`
 - **type**: function
 - **file**: `crates/hsip-api/src/key_encryption.rs`
-- **purpose**: Decrypts a `nonce_hex:ciphertext_hex` blob back to the 32-byte Ed25519 signing key.
-- **inputs**: `encrypted: &str`, `master_key: &[u8; 32]`, `tenant_id: &str`
-- **outputs**: `Result<[u8; 32]>`
-- **calls**: `derive_encryption_key`, `hex::decode`, `ChaCha20Poly1305::decrypt`
-- **called_by**: `identity::load_signing_key`, `messages::sign`
+- **purpose**: Decrypts a base64 `nonce || ciphertext+tag` blob back to the 32-byte Ed25519 signing key. Errors (not panics) on wrong master key, matching `key decryption failed — wrong HSIP_MASTER_KEY?`.
+- **inputs**: `encrypted_b64: &str`, `master_key: &[u8]`
+- **outputs**: `anyhow::Result<[u8; 32]>`
+- **calls**: `derive_encryption_key`, `BASE64::decode`, `ChaCha20Poly1305::decrypt`
+- **called_by**: `identity::load_signing_key`, `messages::sign`, `anchor_job::load_or_create_anchor_identity`, `routes::admin::rotate_master_key`
 - **mutates**: nothing
+
+Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_KEY` directly — it was `#[allow(dead_code)]` and never called from the real startup path (a second, real master-key-loading function lived in `main.rs` and never consulted the env var). Removed; `main.rs::load_master_key` is now the one implementation and does read `HSIP_MASTER_KEY`.
 
 ---
 
@@ -826,6 +902,46 @@
 - **called_by**: `routes::decisions::verify`
 - **mutates**: counter value
 
+### `SANDBOX_PROVISIONS`
+- **type**: variable (static `Counter`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Count of unauthenticated tenant provisions via `HSIP_SANDBOX=true`'s `POST /v1/sandbox/provision` — the one endpoint requiring no bearer key. Watch this if that env var is enabled anywhere unexpectedly.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `routes::sandbox::provision`
+- **mutates**: counter value
+
+### `ANCHOR_CALENDAR_UNREACHABLE`
+- **type**: variable (static `Counter`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Count of anchor cycles/retries where every configured OpenTimestamps calendar failed. Makes the dominant external dependency for decision-attestation anchoring observable over time instead of only visible per-anchor via `ots_status='calendar_unreachable'`.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `anchor_job::run_anchor_cycle_with_calendars`, `anchor_job::retry_pending_ots_submissions`
+- **mutates**: counter value
+
+### `CHAIN_WRITE_RETRIES`
+- **type**: variable (static `CounterVec`, label `chain`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Count of `UNIQUE(tenant_id, prev_hash)` retry attempts in the per-tenant hash chains, by `chain` (`"audit"` or `"decisions"`). Near-zero at low volume; a rising rate is the "only matters at scale" signal for chain write contention.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `audit_log::record`, `routes::decisions::record`
+- **mutates**: counter value
+
+### `MASTER_KEY_ROTATIONS`
+- **type**: variable (static `Counter`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Count of successful master key rotations. Should only ever move in small, rare, deliberate increments.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `routes::admin::rotate_master_key`
+- **mutates**: counter value
+
 ### `init` (metrics)
 - **type**: function
 - **file**: `crates/hsip-api/src/metrics.rs`
@@ -871,7 +987,7 @@
 - **purpose**: `POST /v1/identity` — creates a new Ed25519 keypair for the tenant if one doesn't exist, encrypts the signing key, stores it, returns verify key.
 - **inputs**: `State(state): State<AppState>`, `tenant: TenantId`
 - **outputs**: `ApiResult<Json<IdentityResponse>>`
-- **calls**: `ed25519_dalek::SigningKey::generate`, `encrypt_signing_key`, `sqlx::query`
+- **calls**: `ed25519_dalek::SigningKey::generate`, `encrypt_signing_key`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`identities`), writes audit entry
 
@@ -891,7 +1007,7 @@
 - **purpose**: `POST /v1/identity/rotate` — generates new Ed25519 keypair, replaces existing in DB, writes audit entry.
 - **inputs**: `State(state): State<AppState>`, `tenant: TenantId`
 - **outputs**: `ApiResult<Json<IdentityResponse>>`
-- **calls**: `ed25519_dalek::SigningKey::generate`, `encrypt_signing_key`, `sqlx::query`
+- **calls**: `ed25519_dalek::SigningKey::generate`, `encrypt_signing_key`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`identities`), audit entry
 
@@ -942,11 +1058,21 @@
 ### `ConsentRecord`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/consent.rs`
-- **purpose**: Serialised consent row returned in list/get responses.
+- **purpose**: Serialised consent row returned in list/get responses. Includes `granted_by_key_type: Option<String>` — "human" | "service" | "ai_agent", the `agent_type` of the key that granted this consent (`None` for rows written before this field existed). Answers "did a human authorize this, or did an agent approve its own action" — previously untracked.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
-- **called_by**: `list`, `get` (consent)
+- **called_by**: `list`, `get`, `grant`, `revoke` (consent)
+- **mutates**: nothing
+
+### `resolve_granting_key_type`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/consent.rs`
+- **purpose**: Resolves the `agent_type` of the API key that authenticated the current request (re-derives from the `Authorization` header + `api_keys` lookup, same pattern as `routes::decisions::record`'s `agent_key_id` resolution — `TenantId` alone doesn't carry it).
+- **inputs**: `db: &Db`, `headers: &HeaderMap`, `tenant_id: &str`
+- **outputs**: `ApiResult<String>`
+- **calls**: `hash_key`, `sqlx::query`
+- **called_by**: `grant`, `revoke` (consent)
 - **mutates**: nothing
 
 ### `validate_peer_key`
@@ -972,20 +1098,20 @@
 ### `grant`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/consent.rs`
-- **purpose**: `POST /v1/consent/grant` — upserts consent record with status `granted`, writes audit entry.
-- **inputs**: `State(state)`, `tenant`, `Json(req)`
+- **purpose**: `POST /v1/consent/grant` — upserts consent record with status `granted` and `granted_by_key_type`, writes audit entry (details include `granted_by=<type>`).
+- **inputs**: `State(state)`, `tenant`, `headers: HeaderMap`, `Json(req)`
 - **outputs**: `ApiResult<Json<ConsentRecord>>`
-- **calls**: `validate_peer_key`, `sqlx::query`, `now_ms`
+- **calls**: `validate_peer_key`, `resolve_granting_key_type`, `sqlx::query`, `now_ms`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`consents`, `audit_entries`)
 
 ### `revoke` (consent)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/consent.rs`
-- **purpose**: `POST /v1/consent/revoke` — updates consent status to `revoked`, writes audit entry.
-- **inputs**: `State(state)`, `tenant`, `Json(req)`
+- **purpose**: `POST /v1/consent/revoke` — updates consent status to `revoked`, writes audit entry with details `revoked_by=<key type>`.
+- **inputs**: `State(state)`, `tenant`, `headers: HeaderMap`, `Json(req)`
 - **outputs**: `ApiResult<Json<ConsentRecord>>`
-- **calls**: `validate_peer_key`, `sqlx::query`
+- **calls**: `validate_peer_key`, `resolve_granting_key_type`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`consents`, `audit_entries`)
 
@@ -1069,7 +1195,7 @@
 - **purpose**: `POST /v1/messages/sign` — signs content with tenant's Ed25519 key, stores record, increments MESSAGES_SIGNED counter, writes audit entry.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<SignResponse>>`
-- **calls**: `load_signing_key`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `metrics::MESSAGES_SIGNED.inc`
+- **calls**: `load_signing_key`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `audit_log::record`, `metrics::MESSAGES_SIGNED.inc`
 - **called_by**: Axum router
 - **mutates**: DB (`messages`, `audit_entries`)
 
@@ -1079,7 +1205,7 @@
 - **purpose**: `POST /v1/messages/verify` — verifies an Ed25519 signature against provided content and verify key.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<VerifyResponse>>`
-- **calls**: `ed25519_dalek::VerifyingKey::verify_strict`
+- **calls**: `ed25519_dalek::VerifyingKey::verify_strict`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: nothing
 
@@ -1154,7 +1280,7 @@
 - **purpose**: `POST /v1/credentials` — creates, signs, and stores a verifiable credential; increments CREDENTIALS_ISSUED metric.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<IssueResponse>>`
-- **calls**: `load_signing_key`, `canonical_json`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `metrics::CREDENTIALS_ISSUED.inc`
+- **calls**: `load_signing_key`, `canonical_json`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `audit_log::record`, `metrics::CREDENTIALS_ISSUED.inc`
 - **called_by**: Axum router
 - **mutates**: DB (`credentials`, `audit_entries`)
 
@@ -1164,7 +1290,7 @@
 - **purpose**: `POST /v1/credentials/verify` — verifies a credential signature against its payload; checks revocation status; increments CREDENTIALS_VERIFIED metric.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<VerifyResponse>>`
-- **calls**: `canonical_json`, `ed25519_dalek::VerifyingKey::verify_strict`, `sqlx::query`, `metrics::CREDENTIALS_VERIFIED.inc`
+- **calls**: `canonical_json`, `ed25519_dalek::VerifyingKey::verify_strict`, `sqlx::query`, `audit_log::record`, `metrics::CREDENTIALS_VERIFIED.inc`
 - **called_by**: Axum router
 - **mutates**: nothing (read-only verification)
 
@@ -1174,7 +1300,7 @@
 - **purpose**: `DELETE /v1/credentials/:id` — marks credential as revoked in DB, writes audit entry.
 - **inputs**: `State(state)`, `tenant`, `Path(id)`
 - **outputs**: `ApiResult<StatusCode>`
-- **calls**: `sqlx::query`
+- **calls**: `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`credentials.revoked`, `audit_entries`)
 
@@ -1264,6 +1390,70 @@
 
 ---
 
+## `crates/hsip-api/src/routes/admin.rs`
+
+### `require_root_admin`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: Authorization gate for node-level (not tenant-scoped) operations. Requires the calling key's `name` to be `"admin"` *and* its `tenant_id` to be the very first tenant ever created (`SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1`) — deliberately stricter than "any key named admin," since HSIP has no first-class superuser concept and a tenant in a multi-tenant deployment must not be able to grant itself global authority by naming one of its own keys "admin".
+- **inputs**: `db: &Db`, `headers: &HeaderMap`, `tenant_id: &str`
+- **outputs**: `ApiResult<()>`
+- **calls**: `hash_key`, `sqlx::query`
+- **called_by**: `rotate_master_key`
+- **mutates**: nothing
+
+### `fingerprint` (admin)
+- **type**: function
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: First 8 bytes of SHA-256(key), hex-encoded — safe to log/return over HTTP; lets an operator confirm which key is in use without ever exposing the key itself.
+- **inputs**: `key_bytes: &[u8]`
+- **outputs**: `String`
+- **calls**: `sha2::Sha256::digest`
+- **called_by**: `rotate_master_key`, `master_key_fingerprint`
+- **mutates**: nothing
+
+### `MasterKeyFingerprintResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: Response for `GET /v1/admin/master-key/fingerprint`: fingerprint, master_key_path (`None` when sourced from `HSIP_MASTER_KEY`).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `master_key_fingerprint`
+- **mutates**: nothing
+
+### `master_key_fingerprint`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: `GET /v1/admin/master-key/fingerprint` — read-only, no mutation. Returns the SHA-256 fingerprint of the master key currently in use, gated by the same `require_root_admin` check as rotation. Exists so an operator can confirm a backup file matches production without either grepping logs or triggering an actual rotation.
+- **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`
+- **outputs**: `ApiResult<Json<MasterKeyFingerprintResponse>>`
+- **calls**: `require_root_admin`, `fingerprint`
+- **called_by**: Axum router
+- **mutates**: nothing
+
+### `RotateMasterKeyResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: Response for `POST /v1/admin/master-key/rotate`: identities_reencrypted, anchor_identity_reencrypted, old/new key fingerprints, master_key_path, a note reminding the operator to back up the new file.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `rotate_master_key`
+- **mutates**: nothing
+
+### `rotate_master_key`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: `POST /v1/admin/master-key/rotate` — generates a new 32-byte master key, re-encrypts every `identities.signing_key_b64` row and the singleton `anchor_identity` row under it inside one DB transaction, durably swaps the key file (staging file write + `fsync` + atomic rename — never a half-written key on disk), then swaps the in-memory key. Holds `state.master_key.write().await` for the *entire* operation (not just the final swap) — see the function's doc comment for the concurrency race this closes. Refuses with `ApiError::BadRequest` if `state.master_key_path` is `None` (key sourced from `HSIP_MASTER_KEY`, nothing this process can rewrite). Writes one `master_key.rotated` audit entry per tenant touched and increments `metrics::MASTER_KEY_ROTATIONS`.
+- **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`
+- **outputs**: `ApiResult<Json<RotateMasterKeyResponse>>`
+- **calls**: `require_root_admin`, `state.db.begin`, `key_encryption::{decrypt_signing_key, encrypt_signing_key}`, `std::fs::{File::create, rename}`, `audit_log::record`, `fingerprint`
+- **called_by**: Axum router
+- **mutates**: `identities`, `anchor_identity` tables (within a transaction), the master key file on disk, `state.master_key` (in-memory)
+
+---
+
 ## `crates/hsip-api/src/routes/agents.rs`
 
 ### `capabilities`
@@ -1299,7 +1489,7 @@
 ### `PROBE_PORTS`
 - **type**: variable (constant array)
 - **file**: `crates/hsip-api/src/routes/agents.rs`
-- **purpose**: List of 12 localhost ports probed for running AI agents: Ollama, LM Studio, Jupyter, Vite, CRA, Next.js, FastAPI, Flask, Express, Deno, Node-RED, Gradio.
+- **purpose**: List of 12 localhost ports probed for running AI agents: Ollama (11434), Vite (5173), wrangler (8787), generic HTTP agent (8080), uvicorn (8000), Flask (5000), generic agent (4000, 9000), dashboard (3001), dev-api (3000), LM Studio (1234), Jupyter (8888).
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1343,7 +1533,7 @@
 ### `AuditEntry`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/audit.rs`
-- **purpose**: Serialised audit row: id, action, details, timestamp.
+- **purpose**: Serialised audit row: id, action, peer_verify_key, details, timestamp, prev_hash, entry_hash. The last two are `None` for rows written before the audit hash chain existed.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1353,13 +1543,32 @@
 ### `list` (audit)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/audit.rs`
-- **purpose**: `GET /v1/audit` — returns paginated, optionally filtered audit log entries for the tenant.
+- **purpose**: `GET /v1/audit` — returns paginated, optionally filtered audit log entries for the tenant, including chain fields.
 - **inputs**: `State(state)`, `tenant`, `Query(params)`
 - **outputs**: `ApiResult<Json<Vec<AuditEntry>>>`
-- **calls**: `sqlx::query_as`
+- **calls**: `sqlx::query`
 - **called_by**: Axum router
 - **mutates**: nothing
 
+### `AuditVerifyResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/audit.rs`
+- **purpose**: Response for `GET /v1/audit/verify`: valid, checked (chained entries checked), unchained (pre-migration entries skipped), first_break_id.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `verify_chain` (audit route)
+- **mutates**: nothing
+
+### `verify_chain` (audit route)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/audit.rs`
+- **purpose**: `GET /v1/audit/verify` — fetches the tenant's audit rows in chain order and recomputes the BLAKE3 hash chain server-side, reporting whether it's intact. Detects tampering by an attacker with direct DB write access, which application-level access controls alone cannot.
+- **inputs**: `State(state)`, `tenant`
+- **outputs**: `ApiResult<Json<AuditVerifyResponse>>`
+- **calls**: `sqlx::query`, `audit_log::verify_chain`
+- **called_by**: Axum router
+- **mutates**: nothing
 
 ---
 
@@ -1744,7 +1953,7 @@
 - **purpose**: `POST /v1/trust/peer` — validates key bytes, upserts trusted peer, writes `trust.peer_added` audit entry.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<TrustedPeer>>`
-- **calls**: `hex::decode`, `ed25519_dalek::VerifyingKey::from_bytes`, `sqlx::query`
+- **calls**: `hex::decode`, `ed25519_dalek::VerifyingKey::from_bytes`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`trusted_peers`, `audit_entries`)
 
@@ -1764,7 +1973,7 @@
 - **purpose**: `DELETE /v1/trust/peers/:id` — removes a trusted peer and writes `trust.peer_removed` audit entry.
 - **inputs**: `State(state)`, `tenant`, `Path(id)`
 - **outputs**: `ApiResult<StatusCode>`
-- **calls**: `sqlx::query`
+- **calls**: `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`trusted_peers`, `audit_entries`)
 
@@ -1774,7 +1983,7 @@
 - **purpose**: `POST /v1/trust/verify` — looks up peer by label, verifies Ed25519 signature, writes `trust.verify_ok` or `trust.verify_failed` audit entry.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<TrustVerifyResponse>>`
-- **calls**: `sqlx::query`, `hex::decode`, `ed25519_dalek::VerifyingKey::verify`
+- **calls**: `sqlx::query`, `hex::decode`, `ed25519_dalek::VerifyingKey::verify`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`audit_entries`)
 
@@ -1836,7 +2045,7 @@
 - **purpose**: `POST /v1/sandbox/provision` — no auth required. Creates an isolated tenant + 24-hour trial API key. Returns credentials with embedded quickstart curl commands. Only active when `HSIP_SANDBOX=true` env var is set. Rate-limited to 5 provisions per source IP per hour.
 - **inputs**: `State<AppState>`, `HeaderMap`
 - **outputs**: `ApiResult<Json<ProvisionResponse>>`
-- **calls**: `client_ip`, `check_provision_rate`, `now_ms`, `hash_key`, `ms_to_iso`, sqlx queries (INSERT tenants, INSERT api_keys, INSERT audit_entries)
+- **calls**: `client_ip`, `check_provision_rate`, `now_ms`, `hash_key`, `ms_to_iso`, sqlx queries (INSERT tenants, INSERT api_keys), `audit_log::record`
 - **called_by**: Axum router (`POST /v1/sandbox/provision`)
 - **mutates**: DB (tenants, api_keys, audit_entries), `state.sandbox_rate`
 
@@ -1947,7 +2156,7 @@ its `payload_hash`.
 - **purpose**: `POST /v1/decisions` — resolves the authenticated `api_keys` row, validates fields, builds a `DecisionEnvelope` chained to the tenant's last decision (`prev_hash`), signs its `event_hash` with the tenant's Ed25519 identity, inserts it. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS` (another request extended the chain first). Writes `decision.recorded` audit entry, increments `DECISIONS_RECORDED`.
 - **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`, `Json(req): Json<RecordDecisionRequest>`
 - **outputs**: `ApiResult<Json<RecordDecisionResponse>>`
-- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `ms_to_iso`, `hash_key`, sqlx queries
+- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `ms_to_iso`, `hash_key`, sqlx queries, `audit_log::record`, `audit_log::chain_retry_backoff`, `metrics::CHAIN_WRITE_RETRIES`
 - **called_by**: Axum router
 - **mutates**: DB (`decisions`, `audit_entries`)
 
@@ -2043,16 +2252,17 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **purpose**: `run_anchor_cycle` is the production entry point (default public calendars). `run_anchor_cycle_with_calendars` does the real work: retries stuck OTS submissions, checks whether a batch is due, builds a `MerkleTree` over unanchored decisions' `event_hash`es, signs the root with the anchor identity, submits to OpenTimestamps (proceeding with local-only anchoring if that fails — `ots_status = 'calendar_unreachable'`), inserts `decision_anchors`, stamps `anchor_id`/`merkle_index` onto each covered decision, writes one `decision.anchored` audit entry per distinct tenant touched.
 - **inputs**: `db: &Db`, `master_key: &[u8]`, (`calendars: &[&str]` for the `_with_calendars` form)
 - **outputs**: `anyhow::Result<Option<AnchorSummary>>` (`None` when nothing was due)
-- **calls**: `hsip_core::merkle::MerkleTree`, `anchor::submit_digest_to`, `load_or_create_anchor_identity`
-- **called_by**: `main.rs`'s spawned anchor loop; integration tests call `run_anchor_cycle_with_calendars` directly against a mock calendar
+- **calls**: `hsip_core::merkle::MerkleTree`, `anchor::submit_digest_to`, `load_or_create_anchor_identity`, `audit_log::record`, `metrics::ANCHOR_CALENDAR_UNREACHABLE`
+- **called_by**: `main.rs`'s spawned anchor loop (which now snapshots `state.master_key` via a short-lived read lock each tick rather than holding it for the cycle's network I/O); integration tests call `run_anchor_cycle_with_calendars` directly against a mock calendar
 - **mutates**: DB (`decision_anchors`, `decisions.anchor_id`/`merkle_index`, `audit_entries`)
 
 ### `retry_pending_ots_submissions`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Re-attempts OpenTimestamps submission for anchors stuck at `ots_status = 'calendar_unreachable'`. Best-effort — logs and moves on if a retry fails again.
+- **purpose**: Re-attempts OpenTimestamps submission for anchors stuck at `ots_status = 'calendar_unreachable'`. Best-effort — logs and moves on if a retry fails again, incrementing `metrics::ANCHOR_CALENDAR_UNREACHABLE` so the dependency's degraded state is visible over time, not just per-anchor.
 - **inputs**: `db: &Db`, `calendars: &[&str]`
 - **outputs**: none
+- **calls**: `anchor::submit_digest_to`, `metrics::ANCHOR_CALENDAR_UNREACHABLE`
 - **called_by**: `run_anchor_cycle_with_calendars`
 - **mutates**: DB (`decision_anchors.ots_proof`/`ots_status` on success)
 
@@ -2071,7 +2281,7 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 ### `Commands`
 - **type**: enum
 - **file**: `crates/hsip-cli/src/main.rs`
-- **purpose**: Top-level clap subcommand enum: Keygen, Init, Export, Import, Consent, Session, Token, Discover, Reputation, Daemon, Audit, Agent, Trust, Up, Status, Diag.
+- **purpose**: Top-level clap subcommand enum: Keygen, Init, Export, Import, Consent, Session, Token, Discover, Reputation, Daemon, Audit, Agent, Trust, Keys, Up, Status, Diag.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -2363,6 +2573,26 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **called_by**: `run` (agent)
 - **mutates**: nothing
 
+### `discover` (agent cli)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/agent.rs`
+- **purpose**: `hsip agent discover` — calls `GET /v1/agents/discover`, prints each candidate's URL, hint, description, registration status, and (if unregistered) a suggested `hsip agent register` command.
+- **inputs**: `api_url: Option<String>`, `key: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `client.get`, `println!`
+- **called_by**: `run` (agent)
+- **mutates**: nothing
+
+### `DiscoveredAgent` (cli)
+- **type**: struct
+- **file**: `crates/hsip-cli/src/commands/agent.rs`
+- **purpose**: Deserialises one entry from `GET /v1/agents/discover`: url, hint, description, already_registered, suggested_name.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `discover` (agent cli)
+- **mutates**: nothing
+
 ### `load_admin_key` (agent module — delegates)
 - **type**: function
 - **file**: `crates/hsip-cli/src/commands/agent.rs`
@@ -2517,6 +2747,70 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **called_by**: `run` (trust)
 - **mutates**: nothing
 
+
+---
+
+## `crates/hsip-cli/src/commands/keys.rs`
+
+### `KeysCmd`
+- **type**: enum
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Clap subcommand enum for `hsip keys`: MasterFingerprint, RotateMaster (with a `--yes` flag to skip the interactive confirmation prompt).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `run` (keys)
+- **mutates**: nothing
+
+### `FingerprintResponse` / `RotateResponse`
+- **type**: structs
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Deserialize `GET /v1/admin/master-key/fingerprint` and `POST /v1/admin/master-key/rotate` responses respectively.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `master_fingerprint`, `rotate_master`
+- **mutates**: nothing
+
+### `ApiClient` (keys)
+- **type**: struct
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Same `reqwest::blocking` wrapper pattern as `agent.rs`/`trust.rs`, `get`/`post` only (no `delete` — neither keys endpoint needs it). Uses `commands::util::load_admin_key()` — not a local copy.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `master_fingerprint`, `rotate_master`
+- **mutates**: nothing
+
+### `run` (keys)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Dispatches `KeysCmd` subcommands to `master_fingerprint` or `rotate_master`.
+- **inputs**: `cmd: KeysCmd`
+- **outputs**: `Result<()>`
+- **calls**: `master_fingerprint`, `rotate_master`
+- **called_by**: `main`
+- **mutates**: varies
+
+### `master_fingerprint`
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: `hsip keys master-fingerprint` — calls `GET /v1/admin/master-key/fingerprint`, prints the fingerprint, its source (file path or `HSIP_MASTER_KEY`), and the shell command to independently hash a local backup file for comparison.
+- **inputs**: `api_url: Option<String>`, `key: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `client.get`, `println!`
+- **called_by**: `run` (keys)
+- **mutates**: nothing
+
+### `rotate_master`
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: `hsip keys rotate-master` — unless `--yes`, prints what the operation does and requires typing `yes` at an interactive stdin prompt before calling `POST /v1/admin/master-key/rotate`. Built as a CLI command specifically because HSIP's original audience was non-technical users, for whom a security control only reachable via hand-rolled `curl` + bearer auth would be effectively unreachable; `--yes` keeps it scriptable for automated/scheduled rotation.
+- **inputs**: `api_url: Option<String>`, `key: Option<String>`, `yes: bool`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `std::io::stdin().read_line`, `client.post`, `println!`
+- **called_by**: `run` (keys)
+- **mutates**: DB (`identities`, `anchor_identity`) + master key file + in-memory key, via the API — this CLI process itself mutates nothing locally
 
 ---
 

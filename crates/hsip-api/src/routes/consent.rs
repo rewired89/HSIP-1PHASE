@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
     Json,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -8,11 +9,38 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
-    auth::TenantId,
-    db::now_ms,
+    auth::{hash_key, TenantId},
+    db::{now_ms, Db},
     errors::{ApiError, ApiResult},
     state::AppState,
 };
+
+/// Resolves the `agent_type` ("human" | "service" | "ai_agent") of the API
+/// key that actually authenticated this request. Consent is the one place
+/// in HSIP that claims to represent authorization — recording *which kind*
+/// of principal granted it (a human operator vs. an AI agent approving its
+/// own action) is the difference between "consent" and "an agent clicking
+/// yes for itself."
+async fn resolve_granting_key_type(
+    db: &Db,
+    headers: &HeaderMap,
+    tenant_id: &str,
+) -> ApiResult<String> {
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .ok_or_else(|| ApiError::Unauthorized("Missing Authorization: Bearer <key>".into()))?;
+    let key_hash = hash_key(token);
+    let row = sqlx::query("SELECT agent_type FROM api_keys WHERE key_hash = ? AND tenant_id = ?")
+        .bind(&key_hash)
+        .bind(tenant_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| ApiError::Internal("authenticated key vanished mid-request".into()))?;
+    Ok(row.try_get(0)?)
+}
 
 #[derive(Deserialize)]
 pub struct GrantRequest {
@@ -48,6 +76,10 @@ pub struct ConsentRecord {
     pub expires_at: Option<i64>,
     pub revoked_at: Option<i64>,
     pub created_at: i64,
+    /// "human" | "service" | "ai_agent" — the agent_type of the key that
+    /// granted this consent. `None` for rows written before this field
+    /// existed.
+    pub granted_by_key_type: Option<String>,
 }
 
 /// M2: Validate that peer_verify_key is a valid Base64-encoded 32-byte Ed25519 public key.
@@ -82,6 +114,7 @@ fn effective_status(db_status: &str, expires_ms: Option<i64>, now: i64) -> Strin
 pub async fn grant(
     State(state): State<AppState>,
     tenant: TenantId,
+    headers: HeaderMap,
     Json(req): Json<GrantRequest>,
 ) -> ApiResult<Json<ConsentRecord>> {
     // M2: validate peer key format
@@ -91,13 +124,15 @@ pub async fn grant(
     let ttl = req.ttl_ms.unwrap_or(3_600_000);
     let exp = now + ttl;
     let id = Uuid::new_v4().to_string();
+    let granted_by = resolve_granting_key_type(&state.db, &headers, &tenant.0).await?;
 
     sqlx::query(
-        "INSERT INTO consents (id, tenant_id, peer_verify_key, status, granted_at, expires_ms, created_at)
-         VALUES (?, ?, ?, 'granted', ?, ?, ?)
+        "INSERT INTO consents (id, tenant_id, peer_verify_key, status, granted_at, expires_ms, created_at, granted_by_key_type)
+         VALUES (?, ?, ?, 'granted', ?, ?, ?, ?)
          ON CONFLICT (tenant_id, peer_verify_key)
          DO UPDATE SET status='granted', granted_at=excluded.granted_at,
-                       expires_ms=excluded.expires_ms, revoked_at=NULL",
+                       expires_ms=excluded.expires_ms, revoked_at=NULL,
+                       granted_by_key_type=excluded.granted_by_key_type",
     )
     .bind(&id)
     .bind(&tenant.0)
@@ -105,20 +140,18 @@ pub async fn grant(
     .bind(now)
     .bind(exp)
     .bind(now)
+    .bind(&granted_by)
     .execute(&state.db)
     .await?;
 
-    let audit_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, details, timestamp)
-         VALUES (?, ?, 'consent.granted', ?, ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "consent.granted",
+        Some(&req.peer_verify_key),
+        Some(&format!("expires_at={exp} granted_by={granted_by}")),
+        now,
     )
-    .bind(&audit_id)
-    .bind(&tenant.0)
-    .bind(&req.peer_verify_key)
-    .bind(format!("expires_at={exp}"))
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(ConsentRecord {
@@ -129,18 +162,21 @@ pub async fn grant(
         expires_at: Some(exp),
         revoked_at: None,
         created_at: now,
+        granted_by_key_type: Some(granted_by),
     }))
 }
 
 pub async fn revoke(
     State(state): State<AppState>,
     tenant: TenantId,
+    headers: HeaderMap,
     Json(req): Json<RevokeRequest>,
 ) -> ApiResult<Json<ConsentRecord>> {
     // M2: validate peer key format
     validate_peer_key(&req.peer_verify_key)?;
 
     let now = now_ms();
+    let revoked_by = resolve_granting_key_type(&state.db, &headers, &tenant.0).await?;
 
     let result = sqlx::query(
         "UPDATE consents SET status='revoked', revoked_at=?
@@ -160,7 +196,7 @@ pub async fn revoke(
     }
 
     let row = sqlx::query(
-        "SELECT id, granted_at, expires_ms, created_at
+        "SELECT id, granted_at, expires_ms, created_at, granted_by_key_type
          FROM consents WHERE tenant_id=? AND peer_verify_key=?",
     )
     .bind(&tenant.0)
@@ -168,16 +204,14 @@ pub async fn revoke(
     .fetch_one(&state.db)
     .await?;
 
-    let audit_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, timestamp)
-         VALUES (?, ?, 'consent.revoked', ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "consent.revoked",
+        Some(&req.peer_verify_key),
+        Some(&format!("revoked_by={revoked_by}")),
+        now,
     )
-    .bind(&audit_id)
-    .bind(&tenant.0)
-    .bind(&req.peer_verify_key)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(ConsentRecord {
@@ -188,6 +222,7 @@ pub async fn revoke(
         expires_at: row.try_get(2)?,
         revoked_at: Some(now),
         created_at: row.try_get(3)?,
+        granted_by_key_type: row.try_get(4)?,
     }))
 }
 
@@ -202,7 +237,7 @@ pub async fn list(
     let now = now_ms();
 
     let rows = sqlx::query(
-        "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at
+        "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at, granted_by_key_type
          FROM consents WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
     )
     .bind(&tenant.0)
@@ -225,6 +260,7 @@ pub async fn list(
                 expires_at: expires_ms,
                 revoked_at: r.try_get(5)?,
                 created_at: r.try_get(6)?,
+                granted_by_key_type: r.try_get(7)?,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -241,7 +277,7 @@ pub async fn get(
     let now = now_ms();
 
     let row = sqlx::query(
-        "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at
+        "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at, granted_by_key_type
          FROM consents WHERE tenant_id=? AND peer_verify_key=?",
     )
     .bind(&tenant.0)
@@ -262,5 +298,6 @@ pub async fn get(
         expires_at: expires_ms,
         revoked_at: row.try_get(5)?,
         created_at: row.try_get(6)?,
+        granted_by_key_type: row.try_get(7)?,
     }))
 }

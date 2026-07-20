@@ -8,7 +8,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{auth::TenantId, db::now_ms, errors::{ApiError, ApiResult}, state::AppState};
+use crate::{
+    auth::TenantId,
+    db::now_ms,
+    errors::{ApiError, ApiResult},
+    state::AppState,
+};
 
 #[derive(Serialize)]
 pub struct TrustedPeer {
@@ -70,17 +75,14 @@ pub async fn add(
     .execute(&state.db)
     .await?;
 
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, details, timestamp)
-         VALUES (?, ?, 'trust.peer_added', ?, ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "trust.peer_added",
+        Some(&body.verify_key),
+        Some(&body.label),
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(&body.verify_key)
-    .bind(&body.label)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(TrustedPeer {
@@ -108,10 +110,10 @@ pub async fn list(
         .iter()
         .map(|r| -> Result<TrustedPeer, sqlx::Error> {
             Ok(TrustedPeer {
-                id:         r.try_get(0)?,
-                label:      r.try_get(1)?,
+                id: r.try_get(0)?,
+                label: r.try_get(1)?,
                 verify_key: r.try_get(2)?,
-                added_at:   r.try_get(3)?,
+                added_at: r.try_get(3)?,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -125,16 +127,15 @@ pub async fn remove(
     tenant: TenantId,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let row = sqlx::query(
-        "SELECT verify_key, label FROM trusted_peers WHERE id = ? AND tenant_id = ?",
-    )
-    .bind(&id)
-    .bind(&tenant.0)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| ApiError::NotFound(format!("Trusted peer {id} not found")))?;
+    let row =
+        sqlx::query("SELECT verify_key, label FROM trusted_peers WHERE id = ? AND tenant_id = ?")
+            .bind(&id)
+            .bind(&tenant.0)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::NotFound(format!("Trusted peer {id} not found")))?;
 
-    let vk: String    = row.try_get(0)?;
+    let vk: String = row.try_get(0)?;
     let label: String = row.try_get(1)?;
 
     sqlx::query("DELETE FROM trusted_peers WHERE id = ? AND tenant_id = ?")
@@ -143,18 +144,15 @@ pub async fn remove(
         .execute(&state.db)
         .await?;
 
-    let aid = Uuid::new_v4().to_string();
     let now = now_ms();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, details, timestamp)
-         VALUES (?, ?, 'trust.peer_removed', ?, ?, ?)",
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        "trust.peer_removed",
+        Some(&vk),
+        Some(&label),
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(&vk)
-    .bind(&label)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(serde_json::json!({ "removed": id })))
@@ -167,14 +165,14 @@ pub async fn verify(
     tenant: TenantId,
     Json(req): Json<TrustVerifyRequest>,
 ) -> ApiResult<Json<TrustVerifyResponse>> {
-    let row = sqlx::query(
-        "SELECT verify_key FROM trusted_peers WHERE tenant_id = ? AND label = ?",
-    )
-    .bind(&tenant.0)
-    .bind(&req.label)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| ApiError::NotFound(format!("No trusted peer with label \"{}\"", req.label)))?;
+    let row = sqlx::query("SELECT verify_key FROM trusted_peers WHERE tenant_id = ? AND label = ?")
+        .bind(&tenant.0)
+        .bind(&req.label)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("No trusted peer with label \"{}\"", req.label))
+        })?;
 
     let vk_b64: String = row.try_get(0)?;
 
@@ -199,19 +197,19 @@ pub async fn verify(
         .is_ok();
 
     let now = now_ms();
-    let action = if verified { "trust.verify_ok" } else { "trust.verify_failed" };
-    let aid = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO audit_entries (id, tenant_id, action, peer_verify_key, details, timestamp)
-         VALUES (?, ?, ?, ?, ?, ?)",
+    let action = if verified {
+        "trust.verify_ok"
+    } else {
+        "trust.verify_failed"
+    };
+    crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        action,
+        Some(&vk_b64),
+        Some(&req.label),
+        now,
     )
-    .bind(&aid)
-    .bind(&tenant.0)
-    .bind(action)
-    .bind(&vk_b64)
-    .bind(&req.label)
-    .bind(now)
-    .execute(&state.db)
     .await?;
 
     Ok(Json(TrustVerifyResponse {

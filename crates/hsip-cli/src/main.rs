@@ -405,6 +405,12 @@ enum Commands {
         cmd: commands::trust::TrustCmd,
     },
 
+    /// Inspect and rotate the node's master key
+    Keys {
+        #[command(subcommand)]
+        cmd: commands::keys::KeysCmd,
+    },
+
     /// Show HSIP server status: identity, active agents, recent audit events
     Status {
         #[arg(long, env = "HSIP_API_URL")]
@@ -1687,6 +1693,13 @@ fn main() {
             }
         }
 
+        Commands::Keys { cmd } => {
+            if let Err(e) = commands::keys::run(cmd) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+
         Commands::Status { api_url, key } => {
             if let Err(e) = commands::agent::status(api_url, key) {
                 eprintln!("Error: {e:#}");
@@ -1923,7 +1936,6 @@ fn main() {
             eprintln!("[AUDIT] Rebuild with: cargo build --features postgres");
             std::process::exit(1);
         }
-
     }
 }
 
