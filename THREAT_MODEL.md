@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.9-draft  
+**Version:** 0.10-draft  
 **Date:** 2026-07-20  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -166,8 +166,16 @@ As of this revision, every write also extends a per-tenant BLAKE3 hash chain: `e
 
 **Scope limitations that remain:**
 - **The chain starts at upgrade time, not at tenant creation.** Rows written before this migration have NULL `prev_hash`/`entry_hash` and are excluded from verification (`unchained` count in the `/v1/audit/verify` response) — there is no retroactive integrity proof for history older than the chain itself.
-- **This proves tamper-*evidence*, not tamper-*prevention*.** An attacker with DB write access can still delete the *entire* chain (not just alter it undetected) and there is nothing here that stops that, or that anchors the chain outside this database. For that, see the anchoring approach already used for decision attestations (§ Decision Attestations in `CLAUDE.md`) — the audit log is not yet anchored to an external timestamping service the way decisions are.
-- For environments requiring protection against total chain deletion, the mitigation is still filesystem-level immutability (append-only S3 bucket, WORM storage, or periodic signed export to an external log sink) — the hash chain detects alteration of what remains, it doesn't prevent removal.
+- **This proves tamper-*evidence*, not tamper-*prevention*.** An attacker with DB write access can still delete the *entire* chain (not just alter it undetected). As of this revision that gap is closed the same way as decision attestations — see §4.8.1 below — but only going forward from when a batch is actually anchored; a chain deleted *before* its next anchor cycle runs is still undetectable (bounded by the anchor cadence, `INTERVAL_TRIGGER_MS` = 5 min, same residual window decisions already accept).
+- For environments requiring protection against total chain deletion even within that window, the mitigation is still filesystem-level immutability (append-only S3 bucket, WORM storage, or periodic signed export to an external log sink) — the hash chain detects alteration of what remains, anchoring bounds how long full deletion goes undetected, neither makes deletion impossible.
+
+#### 4.8.1 External Anchoring (`GET /v1/audit/:id/proof`, `POST /v1/audit/verify-proof`)
+
+Closes the gap §4.8 documented above: the BLAKE3 chain alone can't prove the whole chain wasn't deleted and silently recreated by whoever controls this database, only that what remains is internally consistent. `anchor_job::run_audit_anchor_cycle` batches `audit_entries` (by `entry_hash`, excluding pre-chain rows that have none) into an RFC 6962 Merkle tree, signs the root with the same node-level `anchor_identity` key used for decision attestations (one node identity vouches for everything this node anchors — anchoring was never decision-specific), and submits it to OpenTimestamps — the identical mechanism as § Decision Attestations below, applied to `audit_entries` instead of `decisions`. Same cadence (`BATCH_SIZE_TRIGGER` = 50 / `INTERVAL_TRIGGER_MS` = 5 min), same `calendar_unreachable` retry-next-cycle behavior, stored in a twin `audit_anchors` table.
+
+`GET /v1/audit/:id/proof` returns the same self-contained bundle shape as `GET /v1/decisions/:id/proof`; `POST /v1/audit/verify-proof` is the same "no `TenantId`, no `State`, no DB call" pure verification function as `POST /v1/decisions/verify` — a third party recomputes `entry_hash` from the disclosed fields, checks Merkle inclusion, checks the anchor signature, with zero trust required in this server's account of its own database. Verified end-to-end against a real running server (not just the mocked-calendar unit tests): entry recorded → proof shows `anchored: false` → anchor cycle run against local mock (real public calendars are still sandbox-blocked, see §7) → proof shows `anchored: true` with a verifying Merkle proof and anchor signature → tampering any disclosed field flips `verify-proof`'s `valid` to `false`.
+
+*Source: `crates/hsip-api/src/anchor_job.rs::run_audit_anchor_cycle`, `crates/hsip-api/src/routes/audit.rs::{proof, verify_proof}`, `crates/hsip-api/src/db.rs` (`audit_anchors` table, `audit_entries.anchor_id`/`merkle_index`)*
 
 ### 4.9 Credential Integrity: Ed25519 Signatures
 
@@ -299,7 +307,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | In-memory rate limiter resets on restart | Low | A burst attack timed around a restart or deploy can temporarily exceed rate limits |
 | SQLite without WAL under write contention | Low | Low risk for single-tenant deployments; use `DATABASE_URL` pointing at PostgreSQL for high-concurrency |
 | No mutual TLS between federated HSIP nodes | Low | Federated trust uses explicit Ed25519 verify key registration; no automatic peer auth at the transport layer |
-| Audit log hash chain not externally anchored | Low | The BLAKE3 chain (§4.8) is self-verifiable and now wired into the HTTP audit table, but — like decisions before anchoring — an attacker who deletes the whole chain leaves no internal trace; no blockchain or transparency log integration for the audit log yet (decisions already have one, see `CLAUDE.md`). |
+| Audit log anchor cadence window | Low | §4.8.1 closed the "chain not anchored outside this database" gap — an attacker who deletes the whole chain *after* its last anchor is now detectable by comparing the anchored root against what remains. The residual window is the same shape as decisions' own: a chain deleted *before* its next anchor cycle runs (bounded by `INTERVAL_TRIGGER_MS` = 5 min) is still undetectable by this mechanism alone. |
 | Clock skew affects consent, credential, *and* decision-chain ordering | Low | All three subsystems trust the server's wall clock for expiry/ordering, not just consent. Use NTP synchronization in production. |
 | Post-quantum crypto (ML-KEM-768/ML-DSA-65) is not part of the default build | Informational, not a gap | These live in `hsip-verify`, excluded from the workspace (requires Z3 built from source — see `CLAUDE.md`). For HSIP's actual threat model — API-key theft, filesystem/DB compromise — this matters far less than the items above; don't let its prominence in dependency lists (§4.11) imply it's closer to production-ready than the excluded-crate status indicates. |
 

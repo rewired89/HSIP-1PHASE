@@ -130,6 +130,17 @@ pub static CHAIN_WRITE_RETRIES: Lazy<CounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Audit-log batches anchored by ots_status — twin of `DECISIONS_ANCHORED`
+/// for `anchor_job::run_audit_anchor_cycle`.
+pub static AUDIT_ANCHORED: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "hsip_audit_anchored_total",
+        "Audit-log entry batches anchored by ots_status",
+        &["ots_status"]
+    )
+    .unwrap()
+});
+
 /// Requests rejected by the opt-in replay-protection check (x-hsip-timestamp
 /// + x-hsip-nonce headers). Zero unless a caller opts in, since the headers
 /// are entirely optional — see `auth.rs::check_replay_protection`.
@@ -172,6 +183,7 @@ pub fn init() {
     Lazy::force(&MASTER_KEY_ROTATIONS);
     Lazy::force(&REPLAY_REJECTED);
     Lazy::force(&ROOT_ADMIN_CHANGES);
+    Lazy::force(&AUDIT_ANCHORED);
 }
 
 /// Render all metrics as Prometheus text format

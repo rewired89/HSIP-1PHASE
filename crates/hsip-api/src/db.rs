@@ -229,6 +229,19 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         .execute(pool)
         .await;
 
+    // Non-fatal: columns may already exist on upgraded databases. Mirror of
+    // `decisions.anchor_id`/`merkle_index` — which batch (if any) this
+    // entry's `entry_hash` was folded into, and its leaf position in that
+    // batch's Merkle tree. NULL until `anchor_job::run_audit_anchor_cycle`
+    // picks it up; rows with NULL `entry_hash` (pre-chain-migration) are
+    // never eligible for anchoring in the first place.
+    let _ = sqlx::query("ALTER TABLE audit_entries ADD COLUMN anchor_id TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE audit_entries ADD COLUMN merkle_index INTEGER")
+        .execute(pool)
+        .await;
+
     // Enforces the hash chain's append-only, non-forking property: two
     // concurrent writers cannot both extend the same tenant's chain from the
     // same prev_hash. NULLs (pre-migration rows) are exempt by SQL semantics.
@@ -317,6 +330,28 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Batches of audit_entries anchored together under one RFC 6962 Merkle
+    // root — same shape as `decision_anchors`, same node-level
+    // `anchor_identity` key signs both. Closes THREAT_MODEL.md §4.8's
+    // documented gap: the BLAKE3 chain (`audit_log.rs`) is self-verifiable
+    // but wasn't anchored outside this database, so an attacker with DB
+    // write access could delete the whole chain undetected (just not alter
+    // what remained). See `anchor_job::run_audit_anchor_cycle`.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_anchors (
+            id               TEXT PRIMARY KEY,
+            merkle_root      TEXT NOT NULL,
+            leaf_count       INTEGER NOT NULL,
+            anchor_signature TEXT NOT NULL,
+            anchor_verify_key TEXT NOT NULL,
+            ots_proof        BLOB,
+            ots_status       TEXT NOT NULL DEFAULT 'pending',
+            created_at       INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // AI-agent decision attestations (M1: decision attestation feature).
     // Two-tier by design: accountability metadata is clear text; the actual
     // decision content the caller made is never stored here, only
@@ -364,6 +399,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_decisions_tenant   ON decisions (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_decisions_anchor   ON decisions (anchor_id)",
         "CREATE INDEX IF NOT EXISTS idx_decisions_created  ON decisions (tenant_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_anchor       ON audit_entries (anchor_id)",
     ];
     for idx in &indexes {
         sqlx::query(idx).execute(pool).await?;

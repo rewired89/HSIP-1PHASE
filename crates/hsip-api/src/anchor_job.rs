@@ -285,6 +285,222 @@ async fn retry_pending_ots_submissions(db: &Db, calendars: &[&str]) {
     }
 }
 
+/// Run one audit-log anchor cycle against the default public OpenTimestamps
+/// calendars. Same shape as [`run_anchor_cycle`], batching `audit_entries`
+/// instead of `decisions` — see the module-level comparison in
+/// `audit_log.rs` for why this exists (THREAT_MODEL.md §4.8's "chain isn't
+/// anchored outside this database" gap).
+pub async fn run_audit_anchor_cycle(
+    db: &Db,
+    master_key: &[u8],
+) -> anyhow::Result<Option<AnchorSummary>> {
+    run_audit_anchor_cycle_with_calendars(db, master_key, anchor::DEFAULT_CALENDARS).await
+}
+
+/// Run one audit-log anchor cycle: retry any previously-unreachable OTS
+/// submissions for audit batches, then check whether a new batch is due.
+///
+/// Only entries that already participate in the BLAKE3 hash chain
+/// (`entry_hash IS NOT NULL`) are eligible — rows written before that chain
+/// existed have nothing to commit to a Merkle leaf and are excluded, the
+/// same way `audit_log::verify_chain` counts them as `unchained` rather
+/// than treating them as a break.
+///
+/// `calendars` is threaded through explicitly for the same testing reason
+/// as [`run_anchor_cycle_with_calendars`].
+pub async fn run_audit_anchor_cycle_with_calendars(
+    db: &Db,
+    master_key: &[u8],
+    calendars: &[&str],
+) -> anyhow::Result<Option<AnchorSummary>> {
+    retry_pending_audit_ots_submissions(db, calendars).await;
+
+    let unanchored_count: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM audit_entries WHERE anchor_id IS NULL AND entry_hash IS NOT NULL",
+    )
+    .fetch_one(db)
+    .await?
+    .try_get(0)?;
+
+    if unanchored_count == 0 {
+        return Ok(None);
+    }
+
+    let last_anchor_ms: i64 = sqlx::query("SELECT COALESCE(MAX(created_at), 0) FROM audit_anchors")
+        .fetch_one(db)
+        .await?
+        .try_get(0)?;
+    let now = now_ms();
+    let due_by_size = unanchored_count >= BATCH_SIZE_TRIGGER;
+    let due_by_time = now - last_anchor_ms >= INTERVAL_TRIGGER_MS;
+
+    if !due_by_size && !due_by_time {
+        return Ok(None);
+    }
+
+    let rows = sqlx::query(
+        "SELECT id, entry_hash FROM audit_entries WHERE anchor_id IS NULL AND entry_hash IS NOT NULL
+         ORDER BY timestamp ASC LIMIT ?",
+    )
+    .bind(MAX_BATCH_SIZE)
+    .fetch_all(db)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut ids = Vec::with_capacity(rows.len());
+    let mut leaves = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id: String = row.try_get(0)?;
+        let entry_hash_hex: String = row.try_get(1)?;
+        let leaf = hex::decode(&entry_hash_hex)
+            .map_err(|_| anyhow::anyhow!("corrupt entry_hash in DB for audit entry {id}"))?;
+        ids.push(id);
+        leaves.push(leaf);
+    }
+
+    let tree = MerkleTree::from_leaves(&leaves);
+    let root = tree.root();
+
+    let anchor_signing_key = load_or_create_anchor_identity(db, master_key).await?;
+    let anchor_verify_b64 = BASE64.encode(anchor_signing_key.verifying_key().to_bytes());
+    let anchor_signature = anchor_signing_key.sign(&root);
+    let anchor_signature_b64 = BASE64.encode(anchor_signature.to_bytes());
+
+    let (ots_proof, ots_status) = match anchor::submit_digest_to(calendars, &root).await {
+        Ok(receipt) => {
+            tracing::debug!(
+                calendar = %receipt.calendar_url,
+                "OpenTimestamps submission accepted (audit-log batch)"
+            );
+            (Some(receipt.response_bytes), "pending".to_string())
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "OpenTimestamps submission failed for this audit-log anchor batch; \
+                 local Merkle anchoring proceeds, external anchoring will retry next cycle"
+            );
+            metrics::ANCHOR_CALENDAR_UNREACHABLE.inc();
+            (None, "calendar_unreachable".to_string())
+        }
+    };
+
+    let anchor_id = Uuid::new_v4().to_string();
+    let now = now_ms();
+
+    sqlx::query(
+        "INSERT INTO audit_anchors
+         (id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&anchor_id)
+    .bind(hex::encode(root))
+    .bind(ids.len() as i64)
+    .bind(&anchor_signature_b64)
+    .bind(&anchor_verify_b64)
+    .bind(&ots_proof)
+    .bind(&ots_status)
+    .bind(now)
+    .execute(db)
+    .await?;
+
+    for (index, id) in ids.iter().enumerate() {
+        sqlx::query("UPDATE audit_entries SET anchor_id = ?, merkle_index = ? WHERE id = ?")
+            .bind(&anchor_id)
+            .bind(index as i64)
+            .bind(id)
+            .execute(db)
+            .await?;
+    }
+
+    // One audit entry per distinct tenant touched by this batch — mirrors
+    // decisions.anchored below. Naturally becomes part of a future audit
+    // anchor batch itself; this does not recurse within the same cycle
+    // since the UPDATE above already ran before this INSERT.
+    let tenant_rows =
+        sqlx::query("SELECT DISTINCT tenant_id FROM audit_entries WHERE anchor_id = ?")
+            .bind(&anchor_id)
+            .fetch_all(db)
+            .await?;
+    for row in &tenant_rows {
+        let tenant_id: String = row.try_get(0)?;
+        crate::audit_log::record(
+            db,
+            &tenant_id,
+            "audit.anchored",
+            None,
+            Some(&anchor_id),
+            now,
+        )
+        .await?;
+    }
+
+    metrics::AUDIT_ANCHORED
+        .with_label_values(&[&ots_status])
+        .inc();
+
+    Ok(Some(AnchorSummary {
+        anchor_id,
+        leaf_count: ids.len(),
+        ots_status,
+    }))
+}
+
+/// Retry OpenTimestamps submission for audit-log anchors whose local Merkle
+/// root was already committed but whose external calendar submission
+/// previously failed. Best-effort — logs and moves on if a retry fails
+/// again. Twin of [`retry_pending_ots_submissions`] against `audit_anchors`
+/// instead of `decision_anchors`.
+async fn retry_pending_audit_ots_submissions(db: &Db, calendars: &[&str]) {
+    let rows = match sqlx::query(
+        "SELECT id, merkle_root FROM audit_anchors WHERE ots_status = 'calendar_unreachable'",
+    )
+    .fetch_all(db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to query audit anchors pending OTS retry");
+            return;
+        }
+    };
+
+    for row in &rows {
+        let Ok(anchor_id) = row.try_get::<String, _>(0) else {
+            continue;
+        };
+        let Ok(root_hex) = row.try_get::<String, _>(1) else {
+            continue;
+        };
+        let Ok(root_bytes) = hex::decode(&root_hex) else {
+            continue;
+        };
+        let Ok(root): Result<[u8; 32], _> = root_bytes.try_into() else {
+            continue;
+        };
+
+        match anchor::submit_digest_to(calendars, &root).await {
+            Ok(receipt) => {
+                let _ = sqlx::query(
+                    "UPDATE audit_anchors SET ots_proof = ?, ots_status = 'pending' WHERE id = ?",
+                )
+                .bind(&receipt.response_bytes)
+                .bind(&anchor_id)
+                .execute(db)
+                .await;
+                tracing::info!(anchor_id = %anchor_id, "OpenTimestamps retry succeeded (audit-log batch)");
+            }
+            Err(e) => {
+                tracing::debug!(anchor_id = %anchor_id, error = %e, "OpenTimestamps retry still failing (audit-log batch)");
+                metrics::ANCHOR_CALENDAR_UNREACHABLE.inc();
+            }
+        }
+    }
+}
+
 /// Verify a node-level anchor signature over a Merkle root — used by
 /// `routes/decisions.rs::verify` and available for anyone re-implementing
 /// verification independently.

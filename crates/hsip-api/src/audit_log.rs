@@ -15,6 +15,15 @@
 //! are not covered — there is no retroactive integrity proof for history
 //! that predates the hash chain existing.
 //!
+//! The chain above is self-verifiable but, on its own, only proves internal
+//! consistency — it can't prove the whole chain wasn't deleted and
+//! recreated by whoever controls this database. `anchor_job.rs`'s
+//! `run_audit_anchor_cycle` closes that gap the same way decision
+//! attestations are anchored: batches of entries (by `entry_hash`) are
+//! folded into an RFC 6962 Merkle tree, the root is signed by the
+//! node-level anchor identity and submitted to OpenTimestamps. See
+//! `routes::audit::proof`/`verify_proof`.
+//!
 //! Uses the same `UNIQUE(tenant_id, prev_hash)` optimistic-retry pattern as
 //! `routes::decisions::record`: a conflict means another request extended
 //! this tenant's chain first, not a real error.
@@ -108,7 +117,11 @@ pub async fn record(
     unreachable!("loop always returns or errors within MAX_ATTEMPTS")
 }
 
-fn compute_entry_hash(
+/// Exposed `pub(crate)` (not private) so `routes::audit::verify_proof` can
+/// recompute an entry's hash from caller-supplied fields without a DB call
+/// — the same "pure function, no trust in this server's database" pattern
+/// as `routes::decisions::verify`.
+pub(crate) fn compute_entry_hash(
     prev_hash: &str,
     id: &str,
     tenant_id: &str,

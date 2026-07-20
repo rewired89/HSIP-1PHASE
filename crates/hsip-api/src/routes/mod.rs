@@ -44,6 +44,8 @@ pub fn router() -> Router<AppState> {
         // Audit
         .route("/v1/audit", get(audit::list))
         .route("/v1/audit/verify", get(audit::verify_chain))
+        .route("/v1/audit/verify-proof", post(audit::verify_proof))
+        .route("/v1/audit/:id/proof", get(audit::proof))
         // API Keys
         .route("/v1/keys", get(keys::list))
         .route("/v1/keys", post(keys::create))

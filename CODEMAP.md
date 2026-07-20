@@ -39,10 +39,10 @@
 ### `run`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Also spawns two background loops: the decision-anchoring cycle (`anchor_job::run_anchor_cycle`, ~10s poll) and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded.
+- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Also spawns two background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick) and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded.
 - **inputs**: none
 - **outputs**: `Result<()>`
-- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `db::now_ms`
+- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `db::now_ms`
 - **called_by**: `main`
 - **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows), `state.replay_nonces` DashMap (sweep removes expired entries)
 
@@ -362,7 +362,7 @@
 - **inputs**: `db: &Db`, `tenant_id: &str`, `action: &str`, `peer_verify_key: Option<&str>`, `details: Option<&str>`, `timestamp: i64`
 - **outputs**: `Result<String, sqlx::Error>` (the new entry's id)
 - **calls**: `sqlx::query`, `compute_entry_hash`, `chain_retry_backoff`, `metrics::CHAIN_WRITE_RETRIES`
-- **called_by**: every route handler and background task that writes an audit entry (`consent`, `credentials`, `identity`, `messages`, `trust`, `decisions`, `sandbox`, `auth::check_agent_velocity`, `anchor_job::run_anchor_cycle_with_calendars`)
+- **called_by**: every route handler and background task that writes an audit entry (`consent`, `credentials`, `identity`, `messages`, `trust`, `decisions`, `sandbox`, `auth::check_agent_velocity`, `anchor_job::run_anchor_cycle_with_calendars`, `anchor_job::run_audit_anchor_cycle_with_calendars`)
 - **mutates**: `audit_entries` table
 
 ### `chain_retry_backoff`
@@ -378,11 +378,11 @@
 ### `compute_entry_hash`
 - **type**: function
 - **file**: `crates/hsip-api/src/audit_log.rs`
-- **purpose**: Computes one entry's BLAKE3 hash from its chain-linked fields, with `0x00`-byte field separators to avoid concatenation-ambiguity collisions (e.g. `"ab"+"c"` vs `"a"+"bc"`).
+- **purpose**: `pub(crate)` (not private) — computes one entry's BLAKE3 hash from its chain-linked fields, with `0x00`-byte field separators to avoid concatenation-ambiguity collisions (e.g. `"ab"+"c"` vs `"a"+"bc"`). Exposed at crate visibility specifically so `routes::audit::verify_proof` can recompute it from caller-supplied fields with no DB call — the single source of truth for the formula, shared by writing, chain-verification, and proof-verification.
 - **inputs**: `prev_hash`, `id`, `tenant_id`, `action`, `peer_verify_key`, `details`, `timestamp`
 - **outputs**: `String` (hex-encoded BLAKE3 digest)
 - **calls**: `blake3::Hasher`
-- **called_by**: `record` (audit_log), `verify_chain` (audit_log)
+- **called_by**: `record` (audit_log), `verify_chain` (audit_log), `routes::audit::verify_proof`
 - **mutates**: nothing
 
 ### `ChainRow`
@@ -536,7 +536,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity). `decision_anchors` holds one row per RFC 6962 Merkle batch (root, signature, OpenTimestamps proof/status). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -910,6 +910,16 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **outputs**: none
 - **calls**: none
 - **called_by**: `anchor_job::run_anchor_cycle_with_calendars`
+- **mutates**: counter value
+
+### `AUDIT_ANCHORED`
+- **type**: variable (static `CounterVec`, label `ots_status`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Twin of `DECISIONS_ANCHORED` for audit-log batches, by `ots_status` (`pending` or `calendar_unreachable`).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `anchor_job::run_audit_anchor_cycle_with_calendars`
 - **mutates**: counter value
 
 ### `DECISIONS_VERIFIED`
@@ -1710,6 +1720,46 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **called_by**: Axum router
 - **mutates**: nothing
 
+### `AuditProofBundle`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/audit.rs`
+- **purpose**: Full self-contained verification bundle for one audit entry — same shape as `routes::decisions::DecisionProofBundle`: the entry's own fields, plus `anchored`/`merkle_root`/`merkle_index`/`inclusion_proof`/`anchor_signature`/`anchor_verify_key`/`ots_status`/`ots_proof`, all `None` when not yet anchored.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `proof` (audit route)
+- **mutates**: nothing
+
+### `proof` (audit route)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/audit.rs`
+- **purpose**: `GET /v1/audit/:id/proof` — the full self-contained verification bundle for one audit entry, same pattern as `routes::decisions::proof`. `anchored: false` if the entry predates the hash chain (no `entry_hash`) or hasn't been picked up by an anchor cycle yet (`anchor_id IS NULL`). Otherwise reconstructs the anchor batch's leaf set from `entry_hash`es (ordered by `merkle_index`), rebuilds the `MerkleTree`, verifies the recomputed root matches the stored `audit_anchors.merkle_root`, and regenerates the inclusion proof on demand (not stored).
+- **inputs**: `State(state)`, `tenant`, `Path(id)`
+- **outputs**: `ApiResult<Json<AuditProofBundle>>`
+- **calls**: `sqlx::query`, `hsip_core::merkle::MerkleTree`, `ProofStepDto::from`
+- **called_by**: Axum router
+- **mutates**: nothing
+
+### `VerifyAuditProofRequest` / `VerifyAuditProofResponse`
+- **type**: structs
+- **file**: `crates/hsip-api/src/routes/audit.rs`
+- **purpose**: Request/response types for `POST /v1/audit/verify-proof` — the disclosed entry fields plus optional merkle_root/inclusion_proof/anchor_signature/anchor_verify_key, and the verification result (valid, entry_hash_matches, merkle_inclusion_valid, anchor_signature_valid, reason).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `verify_proof` (audit route)
+- **mutates**: nothing
+
+### `verify_proof` (audit route)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/audit.rs`
+- **purpose**: `POST /v1/audit/verify-proof` — pure verification of an `AuditProofBundle`-shaped request, same "no `TenantId`, no `State`, no DB call" design as `routes::decisions::verify`. Recomputes `entry_hash` via `audit_log::compute_entry_hash` from the disclosed fields and compares to the claimed value; if `merkle_root`/`inclusion_proof` are present, checks Merkle inclusion; if `anchor_signature`/`anchor_verify_key` are also present, checks the anchor signature over the root. `valid` requires all present checks to pass.
+- **inputs**: `Json(req): Json<VerifyAuditProofRequest>`
+- **outputs**: `Json<VerifyAuditProofResponse>`
+- **calls**: `audit_log::compute_entry_hash`, `hsip_core::merkle::verify_inclusion`, `anchor_job::verify_anchor_signature`
+- **called_by**: Axum router
+- **mutates**: nothing
+
 ---
 
 ## `crates/hsip-api/src/routes/dns.rs`
@@ -2365,26 +2415,30 @@ rejection log).
 
 ## `crates/hsip-api/src/anchor_job.rs`
 
-Batches unanchored decisions into an RFC 6962 Merkle tree on a "whichever
-comes first" cadence (`BATCH_SIZE_TRIGGER` decisions, or `INTERVAL_TRIGGER_MS`
-elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
-`anchor.rs` is the network client it calls into.
+Batches unanchored decisions, and separately unanchored audit-log entries,
+into RFC 6962 Merkle trees on a "whichever comes first" cadence
+(`BATCH_SIZE_TRIGGER` rows, or `INTERVAL_TRIGGER_MS` elapsed) and submits
+each root to OpenTimestamps. DB-touching orchestration; `anchor.rs` is the
+network client it calls into. Decisions and audit-log entries are anchored
+by twin functions (`run_anchor_cycle*` / `run_audit_anchor_cycle*`) sharing
+the same node-level anchor identity, since anchoring was never
+decision-specific.
 
 ### `load_or_create_anchor_identity`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Loads the node-level anchor signing key from `anchor_identity` (singleton row), creating it on first use. Distinct from any tenant's identity since an anchor batch spans every tenant's decisions. Handles the race of two anchor cycles both trying to create the row (loser re-reads the winner's row).
+- **purpose**: Loads the node-level anchor signing key from `anchor_identity` (singleton row), creating it on first use. Distinct from any tenant's identity since an anchor batch spans every tenant's rows — shared by both decision and audit-log anchoring. Handles the race of two anchor cycles both trying to create the row (loser re-reads the winner's row).
 - **inputs**: `db: &Db`, `master_key: &[u8]`
 - **outputs**: `anyhow::Result<SigningKey>`
 - **calls**: `key_encryption::{encrypt_signing_key, decrypt_signing_key}`
-- **called_by**: `run_anchor_cycle_with_calendars`
+- **called_by**: `run_anchor_cycle_with_calendars`, `run_audit_anchor_cycle_with_calendars`
 - **mutates**: DB (`anchor_identity`, at most once ever)
 
 ### `AnchorSummary`
 - **type**: struct
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Result of one anchor cycle (`anchor_id`, `leaf_count`, `ots_status`), logged by the caller in `main.rs`'s spawned loop.
-- **called_by**: `run_anchor_cycle_with_calendars`, `main.rs`
+- **purpose**: Result of one anchor cycle (`anchor_id`, `leaf_count`, `ots_status`), logged by the caller in `main.rs`'s spawned loop. Shared return type for both the decision and audit-log anchor cycles.
+- **called_by**: `run_anchor_cycle_with_calendars`, `run_audit_anchor_cycle_with_calendars`, `main.rs`
 
 ### `run_anchor_cycle` / `run_anchor_cycle_with_calendars`
 - **type**: function (async)
@@ -2392,9 +2446,19 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **purpose**: `run_anchor_cycle` is the production entry point (default public calendars). `run_anchor_cycle_with_calendars` does the real work: retries stuck OTS submissions, checks whether a batch is due, builds a `MerkleTree` over unanchored decisions' `event_hash`es, signs the root with the anchor identity, submits to OpenTimestamps (proceeding with local-only anchoring if that fails — `ots_status = 'calendar_unreachable'`), inserts `decision_anchors`, stamps `anchor_id`/`merkle_index` onto each covered decision, writes one `decision.anchored` audit entry per distinct tenant touched.
 - **inputs**: `db: &Db`, `master_key: &[u8]`, (`calendars: &[&str]` for the `_with_calendars` form)
 - **outputs**: `anyhow::Result<Option<AnchorSummary>>` (`None` when nothing was due)
-- **calls**: `hsip_core::merkle::MerkleTree`, `anchor::submit_digest_to`, `load_or_create_anchor_identity`, `audit_log::record`, `metrics::ANCHOR_CALENDAR_UNREACHABLE`
+- **calls**: `hsip_core::merkle::MerkleTree`, `anchor::submit_digest_to`, `load_or_create_anchor_identity`, `audit_log::record`, `metrics::ANCHOR_CALENDAR_UNREACHABLE`, `metrics::DECISIONS_ANCHORED`
 - **called_by**: `main.rs`'s spawned anchor loop (which now snapshots `state.master_key` via a short-lived read lock each tick rather than holding it for the cycle's network I/O); integration tests call `run_anchor_cycle_with_calendars` directly against a mock calendar
 - **mutates**: DB (`decision_anchors`, `decisions.anchor_id`/`merkle_index`, `audit_entries`)
+
+### `run_audit_anchor_cycle` / `run_audit_anchor_cycle_with_calendars`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Twin of `run_anchor_cycle`/`run_anchor_cycle_with_calendars` for the audit log: batches `audit_entries` where `anchor_id IS NULL AND entry_hash IS NOT NULL` (rows predating the hash chain are excluded — nothing to commit to a leaf) by `entry_hash` instead of `event_hash`, into `audit_anchors` instead of `decision_anchors`. Signs with the same `anchor_identity` key. Writes one `audit.anchored` audit entry per distinct tenant touched — becomes part of a future batch itself, not this one (the `UPDATE` stamping `anchor_id` already ran before that entry is written, so no same-cycle recursion). Closes THREAT_MODEL.md §4.8's "chain not anchored outside this database" gap.
+- **inputs**: `db: &Db`, `master_key: &[u8]`, (`calendars: &[&str]` for the `_with_calendars` form)
+- **outputs**: `anyhow::Result<Option<AnchorSummary>>` (`None` when nothing was due)
+- **calls**: `hsip_core::merkle::MerkleTree`, `anchor::submit_digest_to`, `load_or_create_anchor_identity`, `audit_log::record`, `metrics::ANCHOR_CALENDAR_UNREACHABLE`, `metrics::AUDIT_ANCHORED`, `retry_pending_audit_ots_submissions`
+- **called_by**: `main.rs`'s spawned anchor loop (same tick as `run_anchor_cycle`); integration tests call `run_audit_anchor_cycle_with_calendars` directly against a mock calendar
+- **mutates**: DB (`audit_anchors`, `audit_entries.anchor_id`/`merkle_index`, further `audit_entries` rows via `audit_log::record`)
 
 ### `retry_pending_ots_submissions`
 - **type**: function (async)
@@ -2406,13 +2470,23 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **called_by**: `run_anchor_cycle_with_calendars`
 - **mutates**: DB (`decision_anchors.ots_proof`/`ots_status` on success)
 
+### `retry_pending_audit_ots_submissions`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Twin of `retry_pending_ots_submissions` against `audit_anchors` instead of `decision_anchors`.
+- **inputs**: `db: &Db`, `calendars: &[&str]`
+- **outputs**: none
+- **calls**: `anchor::submit_digest_to`, `metrics::ANCHOR_CALENDAR_UNREACHABLE`
+- **called_by**: `run_audit_anchor_cycle_with_calendars`
+- **mutates**: DB (`audit_anchors.ots_proof`/`ots_status` on success)
+
 ### `verify_anchor_signature`
 - **type**: function
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Verifies an Ed25519 signature over a Merkle root against a given verify key. Pure — no DB.
+- **purpose**: Verifies an Ed25519 signature over a Merkle root against a given verify key. Pure — no DB. Generic over what was anchored, so both decisions and audit-log verification reuse it.
 - **inputs**: `root: &[u8; 32]`, `signature: &[u8; 64]`, `verify_key: &[u8; 32]`
 - **outputs**: `bool`
-- **called_by**: `routes::decisions::verify`
+- **called_by**: `routes::decisions::verify`, `routes::audit::verify_proof`
 
 ---
 

@@ -1816,3 +1816,183 @@ async fn test_role_and_root_admin_backfill_on_upgrade() {
     assert_eq!(role.as_deref(), Some("owner"));
     assert_eq!(is_root_admin, 1);
 }
+
+// ── Audit log external anchoring ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_audit_log_anchor_proof_and_verify_end_to_end() {
+    let (app, key, db, master_key) = test_app_with_db().await;
+
+    // Identity creation writes an audit entry — gives us something to anchor.
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let list_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/audit")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let entries = body_json(list_res.into_body()).await;
+    let entries = entries.as_array().unwrap();
+    assert!(
+        !entries.is_empty(),
+        "identity creation should have written at least one audit entry"
+    );
+    let entry_id = entries[0]["id"].as_str().unwrap().to_string();
+
+    // Before anchoring: the chain fields are provable, anchoring is not yet done.
+    let proof_res = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/audit/{entry_id}/proof"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(proof_res.status(), StatusCode::OK);
+    let proof_json = body_json(proof_res.into_body()).await;
+    assert_eq!(proof_json["anchored"], false);
+    assert!(proof_json["entry_hash"].is_string());
+
+    let verify_body_pre = serde_json::json!({
+        "id": proof_json["id"],
+        "tenant_id": proof_json["tenant_id"],
+        "action": proof_json["action"],
+        "peer_verify_key": proof_json["peer_verify_key"],
+        "details": proof_json["details"],
+        "timestamp": proof_json["timestamp"],
+        "prev_hash": proof_json["prev_hash"],
+        "entry_hash": proof_json["entry_hash"],
+    });
+    let verify_res_pre = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/audit/verify-proof")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(verify_body_pre.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let verify_json_pre = body_json(verify_res_pre.into_body()).await;
+    assert_eq!(verify_json_pre["entry_hash_matches"], true);
+    assert_eq!(verify_json_pre["valid"], true);
+    assert_eq!(
+        verify_json_pre["merkle_inclusion_valid"],
+        serde_json::Value::Null
+    );
+
+    // Drive one audit anchor cycle synchronously against a local mock
+    // calendar (production runs this on a timer against the real public
+    // OpenTimestamps calendars).
+    let mock_calendar = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/digest"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_bytes(b"test-ots-receipt-audit".to_vec()),
+        )
+        .mount(&mock_calendar)
+        .await;
+    let summary = hsip_api::anchor_job::run_audit_anchor_cycle_with_calendars(
+        &db,
+        &master_key,
+        &[&mock_calendar.uri()],
+    )
+    .await
+    .expect("audit anchor cycle should not error");
+    assert!(
+        summary.is_some(),
+        "unanchored audit entries should anchor immediately in tests"
+    );
+
+    let proof_res2 = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/audit/{entry_id}/proof"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let proof_json2 = body_json(proof_res2.into_body()).await;
+    assert_eq!(proof_json2["anchored"], true);
+    assert!(proof_json2["merkle_root"].is_string());
+    assert!(proof_json2["inclusion_proof"].is_array());
+
+    // The whole point: verify with zero further calls to this app's database.
+    let verify_body_post = serde_json::json!({
+        "id": proof_json2["id"],
+        "tenant_id": proof_json2["tenant_id"],
+        "action": proof_json2["action"],
+        "peer_verify_key": proof_json2["peer_verify_key"],
+        "details": proof_json2["details"],
+        "timestamp": proof_json2["timestamp"],
+        "prev_hash": proof_json2["prev_hash"],
+        "entry_hash": proof_json2["entry_hash"],
+        "merkle_root": proof_json2["merkle_root"],
+        "inclusion_proof": proof_json2["inclusion_proof"],
+        "anchor_signature": proof_json2["anchor_signature"],
+        "anchor_verify_key": proof_json2["anchor_verify_key"],
+    });
+    let verify_res_post = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/audit/verify-proof")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(verify_body_post.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let verify_json_post = body_json(verify_res_post.into_body()).await;
+    assert_eq!(verify_json_post["valid"], true);
+    assert_eq!(verify_json_post["merkle_inclusion_valid"], true);
+    assert_eq!(verify_json_post["reason"], serde_json::Value::Null);
+
+    // Tamper check: altering a disclosed field must break verification even
+    // though the merkle proof / anchor signature strings are unchanged.
+    let mut tampered = verify_body_post.clone();
+    tampered["action"] = serde_json::json!("tampered.action");
+    let tamper_res = app
+        .oneshot(
+            Request::post("/v1/audit/verify-proof")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(tampered.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let tamper_json = body_json(tamper_res.into_body()).await;
+    assert_eq!(tamper_json["valid"], false);
+    assert_eq!(tamper_json["entry_hash_matches"], false);
+}
+
+#[tokio::test]
+async fn test_audit_proof_not_found_for_unknown_id() {
+    let (app, key) = test_app().await;
+    let res = app
+        .oneshot(
+            Request::get("/v1/audit/does-not-exist/proof")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

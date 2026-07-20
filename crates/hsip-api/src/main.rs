@@ -186,11 +186,12 @@ async fn run() -> Result<()> {
 
     let state = AppState::new_with_master_key_path(db, master_key, master_key_path);
 
-    // Periodic decision-anchoring cycle: batches unanchored decisions into
-    // an RFC 6962 Merkle tree and submits the root to OpenTimestamps on a
-    // "whichever comes first" cadence (see anchor_job::BATCH_SIZE_TRIGGER /
-    // INTERVAL_TRIGGER_MS). The 10s poll interval just checks whether a
-    // cycle is due — most ticks are a no-op.
+    // Periodic anchoring cycle: batches unanchored decisions, and
+    // separately unanchored audit-log entries, into RFC 6962 Merkle trees
+    // and submits each root to OpenTimestamps on a "whichever comes first"
+    // cadence (see anchor_job::BATCH_SIZE_TRIGGER / INTERVAL_TRIGGER_MS).
+    // The 10s poll interval just checks whether a cycle is due — most ticks
+    // are a no-op for both.
     {
         let anchor_db = state.db.clone();
         let anchor_master_key_lock = state.master_key.clone();
@@ -214,6 +215,18 @@ async fn run() -> Result<()> {
                     }
                     Ok(None) => {}
                     Err(e) => tracing::warn!(error = %e, "decision anchor cycle failed"),
+                }
+                match anchor_job::run_audit_anchor_cycle(&anchor_db, &anchor_master_key).await {
+                    Ok(Some(summary)) => {
+                        tracing::info!(
+                            anchor_id = %summary.anchor_id,
+                            leaf_count = summary.leaf_count,
+                            ots_status = %summary.ots_status,
+                            "anchored audit-log batch"
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(error = %e, "audit-log anchor cycle failed"),
                 }
             }
         });
