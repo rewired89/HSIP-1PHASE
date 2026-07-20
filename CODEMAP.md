@@ -5940,7 +5940,7 @@ Node-level administration: master key fingerprint/rotation and root-admin list/g
 - **called_by**: SDK users
 - **mutates**: nothing
 
-> **Node/Go SDK parity gap**: `hash_payload`, `record_decision`, `save_receipt`, `list_decisions`, `get_decision_proof`, and `verify_decision` exist only in the Python SDK so far — added to unblock the Predicta proof-of-concept, whose integration language wasn't confirmed at the time. Port to `sdks/node/` and `sdks/go/` once Predicta's actual stack (or another Node/Go caller) needs them, following the existing "same pattern as Python SDK" convention.
+Ported to the Node and Go SDKs — see their sections below (`HSIPClient.hashPayload` etc. / `hsip.HashPayload` etc.). Field names and behavior match these Python methods exactly; only the local binding style differs (Python kwargs, a Node options object, a Go opts/request struct).
 
 ---
 
@@ -5968,6 +5968,43 @@ Node-level administration: master key fingerprint/rotation and root-admin list/g
 - **called_by**: all public methods
 - **mutates**: nothing
 
+### `HSIPClient.hashPayload` (Node)
+- **type**: function (static)
+- **file**: `sdks/node/src/index.js`
+- **purpose**: Hex-encoded SHA-256 of a decision payload, ready for `payloadHash`. Mirrors Python's `hash_payload`.
+- **inputs**: `payload: Buffer | string`
+- **outputs**: `string`
+- **calls**: Node's `crypto.createHash('sha256')`
+- **called_by**: SDK users, `recordDecision` callers
+
+### `HSIPClient.recordDecision` (Node)
+- **type**: function (async)
+- **file**: `sdks/node/src/index.js`
+- **purpose**: `POST /v1/decisions` — signs and chains one AI-agent decision attestation. If `receiptDir` is given, immediately persists the receipt via `saveReceipt`.
+- **inputs**: `{accountableKey, modelVersion, strategyId, decisionType, payloadHash, receiptDir?}`
+- **outputs**: `Promise<RecordDecisionResponse>`
+- **calls**: `_request`, `HSIPClient.saveReceipt`
+- **called_by**: SDK users
+- **mutates**: DB via API; filesystem if `receiptDir` given
+
+### `HSIPClient.saveReceipt` (Node)
+- **type**: function (static)
+- **file**: `sdks/node/src/index.js`
+- **purpose**: Writes a decision receipt to `<receiptDir>/<decision_id>.json`. Callable independently of `recordDecision`.
+- **inputs**: `receipt: object`, `receiptDir: string`
+- **outputs**: `string` (path written)
+- **calls**: `fs.mkdirSync`, `fs.writeFileSync`
+- **called_by**: `recordDecision`, SDK users
+- **mutates**: filesystem
+
+### `HSIPClient.listDecisions` / `getDecisionProof` / `verifyDecision` (Node)
+- **type**: functions (async)
+- **file**: `sdks/node/src/index.js`
+- **purpose**: `GET /v1/decisions`, `GET /v1/decisions/:id/proof`, and `POST /v1/decisions/verify` respectively — same semantics as the Python SDK's `list_decisions`/`get_decision_proof`/`verify_decision` (see those entries above; `verifyDecision` calls an endpoint that itself takes no API key and touches no database).
+- **calls**: `_request`
+- **called_by**: SDK users
+- **mutates**: nothing
+
 ---
 
 ## `sdks/go/hsip/client.go`
@@ -5980,6 +6017,43 @@ Node-level administration: master key fingerprint/rotation and root-admin list/g
 - **outputs**: none
 - **calls**: none
 - **called_by**: Go user code
+- **mutates**: nothing
+
+### `HashPayload` (Go)
+- **type**: function (package-level, not a `Client` method)
+- **file**: `sdks/go/hsip/client.go`
+- **purpose**: Hex-encoded SHA-256 of a decision payload, ready for `RecordDecisionOpts.PayloadHash`. Package-level rather than a method since it needs no server connection — matches Python's `@staticmethod` / Node's `static`.
+- **inputs**: `payload []byte`
+- **outputs**: `string`
+- **calls**: `crypto/sha256`, `encoding/hex`
+- **called_by**: Go SDK users, `RecordDecision` callers
+
+### `SaveReceipt` (Go)
+- **type**: function (package-level)
+- **file**: `sdks/go/hsip/client.go`
+- **purpose**: Writes a decision receipt to `<receiptDir>/<decision_id>.json`. Callable independently of `RecordDecision`.
+- **inputs**: `receipt *RecordDecisionResponse`, `receiptDir string`
+- **outputs**: `(string, error)` (path written)
+- **calls**: `os.MkdirAll`, `os.WriteFile`
+- **called_by**: `Client.RecordDecision`, Go SDK users
+- **mutates**: filesystem
+
+### `Client.RecordDecision` (Go)
+- **type**: function
+- **file**: `sdks/go/hsip/client.go`
+- **purpose**: `POST /v1/decisions` — signs and chains one AI-agent decision attestation. If `opts.ReceiptDir` is non-empty, immediately persists the receipt via `SaveReceipt`.
+- **inputs**: `opts RecordDecisionOpts`
+- **outputs**: `(*RecordDecisionResponse, error)`
+- **calls**: `Client.do`, `SaveReceipt`
+- **called_by**: Go SDK users
+- **mutates**: DB via API; filesystem if `opts.ReceiptDir` given
+
+### `Client.ListDecisions` / `GetDecisionProof` / `VerifyDecision` (Go)
+- **type**: functions
+- **file**: `sdks/go/hsip/client.go`
+- **purpose**: `GET /v1/decisions`, `GET /v1/decisions/:id/proof`, and `POST /v1/decisions/verify` respectively — same semantics as the Python SDK's `list_decisions`/`get_decision_proof`/`verify_decision` (`VerifyDecision` calls an endpoint that itself takes no API key and touches no database).
+- **calls**: `Client.do`
+- **called_by**: Go SDK users
 - **mutates**: nothing
 
 ### `APIError` (Go)

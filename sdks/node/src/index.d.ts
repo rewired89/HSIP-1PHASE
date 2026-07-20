@@ -18,6 +18,42 @@ export interface DiscoveredAgent {
   reachable: boolean; already_registered: boolean; suggested_name: string;
 }
 
+export interface DecisionEnvelope {
+  decision_id: string; tenant_id: string; agent_key_id: string;
+  accountable_key: string; model_version: string; strategy_id: string;
+  decision_type: string; payload_hash: string; prev_hash: string;
+  timestamp_iso: string; timestamp_int: string; hsip_gov_ext: string;
+}
+export interface RecordDecisionResponse {
+  decision_id: string; envelope: DecisionEnvelope; event_hash: string;
+  signature: string; sign_algo: string; issuer_verify_key: string;
+}
+export interface DecisionSummary {
+  id: string; decision_type: string; model_version: string; strategy_id: string;
+  event_hash: string; prev_hash: string; timestamp_iso: string;
+  anchored: boolean; anchor_id: string | null; merkle_index: number | null;
+}
+export interface ProofStep { hash: string; position: 'left' | 'right'; }
+export interface DecisionProofBundle {
+  envelope: DecisionEnvelope; event_hash: string; signature: string;
+  sign_algo: string; issuer_verify_key: string; anchored: boolean;
+  merkle_root: string | null; merkle_index: number | null;
+  inclusion_proof: ProofStep[] | null;
+  anchor_signature: string | null; anchor_verify_key: string | null;
+  ots_status: string | null; ots_proof: string | null;
+}
+export interface VerifyDecisionBundle {
+  envelope: DecisionEnvelope; event_hash: string; signature: string;
+  issuer_verify_key: string;
+  merkle_root?: string; inclusion_proof?: ProofStep[];
+  anchor_signature?: string; anchor_verify_key?: string;
+}
+export interface VerifyDecisionResponse {
+  valid: boolean; event_hash_matches: boolean; signature_valid: boolean;
+  merkle_inclusion_valid: boolean | null; anchor_signature_valid: boolean | null;
+  reason: string | null;
+}
+
 export class HSIPError extends Error { statusCode?: number; }
 
 export class HSIPClient {
@@ -52,4 +88,19 @@ export class HSIPClient {
   revokeAgent(keyId: string): Promise<any>;
   logAction(action: string, detail?: string | null): Promise<SignResponse>;
   discoverAgents(): Promise<DiscoveredAgent[]>;
+
+  // Decision attestations
+  static hashPayload(payload: Buffer | string): string;
+  recordDecision(opts: {
+    accountableKey: string;
+    modelVersion: string;
+    strategyId: string;
+    decisionType: string;
+    payloadHash: string;
+    receiptDir?: string;
+  }): Promise<RecordDecisionResponse>;
+  static saveReceipt(receipt: RecordDecisionResponse, receiptDir: string): string;
+  listDecisions(): Promise<DecisionSummary[]>;
+  getDecisionProof(decisionId: string): Promise<DecisionProofBundle>;
+  verifyDecision(bundle: VerifyDecisionBundle): Promise<VerifyDecisionResponse>;
 }

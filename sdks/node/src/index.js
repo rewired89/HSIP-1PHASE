@@ -1,8 +1,11 @@
 'use strict';
 
-const https = require('https');
-const http  = require('http');
-const url   = require('url');
+const https  = require('https');
+const http   = require('http');
+const url    = require('url');
+const crypto = require('crypto');
+const fs     = require('fs');
+const path   = require('path');
 
 class HSIPError extends Error {
   constructor(message, statusCode) {
@@ -138,6 +141,95 @@ class HSIPClient {
 
   /** Probe localhost for running AI agents / MCP servers. */
   discoverAgents() { return this._request('GET', '/v1/agents/discover'); }
+
+  // ── Decision attestations ─────────────────────────────────────────────
+  //
+  // HSIP never receives or stores the actual content of a decision (trade
+  // parameters, etc.) — only its SHA-256 hash. Disclosure of the real
+  // payload, if ever needed, happens entirely on your side.
+
+  /**
+   * Hex-encoded SHA-256 of a decision payload, ready for `payloadHash`.
+   * @param {Buffer|string} payload
+   * @returns {string}
+   */
+  static hashPayload(payload) {
+    return crypto.createHash('sha256').update(payload).digest('hex');
+  }
+
+  /**
+   * Sign and chain one AI-agent decision attestation.
+   *
+   * `payloadHash` must be the hex-encoded SHA-256 of your actual (never
+   * disclosed to HSIP) decision content — see `HSIPClient.hashPayload`.
+   *
+   * Returns a self-contained receipt: { decision_id, envelope, event_hash,
+   * signature, sign_algo, issuer_verify_key }. If `receiptDir` is given,
+   * the receipt is also written to disk immediately — this is the
+   * client-side mitigation for the gap between signing and anchoring: if
+   * this HSIP instance's own database were ever tampered with or a
+   * decision deleted before the next anchor cycle, your own copy is
+   * independent proof the decision was signed.
+   *
+   * @param {Object} opts
+   * @param {string} opts.accountableKey
+   * @param {string} opts.modelVersion
+   * @param {string} opts.strategyId
+   * @param {string} opts.decisionType
+   * @param {string} opts.payloadHash
+   * @param {string} [opts.receiptDir]
+   */
+  async recordDecision({ accountableKey, modelVersion, strategyId, decisionType, payloadHash, receiptDir }) {
+    const receipt = await this._request('POST', '/v1/decisions', {
+      accountable_key: accountableKey,
+      model_version:   modelVersion,
+      strategy_id:     strategyId,
+      decision_type:   decisionType,
+      payload_hash:    payloadHash,
+    });
+    if (receiptDir) HSIPClient.saveReceipt(receipt, receiptDir);
+    return receipt;
+  }
+
+  /**
+   * Persist a decision receipt to `<receiptDir>/<decision_id>.json`.
+   * Returns the path written. Safe to call independently of
+   * `recordDecision` (e.g. to re-save a receipt fetched later).
+   * @param {Object} receipt
+   * @param {string} receiptDir
+   * @returns {string}
+   */
+  static saveReceipt(receipt, receiptDir) {
+    fs.mkdirSync(receiptDir, { recursive: true });
+    const filePath = path.join(receiptDir, `${receipt.decision_id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(receipt, null, 2));
+    return filePath;
+  }
+
+  /** List this tenant's decision attestations, newest first. */
+  listDecisions() { return this._request('GET', '/v1/decisions'); }
+
+  /**
+   * Full self-contained verification bundle for one decision. Before the
+   * next anchor cycle runs, `anchored` is false and only authorship
+   * (signature) is provable yet — call again later once a batch anchors.
+   * @param {string} decisionId
+   */
+  getDecisionProof(decisionId) {
+    return this._request('GET', `/v1/decisions/${decisionId}/proof`);
+  }
+
+  /**
+   * Verify a decision proof bundle. This calls HSIP's
+   * `/v1/decisions/verify` endpoint, but that endpoint takes no API key
+   * and touches no database — it's a pure function of `bundle`, so any
+   * party can run the equivalent check themselves without this SDK or an
+   * HSIP account at all.
+   * @param {Object} bundle
+   */
+  verifyDecision(bundle) {
+    return this._request('POST', '/v1/decisions/verify', bundle);
+  }
 }
 
 module.exports = { HSIPClient, HSIPError };
