@@ -39,12 +39,12 @@
 ### `run`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns three background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded. When `[server.tls]` is configured, delegates cert/key (and optional mutual-TLS client-CA) loading to `mtls::build_rustls_config` instead of calling `RustlsConfig::from_pem_file` directly — logs "Mutual TLS enabled" when `tls_config.client_ca_path` is set.
+- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns four background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), the OpenTimestamps upgrade-poll cycle (15-minute interval — deliberately much slower than the 10s anchor loop, since Bitcoin blocks land roughly every 10 minutes on average — calls `anchor_job::run_upgrade_cycle` to flip confirmed `ots_status = 'pending'` batches to `'confirmed'`; see THREAT_MODEL.md §4.21), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded. When `[server.tls]` is configured, delegates cert/key (and optional mutual-TLS client-CA) loading to `mtls::build_rustls_config` instead of calling `RustlsConfig::from_pem_file` directly — logs "Mutual TLS enabled" when `tls_config.client_ca_path` is set.
 - **inputs**: none
 - **outputs**: `Result<()>`
-- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`, `mtls::build_rustls_config`
+- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `anchor_job::run_upgrade_cycle`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`, `mtls::build_rustls_config`
 - **called_by**: `main`
-- **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows, `rate_limit_state` snapshots), `state.replay_nonces` DashMap (sweep removes expired entries), `state.rate_limiter`/`agent_tracker`/`sandbox_rate` (populated from persisted state at startup)
+- **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows, `rate_limit_state` snapshots, `decision_anchors`/`audit_anchors` `ots_status` via the upgrade cycle), `state.replay_nonces` DashMap (sweep removes expired entries), `state.rate_limiter`/`agent_tracker`/`sandbox_rate` (populated from persisted state at startup)
 
 ### `init_logging`
 - **type**: function
@@ -1081,6 +1081,16 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **outputs**: none
 - **calls**: none
 - **called_by**: `routes::admin::grant_root_admin`, `routes::admin::revoke_root_admin`
+- **mutates**: counter value
+
+### `ANCHOR_UPGRADED_TO_CONFIRMED`
+- **type**: variable (static `Counter`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Count of anchor batches (decisions or audit-log) upgraded from `ots_status = 'pending'` to `'confirmed'` — a calendar reported Bitcoin confirmation. Near-zero is fine (confirmation legitimately takes time); a batch stuck `pending` for a very long time without ever incrementing this is worth an operator noticing.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `anchor_job::upgrade_one_anchor`
 - **mutates**: counter value
 
 ### `init` (metrics)
@@ -2585,10 +2595,12 @@ its `payload_hash`.
 ## `crates/hsip-api/src/anchor.rs`
 
 OpenTimestamps calendar HTTP client — network I/O only, no DB. See module
-docs for MVP scope (opaque blob storage, no `.ots` parsing, no upgrade
-polling yet) and the sandbox connectivity caveat (egress policy blocks
-`*.calendar.opentimestamps.org`, confirmed via the sandbox's own proxy
-rejection log).
+docs for MVP scope (opaque blob storage, no full `.ots` Merkle-path parsing)
+and THREAT_MODEL.md §4.20/§4.21 for real-network submission and
+upgrade-polling verification. Upgrade polling (checking whether a pending
+submission has since been Bitcoin-confirmed) is implemented as of §4.21 —
+see `check_for_upgrade`/`contains_bitcoin_attestation`/
+`extract_pending_calendar_uri` below.
 
 ### `DEFAULT_CALENDARS`
 - **type**: variable (const `&[&str]`)
@@ -2610,6 +2622,47 @@ rejection log).
 - **outputs**: `Result<CalendarReceipt>`
 - **calls**: `reqwest::Client`
 - **called_by**: `anchor_job::run_anchor_cycle_with_calendars`, `anchor_job::retry_pending_ots_submissions`
+- **mutates**: nothing (network I/O only)
+
+### `PENDING_ATTESTATION_TAG` / `BITCOIN_ATTESTATION_TAG`
+- **type**: variable (const `[u8; 8]`)
+- **file**: `crates/hsip-api/src/anchor.rs`
+- **purpose**: OpenTimestamps' protocol-defined byte tags marking a `PendingAttestation` (calendar has it queued, not yet in Bitcoin) vs. `BitcoinBlockHeaderAttestation` (confirmed by a mined block) inside a serialized proof. Matches the reference Python implementation (`opentimestamps/core/notary.py`); the pending tag confirmed empirically against a real captured calendar response (THREAT_MODEL.md §4.20/§4.21).
+- **called_by**: `contains_bitcoin_attestation`, `extract_pending_calendar_uri`
+
+### `contains_bitcoin_attestation`
+- **type**: function
+- **file**: `crates/hsip-api/src/anchor.rs`
+- **purpose**: Whether a calendar's response contains a `BitcoinBlockHeaderAttestation` tag — i.e. this submission is Bitcoin-confirmed. A tag-presence check, not a full Merkle-path verification (documented MVP scope, same trust level as the initial "pending" submission already had).
+- **inputs**: `proof_bytes: &[u8]`
+- **outputs**: `bool`
+- **called_by**: `anchor_job::upgrade_one_anchor`
+
+### `read_varuint`
+- **type**: function (private)
+- **file**: `crates/hsip-api/src/anchor.rs`
+- **purpose**: Reads an OpenTimestamps-style base-128 varint (7 payload bits/byte, high bit = continuation — same scheme as protobuf/LEB128).
+- **inputs**: `bytes: &[u8]`, `pos: &mut usize`
+- **outputs**: `Option<u64>`
+- **called_by**: `extract_pending_calendar_uri`
+
+### `extract_pending_calendar_uri`
+- **type**: function
+- **file**: `crates/hsip-api/src/anchor.rs`
+- **purpose**: Reads the originating calendar's URL back out of a stored `PendingAttestation` proof — `decision_anchors`/`audit_anchors` don't have a separate calendar-URL column, since the URI is already embedded in what's stored at submission time. Layout (tag, outer length varint, inner length varint, UTF-8 URI) confirmed against a real captured calendar response.
+- **inputs**: `proof_bytes: &[u8]`
+- **outputs**: `Option<String>`
+- **calls**: `read_varuint`
+- **called_by**: `anchor_job::upgrade_one_anchor`
+
+### `check_for_upgrade`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/anchor.rs`
+- **purpose**: `GET <calendar>/timestamp/<hex-digest>` — asks a calendar whether a previously-submitted digest has since been Bitcoin-confirmed, per the real OpenTimestamps calendar HTTP protocol. `Ok(None)` for "nothing new yet" (any non-success response, including simply not upgraded yet) is the expected common case, not an error; `Err` only on genuine unreachability.
+- **inputs**: `calendar_url: &str`, `digest: &[u8; 32]`
+- **outputs**: `Result<Option<Vec<u8>>>`
+- **calls**: `reqwest::Client`
+- **called_by**: `anchor_job::upgrade_one_anchor`
 - **mutates**: nothing (network I/O only)
 
 ---
@@ -2688,6 +2741,34 @@ decision-specific.
 - **inputs**: `root: &[u8; 32]`, `signature: &[u8; 64]`, `verify_key: &[u8; 32]`
 - **outputs**: `bool`
 - **called_by**: `routes::decisions::verify`, `routes::audit::verify_proof`
+
+### `run_upgrade_cycle`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Public entry point for OpenTimestamps "upgrade" polling (THREAT_MODEL.md §4.21) — checks every `decision_anchors`/`audit_anchors` row still at `ots_status = 'pending'` and flips confirmed ones to `'confirmed'`. Meant to run on its own, much slower timer than the anchor-submission loop — Bitcoin blocks land roughly every 10 minutes on average.
+- **inputs**: `db: &Db`
+- **outputs**: none
+- **calls**: `upgrade_pending_decision_anchors`, `upgrade_pending_audit_anchors`
+- **called_by**: `main.rs`'s spawned 15-minute upgrade-poll loop; integration tests call this directly against a mock calendar
+
+### `upgrade_pending_decision_anchors` / `upgrade_pending_audit_anchors`
+- **type**: function (async, private)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Queries `decision_anchors`/`audit_anchors` for rows at `ots_status = 'pending'` and delegates each to `upgrade_one_anchor`. Twins, same shape as `retry_pending_ots_submissions`/`retry_pending_audit_ots_submissions`.
+- **inputs**: `db: &Db`
+- **outputs**: none
+- **calls**: `upgrade_one_anchor`
+- **called_by**: `run_upgrade_cycle`
+
+### `upgrade_one_anchor`
+- **type**: function (async, private)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Shared upgrade-check logic for one anchor row (decision or audit). Reads the originating calendar's URL back out of the row's stored `ots_proof` (`anchor::extract_pending_calendar_uri` — no dedicated calendar-URL column), calls `anchor::check_for_upgrade` against it, and on a detected `BitcoinBlockHeaderAttestation` (`anchor::contains_bitcoin_attestation`) updates that row's `ots_proof`/`ots_status = 'confirmed'`. `table` is always a hardcoded literal from this module (never external input) — same no-injection-risk reasoning already applied to `bin/hsip_migrate.rs`'s table-driven copy.
+- **inputs**: `db: &Db`, `table: &'static str`, `row: &AnyRow`
+- **outputs**: none
+- **calls**: `anchor::extract_pending_calendar_uri`, `anchor::check_for_upgrade`, `anchor::contains_bitcoin_attestation`, `metrics::ANCHOR_UPGRADED_TO_CONFIRMED`
+- **called_by**: `upgrade_pending_decision_anchors`, `upgrade_pending_audit_anchors`
+- **mutates**: DB (`decision_anchors`/`audit_anchors` `ots_proof`/`ots_status` on a confirmed upgrade)
 
 ---
 

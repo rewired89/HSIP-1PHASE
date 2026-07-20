@@ -719,6 +719,137 @@ async fn test_decision_attestation_sign_anchor_verify_end_to_end() {
     assert_eq!(tamper_json["event_hash_matches"], false);
 }
 
+/// A `decision_anchors` batch that's `ots_status = 'pending'` must upgrade
+/// to `'confirmed'` once its calendar reports a Bitcoin-block-header
+/// attestation — the THREAT_MODEL.md §4.20 follow-up:
+/// `anchor_job::run_upgrade_cycle` polling `anchor::check_for_upgrade`
+/// against whichever calendar the original submission's stored `ots_proof`
+/// points at (via `anchor::extract_pending_calendar_uri`), not a
+/// caller-supplied list.
+#[tokio::test]
+async fn test_decision_anchor_upgrades_to_bitcoin_confirmed() {
+    use sha2::{Digest, Sha256};
+    use sqlx::Row;
+
+    let (app, key, db, master_key) = test_app_with_db().await;
+
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_json = body_json(ident_res.into_body()).await;
+    let accountable_key = ident_json["verify_key"].as_str().unwrap().to_string();
+
+    let payload_hash = hex::encode(Sha256::digest(b"upgrade-test-payload"));
+    let record_body = serde_json::json!({
+        "accountable_key": accountable_key,
+        "model_version": "v1",
+        "strategy_id": "upgrade-test",
+        "decision_type": "test",
+        "payload_hash": payload_hash,
+    });
+    let record_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(record_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let record_json = body_json(record_res.into_body()).await;
+    let decision_id = record_json["decision_id"].as_str().unwrap().to_string();
+
+    // The mock calendar's `/digest` response is shaped like a real one: a
+    // `PendingAttestation` (tag + length-prefixed URI) pointing at the
+    // calendar's *own* URL — same layout as the real
+    // `alice.btc.calendar.opentimestamps.org` fixture in `anchor.rs`'s unit
+    // tests. This is what lets `extract_pending_calendar_uri` find the
+    // right calendar later, exactly like it would in production.
+    let mock_calendar = wiremock::MockServer::start().await;
+    let calendar_uri = mock_calendar.uri();
+    let uri_bytes = calendar_uri.as_bytes();
+    let mut pending_proof = vec![0xAA, 0xBB, 0xCC]; // stand-in for the Merkle-op prefix bytes a real proof carries
+    pending_proof.extend_from_slice(&[0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e]); // PendingAttestation tag
+    pending_proof.push((uri_bytes.len() + 1) as u8); // outer body length
+    pending_proof.push(uri_bytes.len() as u8); // inner URI length
+    pending_proof.extend_from_slice(uri_bytes);
+
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/digest"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(pending_proof))
+        .mount(&mock_calendar)
+        .await;
+
+    let summary =
+        hsip_api::anchor_job::run_anchor_cycle_with_calendars(&db, &master_key, &[&calendar_uri])
+            .await
+            .expect("anchor cycle should not error");
+    assert!(summary.is_some());
+
+    let anchor_row = sqlx::query("SELECT merkle_root, ots_status FROM decision_anchors LIMIT 1")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let merkle_root_hex: String = anchor_row.try_get(0).unwrap();
+    let ots_status_before: String = anchor_row.try_get(1).unwrap();
+    assert_eq!(ots_status_before, "pending");
+
+    // The calendar has since reported this digest confirmed in a mined
+    // Bitcoin block — mock the upgrade-check endpoint per the real
+    // OpenTimestamps calendar HTTP protocol (`GET /timestamp/<hex-digest>`).
+    let mut confirmed_proof = vec![0xAA, 0xBB, 0xCC];
+    confirmed_proof.extend_from_slice(&[0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01]); // BitcoinBlockHeaderAttestation tag
+    confirmed_proof.extend_from_slice(b"...stand-in for real block header / merkle path bytes...");
+
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(format!(
+            "/timestamp/{merkle_root_hex}"
+        )))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(confirmed_proof))
+        .mount(&mock_calendar)
+        .await;
+
+    hsip_api::anchor_job::run_upgrade_cycle(&db).await;
+
+    let anchor_row_after = sqlx::query("SELECT ots_status FROM decision_anchors LIMIT 1")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let ots_status_after: String = anchor_row_after.try_get(0).unwrap();
+    assert_eq!(ots_status_after, "confirmed");
+
+    // Also visible through the public API, not just the raw DB row.
+    let proof_res = app
+        .oneshot(
+            Request::get(format!("/v1/decisions/{decision_id}/proof"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let proof_json = body_json(proof_res.into_body()).await;
+    assert_eq!(proof_json["ots_status"], "confirmed");
+}
+
 /// `GET /v1/agents/discover` must actually be reachable — it was fully
 /// implemented in routes/agents.rs but never registered in the router, so
 /// the documented `hsip agent discover` / CLAUDE.md route never worked.

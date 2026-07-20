@@ -165,6 +165,21 @@ pub static ROOT_ADMIN_CHANGES: Lazy<CounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Anchor batches (decisions or audit-log) upgraded from `ots_status =
+/// 'pending'` to `'confirmed'` by `anchor_job::run_upgrade_cycle` — i.e. a
+/// calendar reported the batch's Merkle root has since been included in a
+/// mined Bitcoin block. A near-zero rate isn't itself a problem (Bitcoin
+/// confirmation legitimately takes time), but a batch that's been `pending`
+/// for a very long time without ever showing up here is worth an operator
+/// noticing.
+pub static ANCHOR_UPGRADED_TO_CONFIRMED: Lazy<Counter> = Lazy::new(|| {
+    register_counter!(
+        "hsip_anchor_upgraded_to_confirmed_total",
+        "Anchor batches upgraded from pending to Bitcoin-confirmed"
+    )
+    .unwrap()
+});
+
 /// Force initialization of all metrics at startup
 pub fn init() {
     Lazy::force(&REQUESTS_TOTAL);
@@ -184,6 +199,7 @@ pub fn init() {
     Lazy::force(&REPLAY_REJECTED);
     Lazy::force(&ROOT_ADMIN_CHANGES);
     Lazy::force(&AUDIT_ANCHORED);
+    Lazy::force(&ANCHOR_UPGRADED_TO_CONFIRMED);
 }
 
 /// Render all metrics as Prometheus text format

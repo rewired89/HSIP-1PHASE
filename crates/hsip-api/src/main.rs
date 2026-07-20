@@ -276,6 +276,24 @@ async fn run() -> Result<()> {
         });
     }
 
+    // Poll calendars for anchor batches still sitting at ots_status =
+    // 'pending' and upgrade any that have since been confirmed by a mined
+    // Bitcoin block (see anchor_job::run_upgrade_cycle). A much slower
+    // interval than the 10s anchor-submission loop above — Bitcoin blocks
+    // land roughly every 10 minutes on average, so checking every 10s would
+    // just hammer the calendars for no benefit. No master key needed: this
+    // only reads/updates ots_proof/ots_status, it doesn't sign anything.
+    {
+        let upgrade_db = state.db.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
+            loop {
+                interval.tick().await;
+                anchor_job::run_upgrade_cycle(&upgrade_db).await;
+            }
+        });
+    }
+
     // Sweep expired replay-protection nonces so opt-in callers using
     // x-hsip-timestamp/x-hsip-nonce (see auth.rs::check_replay_protection)
     // don't leave the tracker growing unbounded. No-op for deployments where

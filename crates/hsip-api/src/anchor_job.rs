@@ -10,6 +10,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
+use sqlx::any::AnyRow;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -497,6 +498,140 @@ async fn retry_pending_audit_ots_submissions(db: &Db, calendars: &[&str]) {
                 tracing::debug!(anchor_id = %anchor_id, error = %e, "OpenTimestamps retry still failing (audit-log batch)");
                 metrics::ANCHOR_CALENDAR_UNREACHABLE.inc();
             }
+        }
+    }
+}
+
+/// Poll calendars for anchor batches (both decisions and the audit log)
+/// still sitting at `ots_status = 'pending'`, and upgrade any that have
+/// since been confirmed by a mined Bitcoin block to `ots_status =
+/// 'confirmed'`. Meant to run on its own, much slower timer than
+/// `run_anchor_cycle`/`run_audit_anchor_cycle` — Bitcoin blocks land
+/// roughly every 10 minutes on average, so polling every 10s like the
+/// submission loop does would just hammer the calendars for no benefit.
+/// See `main.rs` for the actual interval.
+pub async fn run_upgrade_cycle(db: &Db) {
+    upgrade_pending_decision_anchors(db).await;
+    upgrade_pending_audit_anchors(db).await;
+}
+
+/// Check every `decision_anchors` row still at `ots_status = 'pending'`
+/// against the calendar that originally accepted it (read back out of the
+/// stored `ots_proof` via `anchor::extract_pending_calendar_uri` — there's
+/// no separate calendar-URL column, and that calendar is the only one with
+/// any record of this submission to check). Best-effort, same shape as
+/// `retry_pending_ots_submissions` above — a batch that's still pending, an
+/// unparseable stored proof, or a calendar that's temporarily unreachable
+/// all just mean "try again next cycle," not an error.
+async fn upgrade_pending_decision_anchors(db: &Db) {
+    let rows = match sqlx::query(
+        "SELECT id, merkle_root, ots_proof FROM decision_anchors WHERE ots_status = 'pending'",
+    )
+    .fetch_all(db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to query decision anchors pending OTS upgrade");
+            return;
+        }
+    };
+
+    for row in &rows {
+        upgrade_one_anchor(db, "decision_anchors", row).await;
+    }
+}
+
+/// Twin of [`upgrade_pending_decision_anchors`] against `audit_anchors`
+/// instead of `decision_anchors`.
+async fn upgrade_pending_audit_anchors(db: &Db) {
+    let rows = match sqlx::query(
+        "SELECT id, merkle_root, ots_proof FROM audit_anchors WHERE ots_status = 'pending'",
+    )
+    .fetch_all(db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to query audit anchors pending OTS upgrade");
+            return;
+        }
+    };
+
+    for row in &rows {
+        upgrade_one_anchor(db, "audit_anchors", row).await;
+    }
+}
+
+/// Shared upgrade-check logic for one anchor row, used by both
+/// [`upgrade_pending_decision_anchors`] and [`upgrade_pending_audit_anchors`].
+/// `table` selects which table's row gets the `UPDATE` — always a hardcoded
+/// literal from this module, never external input, so building the `UPDATE`
+/// string with it carries no injection risk (same reasoning already applied
+/// to `bin/hsip_migrate.rs`'s table-driven copy, just inline here instead of
+/// via a second duplicated function per table).
+async fn upgrade_one_anchor(db: &Db, table: &'static str, row: &AnyRow) {
+    let Ok(anchor_id) = row.try_get::<String, _>(0) else {
+        return;
+    };
+    let Ok(root_hex) = row.try_get::<String, _>(1) else {
+        return;
+    };
+    let Ok(root_bytes) = hex::decode(&root_hex) else {
+        return;
+    };
+    let Ok(root): Result<[u8; 32], _> = root_bytes.try_into() else {
+        return;
+    };
+    let Ok(Some(existing_proof)) = row.try_get::<Option<Vec<u8>>, _>(2) else {
+        return;
+    };
+    let Some(calendar_url) = anchor::extract_pending_calendar_uri(&existing_proof) else {
+        tracing::debug!(
+            anchor_id = %anchor_id,
+            table,
+            "stored OTS proof has no recognizable calendar URI; skipping upgrade check"
+        );
+        return;
+    };
+
+    match anchor::check_for_upgrade(&calendar_url, &root).await {
+        Ok(Some(proof_bytes)) if anchor::contains_bitcoin_attestation(&proof_bytes) => {
+            let update_sql = format!(
+                "UPDATE {table} SET ots_proof = $1, ots_status = 'confirmed' WHERE id = $2"
+            );
+            let _ = sqlx::query(&update_sql)
+                .bind(&proof_bytes)
+                .bind(&anchor_id)
+                .execute(db)
+                .await;
+            tracing::info!(
+                anchor_id = %anchor_id,
+                table,
+                "OpenTimestamps proof upgraded to Bitcoin-confirmed"
+            );
+            metrics::ANCHOR_UPGRADED_TO_CONFIRMED.inc();
+        }
+        Ok(Some(_)) => {
+            tracing::debug!(
+                anchor_id = %anchor_id,
+                table,
+                "calendar returned an update, but it isn't Bitcoin-confirmed yet"
+            );
+        }
+        Ok(None) => {
+            // Normal, common case: calendar has nothing new for this digest
+            // yet — Bitcoin confirmation just hasn't happened, no logging
+            // needed on every quiet cycle.
+        }
+        Err(e) => {
+            tracing::debug!(
+                anchor_id = %anchor_id,
+                table,
+                calendar = %calendar_url,
+                error = %e,
+                "OpenTimestamps upgrade check failed, will retry next cycle"
+            );
         }
     }
 }
