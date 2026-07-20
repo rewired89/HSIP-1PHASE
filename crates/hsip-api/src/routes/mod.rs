@@ -94,4 +94,11 @@ pub fn router() -> Router<AppState> {
             "/v1/admin/master-key/fingerprint",
             get(admin::master_key_fingerprint),
         )
+        // Root-admin management (root-admin key only, see routes/admin.rs)
+        .route("/v1/admin/root-admins", get(admin::list_root_admins))
+        .route("/v1/admin/root-admins/grant", post(admin::grant_root_admin))
+        .route(
+            "/v1/admin/root-admins/revoke",
+            post(admin::revoke_root_admin),
+        )
 }

@@ -1,4 +1,5 @@
-//! `hsip keys` subcommands — inspect and rotate the node's master key.
+//! `hsip keys` subcommands — inspect/rotate the node's master key, and
+//! grant/revoke/list which keys hold root-admin (node-level) privilege.
 //!
 //! Key resolution order (highest priority first):
 //!   1. --key flag
@@ -34,8 +35,42 @@ pub enum KeysCmd {
     },
 
     /// Rotate the master key: re-encrypts every identity under a fresh key
-    /// and swaps it live, no restart. Admin key only.
+    /// and swaps it live, no restart. Root-admin key only.
     RotateMaster {
+        #[arg(long, env = "HSIP_API_URL")]
+        api_url: Option<String>,
+        #[arg(long, env = "HSIP_API_KEY")]
+        key: Option<String>,
+        /// Skip the interactive confirmation prompt (for scripts)
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// List every key currently holding root-admin (node-level) privilege.
+    /// Root-admin key only.
+    ListRootAdmins {
+        #[arg(long, env = "HSIP_API_URL")]
+        api_url: Option<String>,
+        #[arg(long, env = "HSIP_API_KEY")]
+        key: Option<String>,
+    },
+
+    /// Grant root-admin to another active key by id — the mechanism for
+    /// having more than one root admin. Root-admin key only.
+    GrantRootAdmin {
+        /// The target key's id (see the dashboard's Keys tab, or GET /v1/keys)
+        target_key_id: String,
+        #[arg(long, env = "HSIP_API_URL")]
+        api_url: Option<String>,
+        #[arg(long, env = "HSIP_API_KEY")]
+        key: Option<String>,
+    },
+
+    /// Revoke root-admin from a key by id. Refused if it's the last root
+    /// admin on the node. Root-admin key only.
+    RevokeRootAdmin {
+        /// The target key's id (see `hsip keys list-root-admins`)
+        target_key_id: String,
         #[arg(long, env = "HSIP_API_URL")]
         api_url: Option<String>,
         #[arg(long, env = "HSIP_API_KEY")]
@@ -64,6 +99,21 @@ struct RotateResponse {
     master_key_path: Option<String>,
     rotation_hook: Option<String>,
     note: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct RootAdminRecord {
+    id: String,
+    tenant_id: String,
+    name: String,
+    created_at: i64,
+}
+
+#[derive(Deserialize, Debug)]
+struct RootAdminChangeResponse {
+    #[serde(alias = "granted", alias = "revoked")]
+    key_id: String,
+    tenant_id: String,
 }
 
 // ── HTTP client helper (same pattern as agent.rs / trust.rs) ───────────────────
@@ -108,12 +158,20 @@ impl ApiClient {
     }
 
     fn post<R: serde::de::DeserializeOwned>(&self, path: &str) -> Result<R> {
+        self.post_json(path, &serde_json::json!({}))
+    }
+
+    fn post_json<R: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<R> {
         let url = format!("{}{}", self.base, path);
         let res = self
             .http
             .post(&url)
             .bearer_auth(&self.key)
-            .json(&serde_json::json!({}))
+            .json(body)
             .send()
             .with_context(|| format!("POST {url} failed — is HSIP running?"))?;
         if !res.status().is_success() {
@@ -131,6 +189,18 @@ pub fn run(cmd: KeysCmd) -> Result<()> {
     match cmd {
         KeysCmd::MasterFingerprint { api_url, key } => master_fingerprint(api_url, key),
         KeysCmd::RotateMaster { api_url, key, yes } => rotate_master(api_url, key, yes),
+        KeysCmd::ListRootAdmins { api_url, key } => list_root_admins(api_url, key),
+        KeysCmd::GrantRootAdmin {
+            target_key_id,
+            api_url,
+            key,
+        } => grant_root_admin(target_key_id, api_url, key),
+        KeysCmd::RevokeRootAdmin {
+            target_key_id,
+            api_url,
+            key,
+            yes,
+        } => revoke_root_admin(target_key_id, api_url, key, yes),
     }
 }
 
@@ -206,6 +276,89 @@ fn rotate_master(api_url: Option<String>, key: Option<String>, yes: bool) -> Res
     }
     println!();
     println!("{}", resp.note);
+
+    Ok(())
+}
+
+fn list_root_admins(api_url: Option<String>, key: Option<String>) -> Result<()> {
+    let client = ApiClient::new(api_url, key)?;
+    let admins: Vec<RootAdminRecord> = client.get("/v1/admin/root-admins")?;
+
+    println!();
+    if admins.is_empty() {
+        println!("No root admins found — this should not happen on a running server.");
+        return Ok(());
+    }
+    println!("{} root admin(s):", admins.len());
+    for a in &admins {
+        println!(
+            "  {} — name={} tenant={} created_at_ms={}",
+            a.id, a.name, a.tenant_id, a.created_at
+        );
+    }
+    println!();
+    println!("Grant: hsip keys grant-root-admin <key_id>");
+    println!("Revoke: hsip keys revoke-root-admin <key_id>");
+
+    Ok(())
+}
+
+fn grant_root_admin(
+    target_key_id: String,
+    api_url: Option<String>,
+    key: Option<String>,
+) -> Result<()> {
+    let client = ApiClient::new(api_url, key)?;
+    let resp: RootAdminChangeResponse = client.post_json(
+        "/v1/admin/root-admins/grant",
+        &serde_json::json!({ "key_id": target_key_id }),
+    )?;
+
+    println!();
+    println!(
+        "✓ Granted root-admin to key {} (tenant {}).",
+        resp.key_id, resp.tenant_id
+    );
+    println!("That key can now rotate the master key and grant/revoke root-admin on others.");
+
+    Ok(())
+}
+
+fn revoke_root_admin(
+    target_key_id: String,
+    api_url: Option<String>,
+    key: Option<String>,
+    yes: bool,
+) -> Result<()> {
+    let client = ApiClient::new(api_url, key)?;
+
+    if !yes {
+        println!();
+        println!("This revokes root-admin (node-level) privilege from key {target_key_id}.");
+        println!("It will no longer be able to rotate the master key or manage root admins.");
+        println!("(Refused automatically if this would leave zero root admins on the node.)");
+        print!("Type \"yes\" to continue: ");
+        std::io::stdout().flush().ok();
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .context("failed to read confirmation")?;
+        if input.trim() != "yes" {
+            println!("Aborted. No changes were made.");
+            return Ok(());
+        }
+    }
+
+    let resp: RootAdminChangeResponse = client.post_json(
+        "/v1/admin/root-admins/revoke",
+        &serde_json::json!({ "key_id": target_key_id }),
+    )?;
+
+    println!();
+    println!(
+        "✓ Revoked root-admin from key {} (tenant {}).",
+        resp.key_id, resp.tenant_id
+    );
 
     Ok(())
 }

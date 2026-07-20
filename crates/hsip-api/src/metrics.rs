@@ -142,6 +142,18 @@ pub static REPLAY_REJECTED: Lazy<CounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Grants/revocations of the root-admin flag (`api_keys.is_root_admin`).
+/// Should only ever move in small, rare, deliberate increments — a rising
+/// rate would be very unexpected, same as `MASTER_KEY_ROTATIONS`.
+pub static ROOT_ADMIN_CHANGES: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "hsip_root_admin_changes_total",
+        "Root-admin flag grants/revocations via POST /v1/admin/root-admins/*, by action",
+        &["action"]
+    )
+    .unwrap()
+});
+
 /// Force initialization of all metrics at startup
 pub fn init() {
     Lazy::force(&REQUESTS_TOTAL);
@@ -159,6 +171,7 @@ pub fn init() {
     Lazy::force(&CHAIN_WRITE_RETRIES);
     Lazy::force(&MASTER_KEY_ROTATIONS);
     Lazy::force(&REPLAY_REJECTED);
+    Lazy::force(&ROOT_ADMIN_CHANGES);
 }
 
 /// Render all metrics as Prometheus text format

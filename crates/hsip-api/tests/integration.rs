@@ -41,10 +41,13 @@ async fn test_app() -> (axum::Router, String) {
     .await
     .unwrap();
 
+    // 'owner' — this is the tenant's only key, and several existing tests
+    // use it to create/list additional keys via POST/GET /v1/keys, which
+    // now requires the owner role.
     db.execute(
         sqlx::query(
-            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
-             VALUES (?, ?, ?, 'test', 'human', ?, 1)",
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, role, created_at, active)
+             VALUES (?, ?, ?, 'test', 'human', 'owner', ?, 1)",
         )
         .bind(&key_id)
         .bind(&tenant_id)
@@ -95,8 +98,8 @@ async fn test_app_with_db() -> (axum::Router, String, hsip_api::db::Db, Vec<u8>)
 
     db.execute(
         sqlx::query(
-            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
-             VALUES (?, ?, ?, 'predicta', 'ai_agent', ?, 1)",
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, role, created_at, active)
+             VALUES (?, ?, ?, 'predicta', 'ai_agent', 'owner', ?, 1)",
         )
         .bind(&key_id)
         .bind(&tenant_id)
@@ -142,10 +145,13 @@ async fn test_app_with_admin_and_key_file(
     .await
     .unwrap();
 
+    // 'owner' + is_root_admin=1 — mirrors main.rs::bootstrap_admin's real
+    // INSERT exactly, since this helper exists specifically to exercise the
+    // root-admin-gated master-key-rotation routes.
     db.execute(
         sqlx::query(
-            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
-             VALUES (?, ?, ?, 'admin', 'human', ?, 1)",
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, role, is_root_admin, created_at, active)
+             VALUES (?, ?, ?, 'admin', 'human', 'owner', 1, ?, 1)",
         )
         .bind(&key_id)
         .bind(&tenant_id)
@@ -1079,8 +1085,8 @@ async fn test_master_key_rotation_hook_for_env_sourced_key() {
     .unwrap();
     db.execute(
         sqlx::query(
-            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
-             VALUES (?, ?, ?, 'admin', 'human', ?, 1)",
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, role, is_root_admin, created_at, active)
+             VALUES (?, ?, ?, 'admin', 'human', 'owner', 1, ?, 1)",
         )
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(&tenant_id)
@@ -1436,4 +1442,377 @@ async fn test_replay_protection_different_keys_can_reuse_same_nonce() {
         .await
         .unwrap();
     assert_eq!(res_b.status(), StatusCode::NOT_FOUND);
+}
+
+// ── RBAC: tenant-scoped key management (owner vs member) ───────────────────────
+
+#[tokio::test]
+async fn test_member_cannot_create_or_revoke_keys() {
+    let (app, owner_key) = test_app().await;
+
+    // Owner mints a member-role key (the default role).
+    let create_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"agent","agent_type":"ai_agent"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_res.status(), StatusCode::OK);
+    let created = body_json(create_res.into_body()).await;
+    assert_eq!(created["role"], "member");
+    let member_key = created["key"].as_str().unwrap().to_string();
+    let member_id = created["id"].as_str().unwrap().to_string();
+
+    // A member-role key cannot create another key — previously any active
+    // key, including this one, could mint arbitrary new keys with no check.
+    let denied_create = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&member_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"escalate"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied_create.status(), StatusCode::UNAUTHORIZED);
+
+    // Nor can it revoke any key, including itself.
+    let denied_revoke = app
+        .oneshot(
+            Request::delete(format!("/v1/keys/{member_id}"))
+                .header(header::AUTHORIZATION, bearer(&member_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied_revoke.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_owner_can_create_and_revoke_member_key() {
+    let (app, owner_key) = test_app().await;
+
+    let create_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"agent"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_res.status(), StatusCode::OK);
+    let created = body_json(create_res.into_body()).await;
+    let member_id = created["id"].as_str().unwrap().to_string();
+
+    let revoke_res = app
+        .oneshot(
+            Request::delete(format!("/v1/keys/{member_id}"))
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoke_res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_owner_can_create_a_second_owner_key() {
+    let (app, owner_key) = test_app().await;
+
+    let create_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"second-admin","role":"owner"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_res.status(), StatusCode::OK);
+    let created = body_json(create_res.into_body()).await;
+    assert_eq!(created["role"], "owner");
+    let second_owner_key = created["key"].as_str().unwrap().to_string();
+
+    // The new owner key can itself create keys.
+    let res = app
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&second_owner_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"third"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_cannot_revoke_last_owner_key() {
+    let (app, owner_key) = test_app().await;
+
+    let list_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let keys = body_json(list_res.into_body()).await;
+    assert_eq!(
+        keys.as_array().unwrap().len(),
+        1,
+        "test_app starts with exactly one key"
+    );
+    let owner_id = keys[0]["id"].as_str().unwrap().to_string();
+
+    let revoke_res = app
+        .oneshot(
+            Request::delete(format!("/v1/keys/{owner_id}"))
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        revoke_res.status(),
+        StatusCode::CONFLICT,
+        "revoking a tenant's last owner key must be refused, not leave the tenant locked out"
+    );
+}
+
+// ── RBAC: node-level root-admin grant/revoke ────────────────────────────────────
+
+#[tokio::test]
+async fn test_grant_root_admin_requires_existing_root_admin() {
+    // test_app()'s key is a tenant owner but not a root admin.
+    let (app, owner_key) = test_app().await;
+
+    let grant_res = app
+        .oneshot(
+            Request::post("/v1/admin/root-admins/grant")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"key_id":"whatever"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(grant_res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_root_admin_grant_list_revoke_flow() {
+    let (app, admin_key, _db, key_path) = test_app_with_admin_and_key_file().await;
+
+    // The bootstrap admin (owner + root admin) creates a second, plain
+    // member key in the same tenant.
+    let create_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"ops"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created = body_json(create_res.into_body()).await;
+    let second_key = created["key"].as_str().unwrap().to_string();
+    let second_id = created["id"].as_str().unwrap().to_string();
+
+    // Not yet a root admin — fingerprint must be denied.
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/admin/master-key/fingerprint")
+                .header(header::AUTHORIZATION, bearer(&second_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+    // The existing root admin grants it — this is the mechanism that makes
+    // more than one root admin possible at all.
+    let grant_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/admin/root-admins/grant")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"key_id":"{second_id}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(grant_res.status(), StatusCode::OK);
+
+    let list_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/admin/root-admins")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_res.status(), StatusCode::OK);
+    let admins = body_json(list_res.into_body()).await;
+    assert_eq!(admins.as_array().unwrap().len(), 2);
+
+    // The newly granted key can now call fingerprint.
+    let allowed = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/admin/master-key/fingerprint")
+                .header(header::AUTHORIZATION, bearer(&second_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
+
+    // Find the original admin key's own id so it can be revoked.
+    let list_keys_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let keys = body_json(list_keys_res.into_body()).await;
+    let admin_id = keys
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["name"] == "admin")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Revoking the original admin's root-admin flag still leaves one (the
+    // second key) — must succeed.
+    let revoke_original = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/admin/root-admins/revoke")
+                .header(header::AUTHORIZATION, bearer(&second_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"key_id":"{admin_id}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoke_original.status(), StatusCode::OK);
+
+    // The original admin key can no longer reach root-admin-gated routes.
+    let now_denied = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/admin/master-key/fingerprint")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(now_denied.status(), StatusCode::UNAUTHORIZED);
+
+    // second_key is now the ONLY root admin — revoking it must be refused,
+    // or the node would have zero root admins with no way to recover short
+    // of editing the database directly.
+    let last_denied = app
+        .oneshot(
+            Request::post("/v1/admin/root-admins/revoke")
+                .header(header::AUTHORIZATION, bearer(&second_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"key_id":"{second_id}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(last_denied.status(), StatusCode::CONFLICT);
+
+    let _ = std::fs::remove_file(&key_path);
+}
+
+// ── RBAC: upgrade migration backfill ────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_role_and_root_admin_backfill_on_upgrade() {
+    let db_url = format!(
+        "sqlite:file:{}?mode=memory&cache=shared",
+        uuid::Uuid::new_v4()
+    );
+    sqlx::any::install_default_drivers();
+    let db = hsip_api::db::init(&db_url).await.expect("db init");
+
+    // Simulate a pre-upgrade row: no role, no is_root_admin explicitly set
+    // — mirrors what a real deployment's admin key row looked like before
+    // this migration existed.
+    let tenant_id = uuid::Uuid::new_v4().to_string();
+    let now = hsip_api::db::now_ms();
+    use sqlx::Executor;
+    db.execute(
+        sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'default', ?)")
+            .bind(&tenant_id)
+            .bind(now),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        sqlx::query(
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+             VALUES (?, ?, 'legacyhash', 'admin', 'human', ?, 1)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&tenant_id)
+        .bind(now),
+    )
+    .await
+    .unwrap();
+
+    // Re-running init (as main.rs does on every startup) re-runs
+    // migrations, including the backfill — this is the "upgrade an
+    // existing database" path, distinct from a fresh install where
+    // bootstrap_admin sets role/is_root_admin directly on INSERT.
+    let db2 = hsip_api::db::init(&db_url).await.expect("second db init");
+
+    use sqlx::Row;
+    let row = sqlx::query("SELECT role, is_root_admin FROM api_keys WHERE tenant_id = ?")
+        .bind(&tenant_id)
+        .fetch_one(&db2)
+        .await
+        .unwrap();
+    let role: Option<String> = row.try_get(0).unwrap();
+    let is_root_admin: i64 = row.try_get(1).unwrap();
+    assert_eq!(role.as_deref(), Some("owner"));
+    assert_eq!(is_root_admin, 1);
 }

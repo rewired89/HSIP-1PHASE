@@ -101,6 +101,59 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         .execute(pool)
         .await;
 
+    // Non-fatal: columns may already exist on upgraded databases.
+    // `role` ('owner' | 'member') gates tenant-scoped key management
+    // (create/revoke other keys in the same tenant) — see routes/keys.rs.
+    // `is_root_admin` gates node-level operations that span every tenant
+    // (master key rotation) — see routes/admin.rs. Replaces the old
+    // "key named 'admin' in the first tenant ever created" heuristic with an
+    // explicit, grantable flag so more than one root admin can exist.
+    let _ = sqlx::query("ALTER TABLE api_keys ADD COLUMN role TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE api_keys ADD COLUMN is_root_admin INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await;
+
+    // Backfill for upgraded databases: the earliest-created key in each
+    // tenant becomes that tenant's 'owner' if no role is set yet, every
+    // other still-unset key becomes 'member'. Preserves today's behavior
+    // exactly for single-key tenants and gives every existing multi-key
+    // tenant a sensible first owner instead of leaving every key in it
+    // unable to manage any other after upgrade. Rows created after this
+    // migration get their role set explicitly at creation time instead
+    // (bootstrap_admin, sandbox::provision, routes::keys::create).
+    let _ = sqlx::query(
+        "UPDATE api_keys
+         SET role = 'owner'
+         WHERE role IS NULL
+           AND id = (
+             SELECT id FROM api_keys ak2
+             WHERE ak2.tenant_id = api_keys.tenant_id
+             ORDER BY ak2.created_at ASC
+             LIMIT 1
+           )",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("UPDATE api_keys SET role = 'member' WHERE role IS NULL")
+        .execute(pool)
+        .await;
+
+    // Backfill for upgraded databases: preserve today's exact bootstrap-admin
+    // behavior — the key named 'admin' in the very first tenant ever created
+    // becomes a root admin, matching what routes::admin::require_root_admin
+    // checked before this column existed. No-op once already set.
+    let _ = sqlx::query(
+        "UPDATE api_keys
+         SET is_root_admin = 1
+         WHERE is_root_admin = 0
+           AND name = 'admin'
+           AND tenant_id = (SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1)",
+    )
+    .execute(pool)
+    .await;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS identities (
             tenant_id       TEXT PRIMARY KEY,

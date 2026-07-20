@@ -149,7 +149,7 @@
 ### `bootstrap_admin`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: On first boot creates the default tenant, generates the admin API key, writes it to the admin key file, and prints it to stdout.
+- **purpose**: On first boot creates the default tenant, generates the admin API key with `role='owner'` and `is_root_admin=1` set explicitly on the `INSERT` (fresh installs aren't covered by `db.rs`'s upgrade backfill, since this row doesn't exist yet when migrations run), writes it to the admin key file, and prints it to stdout.
 - **inputs**: `db: &Db`, `master_key: &[u8; 32]`, `config: &Config`
 - **outputs**: `Result<()>`
 - **calls**: `db` queries, `gen_key`, `fs::write`
@@ -536,7 +536,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity). `decision_anchors` holds one row per RFC 6962 Merkle batch (root, signature, OpenTimestamps proof/status). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity). `decision_anchors` holds one row per RFC 6962 Merkle batch (root, signature, OpenTimestamps proof/status). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -972,6 +972,16 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **called_by**: `auth.rs::check_replay_protection`
 - **mutates**: counter value
 
+### `ROOT_ADMIN_CHANGES`
+- **type**: variable (static `CounterVec`, label `action`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Count of root-admin flag grants/revocations via `POST /v1/admin/root-admins/*`, by `action` (`granted`\|`revoked`). Should only ever move in small, rare, deliberate increments, same as `MASTER_KEY_ROTATIONS`.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `routes::admin::grant_root_admin`, `routes::admin::revoke_root_admin`
+- **mutates**: counter value
+
 ### `init` (metrics)
 - **type**: function
 - **file**: `crates/hsip-api/src/metrics.rs`
@@ -1351,17 +1361,27 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 ### `CreateKeyRequest`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/keys.rs`
-- **purpose**: JSON body for `POST /v1/keys`: name, agent_type (human/service/ai_agent), optional expires_at.
+- **purpose**: JSON body for `POST /v1/keys`: name, agent_type (human/service/ai_agent), optional expires_in_days, optional role ('owner'\|'member', defaults to 'member').
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
 - **called_by**: `create`
 - **mutates**: nothing
 
+### `resolve_caller_role`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/keys.rs`
+- **purpose**: Resolves the `role` ('owner'\|'member'\|NULL) of the API key that authenticated this request, scoped to its own tenant. Re-parses the Authorization header and re-queries `api_keys` itself — same pattern as `routes::admin::require_root_admin` and `routes::consent::resolve_granting_key_type` — since `TenantId` only carries the resolved tenant_id, not the calling key's own attributes.
+- **inputs**: `db: &Db`, `headers: &HeaderMap`, `tenant_id: &str`
+- **outputs**: `ApiResult<Option<String>>`
+- **calls**: `hash_key`, `sqlx::query`
+- **called_by**: `create` (keys), `revoke` (keys)
+- **mutates**: nothing
+
 ### `CreateKeyResponse`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/keys.rs`
-- **purpose**: Response from key creation: id, key (raw, returned only once), name, agent_type, created_at.
+- **purpose**: Response from key creation: id, key (raw, returned only once), name, agent_type, role, created_at, expires_at.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1371,7 +1391,7 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 ### `KeyRecord`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/keys.rs`
-- **purpose**: Serialised key row for list response: id, name, agent_type, created_at, expires_at, active flag.
+- **purpose**: Serialised key row for list response: id, name, agent_type, role, created_at, expires_at, active flag.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1381,32 +1401,32 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 ### `create` (keys)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/keys.rs`
-- **purpose**: `POST /v1/keys` — generates new API key, stores its SHA-256 hash, returns raw key once.
-- **inputs**: `State(state)`, `tenant`, `Json(req)`
+- **purpose**: `POST /v1/keys` — requires the caller's own key to be `role='owner'` in this tenant (previously any active key, including a low-privilege `ai_agent` key, could mint new keys with no check). Generates new API key, stores its SHA-256 hash and the requested `role` (default 'member'), returns raw key once. Writes a `key.created` audit entry.
+- **inputs**: `State(state)`, `tenant`, `headers`, `Json(req)`
 - **outputs**: `ApiResult<Json<CreateKeyResponse>>`
-- **calls**: `gen_key`, `hash_key`, `sqlx::query`
+- **calls**: `resolve_caller_role`, `gen_key`, `hash_key`, `sqlx::query`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`api_keys`, `audit_entries`)
 
 ### `list` (keys)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/keys.rs`
-- **purpose**: `GET /v1/keys` — returns all active API keys for the tenant (no raw key values).
+- **purpose**: `GET /v1/keys` — returns all API keys for the tenant (no raw key values), including inactive ones. Stays open to any active tenant key regardless of role — informational only, not a mutation.
 - **inputs**: `State(state)`, `tenant`
 - **outputs**: `ApiResult<Json<Vec<KeyRecord>>>`
-- **calls**: `sqlx::query_as`
+- **calls**: `sqlx::query`
 - **called_by**: Axum router
 - **mutates**: nothing
 
 ### `revoke` (keys)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/keys.rs`
-- **purpose**: `DELETE /v1/keys/:id` — deactivates the key in DB and adds to `pending_revocation` set for immediate blocking.
-- **inputs**: `State(state)`, `tenant`, `Path(id)`
-- **outputs**: `ApiResult<StatusCode>`
-- **calls**: `sqlx::query`, `state.pending_revocation.insert`
+- **purpose**: `DELETE /v1/keys/:id` — requires the caller's own key to be `role='owner'` in this tenant (previously any active key could revoke any other key in the tenant with no check, including the tenant's own owner key). Refuses (`409 Conflict`) to revoke a tenant's last remaining active `owner` key — would otherwise lock the tenant out of managing its own keys. Deactivates the key in DB, adds to `pending_revocation` set for immediate blocking, writes a `key.revoked` audit entry.
+- **inputs**: `State(state)`, `tenant`, `headers`, `Path(key_id)`
+- **outputs**: `ApiResult<Json<serde_json::Value>>`
+- **calls**: `resolve_caller_role`, `sqlx::query`, `state.pending_revocation.insert`, `audit_log::record`
 - **called_by**: Axum router
-- **mutates**: DB (`api_keys.active`), `pending_revocation` DashSet
+- **mutates**: DB (`api_keys.active`), `pending_revocation` DashSet, `agent_tracker`/`rate_limiter` DashMaps (removed), `audit_entries`
 
 ### `gen_key`
 - **type**: function
@@ -1425,11 +1445,11 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 ### `require_root_admin`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/admin.rs`
-- **purpose**: Authorization gate for node-level (not tenant-scoped) operations. Requires the calling key's `name` to be `"admin"` *and* its `tenant_id` to be the very first tenant ever created (`SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1`) — deliberately stricter than "any key named admin," since HSIP has no first-class superuser concept and a tenant in a multi-tenant deployment must not be able to grant itself global authority by naming one of its own keys "admin".
-- **inputs**: `db: &Db`, `headers: &HeaderMap`, `tenant_id: &str`
+- **purpose**: Authorization gate for node-level (not tenant-scoped) operations. Requires the calling key's `is_root_admin` column to be `1` (`SELECT is_root_admin FROM api_keys WHERE key_hash=? AND active=1` — not scoped to any tenant, since the flag is node-wide). Replaced an earlier "`name == 'admin'` and tenant is the first ever created" heuristic that only ever supported exactly one root admin; `grant_root_admin`/`revoke_root_admin` are now the sanctioned way to change who holds the flag.
+- **inputs**: `db: &Db`, `headers: &HeaderMap`
 - **outputs**: `ApiResult<()>`
 - **calls**: `hash_key`, `sqlx::query`
-- **called_by**: `rotate_master_key`
+- **called_by**: `rotate_master_key`, `master_key_fingerprint`, `list_root_admins`, `grant_root_admin`, `revoke_root_admin`
 - **mutates**: nothing
 
 ### `fingerprint` (admin)
@@ -1456,7 +1476,7 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/admin.rs`
 - **purpose**: `GET /v1/admin/master-key/fingerprint` — read-only, no mutation. Returns the SHA-256 fingerprint of the master key currently in use, gated by the same `require_root_admin` check as rotation. Exists so an operator can confirm a backup file matches production without either grepping logs or triggering an actual rotation.
-- **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`
+- **inputs**: `State(state)`, `_tenant: TenantId`, `headers: HeaderMap`
 - **outputs**: `ApiResult<Json<MasterKeyFingerprintResponse>>`
 - **calls**: `require_root_admin`, `fingerprint`, `resolve_persistence`
 - **called_by**: Axum router
@@ -1506,11 +1526,71 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/admin.rs`
 - **purpose**: `POST /v1/admin/master-key/rotate` — generates a new 32-byte master key, re-encrypts every `identities.signing_key_b64` row and the singleton `anchor_identity` row under it inside one DB transaction, then persists the new key via whichever `KeyPersistence` mode `resolve_persistence` returns (file: staging file write + `fsync` + atomic rename; hook: `run_rotation_hook`) *before* committing the transaction, then swaps the in-memory key. Holds `state.master_key.write().await` for the *entire* operation (not just the final swap) — see the function's doc comment for the concurrency race this closes. Refuses with `ApiError::BadRequest` if `resolve_persistence` returns `None` (env-var-sourced key, no hook configured). Writes one `master_key.rotated` audit entry per tenant touched and increments `metrics::MASTER_KEY_ROTATIONS`.
-- **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`
+- **inputs**: `State(state)`, `_tenant: TenantId`, `headers: HeaderMap`
 - **outputs**: `ApiResult<Json<RotateMasterKeyResponse>>`
 - **calls**: `require_root_admin`, `resolve_persistence`, `state.db.begin`, `key_encryption::{decrypt_signing_key, encrypt_signing_key}`, `std::fs::{File::create, rename}`, `run_rotation_hook`, `audit_log::record`, `fingerprint`
 - **called_by**: Axum router
 - **mutates**: `identities`, `anchor_identity` tables (within a transaction), the master key file on disk or the hook's own target, `state.master_key` (in-memory)
+
+### `RootAdminKeyRequest`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: JSON body for `POST /v1/admin/root-admins/grant` and `.../revoke`: `key_id` of the target key (any tenant).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `grant_root_admin`, `revoke_root_admin`
+- **mutates**: nothing
+
+### `RootAdminRecord`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: Serialised root-admin key row for `GET /v1/admin/root-admins`: id, tenant_id, name, created_at.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `list_root_admins`
+- **mutates**: nothing
+
+### `root_admin_count`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: `SELECT COUNT(*) FROM api_keys WHERE is_root_admin=1 AND active=1` — used by `revoke_root_admin` to refuse dropping the last one.
+- **inputs**: `db: &Db`
+- **outputs**: `ApiResult<i64>`
+- **calls**: `sqlx::query`
+- **called_by**: `revoke_root_admin`
+- **mutates**: nothing
+
+### `list_root_admins`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: `GET /v1/admin/root-admins` — root-admin-gated. Lists every active key holding the flag, across all tenants, ordered by created_at.
+- **inputs**: `State(state)`, `_tenant: TenantId`, `headers: HeaderMap`
+- **outputs**: `ApiResult<Json<Vec<RootAdminRecord>>>`
+- **calls**: `require_root_admin`, `sqlx::query`
+- **called_by**: Axum router
+- **mutates**: nothing
+
+### `grant_root_admin`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: `POST /v1/admin/root-admins/grant` — root-admin-gated. Sets `is_root_admin=1` on an active target key (any tenant, by id) — the mechanism that makes more than one root admin possible, since `bootstrap_admin` only ever creates the first one. Refuses if the target key is revoked. Writes an `admin.root_admin_granted` audit entry on the target's own tenant and increments `metrics::ROOT_ADMIN_CHANGES{action="granted"}`.
+- **inputs**: `State(state)`, `_tenant: TenantId`, `headers: HeaderMap`, `Json(req): Json<RootAdminKeyRequest>`
+- **outputs**: `ApiResult<Json<serde_json::Value>>`
+- **calls**: `require_root_admin`, `sqlx::query`, `audit_log::record`, `metrics::ROOT_ADMIN_CHANGES`
+- **called_by**: Axum router
+- **mutates**: `api_keys.is_root_admin`, `audit_entries`
+
+### `revoke_root_admin`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: `POST /v1/admin/root-admins/revoke` — root-admin-gated. Clears `is_root_admin` on a target key. Refuses (`409 Conflict`) via `root_admin_count` if this is the last root admin on the node — there is no recovery path from zero root admins except editing the database directly. Writes an `admin.root_admin_revoked` audit entry and increments `metrics::ROOT_ADMIN_CHANGES{action="revoked"}`.
+- **inputs**: `State(state)`, `_tenant: TenantId`, `headers: HeaderMap`, `Json(req): Json<RootAdminKeyRequest>`
+- **outputs**: `ApiResult<Json<serde_json::Value>>`
+- **calls**: `require_root_admin`, `root_admin_count`, `sqlx::query`, `audit_log::record`, `metrics::ROOT_ADMIN_CHANGES`
+- **called_by**: Axum router
+- **mutates**: `api_keys.is_root_admin`, `audit_entries`
 
 ---
 
@@ -2102,7 +2182,7 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 ### `provision`
 - **type**: function (async handler)
 - **file**: `crates/hsip-api/src/routes/sandbox.rs`
-- **purpose**: `POST /v1/sandbox/provision` — no auth required. Creates an isolated tenant + 24-hour trial API key. Returns credentials with embedded quickstart curl commands. Only active when `HSIP_SANDBOX=true` env var is set. Rate-limited to 5 provisions per source IP per hour.
+- **purpose**: `POST /v1/sandbox/provision` — no auth required. Creates an isolated tenant + 24-hour trial API key with `role='owner'` set explicitly (it's the tenant's only key, and has to be able to manage any further keys the trial user creates). Returns credentials with embedded quickstart curl commands. Only active when `HSIP_SANDBOX=true` env var is set. Rate-limited to 5 provisions per source IP per hour.
 - **inputs**: `State<AppState>`, `HeaderMap`
 - **outputs**: `ApiResult<Json<ProvisionResponse>>`
 - **calls**: `client_ip`, `check_provision_rate`, `now_ms`, `hash_key`, `ms_to_iso`, sqlx queries (INSERT tenants, INSERT api_keys), `audit_log::record`
@@ -2815,7 +2895,7 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 ### `KeysCmd`
 - **type**: enum
 - **file**: `crates/hsip-cli/src/commands/keys.rs`
-- **purpose**: Clap subcommand enum for `hsip keys`: MasterFingerprint, RotateMaster (with a `--yes` flag to skip the interactive confirmation prompt).
+- **purpose**: Clap subcommand enum for `hsip keys`: MasterFingerprint, RotateMaster, ListRootAdmins, GrantRootAdmin, RevokeRootAdmin (Rotate/Revoke have a `--yes` flag to skip the interactive confirmation prompt).
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -2832,23 +2912,33 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **called_by**: `master_fingerprint`, `rotate_master`
 - **mutates**: nothing
 
-### `ApiClient` (keys)
-- **type**: struct
+### `RootAdminRecord` / `RootAdminChangeResponse`
+- **type**: structs
 - **file**: `crates/hsip-cli/src/commands/keys.rs`
-- **purpose**: Same `reqwest::blocking` wrapper pattern as `agent.rs`/`trust.rs`, `get`/`post` only (no `delete` — neither keys endpoint needs it). Uses `commands::util::load_admin_key()` — not a local copy.
+- **purpose**: Deserialize `GET /v1/admin/root-admins` (list of id/tenant_id/name/created_at) and `POST /v1/admin/root-admins/grant`/`.../revoke` (`RootAdminChangeResponse` uses `#[serde(alias)]` so one field covers both endpoints' differently-named `granted`/`revoked` key) responses respectively.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
-- **called_by**: `master_fingerprint`, `rotate_master`
+- **called_by**: `list_root_admins`, `grant_root_admin`, `revoke_root_admin` (cli)
+- **mutates**: nothing
+
+### `ApiClient` (keys)
+- **type**: struct
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: Same `reqwest::blocking` wrapper pattern as `agent.rs`/`trust.rs`. `get`, `post` (empty JSON body), and `post_json` (caller-supplied body, used by grant/revoke). Uses `commands::util::load_admin_key()` — not a local copy.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `master_fingerprint`, `rotate_master`, `list_root_admins`, `grant_root_admin`, `revoke_root_admin` (cli)
 - **mutates**: nothing
 
 ### `run` (keys)
 - **type**: function
 - **file**: `crates/hsip-cli/src/commands/keys.rs`
-- **purpose**: Dispatches `KeysCmd` subcommands to `master_fingerprint` or `rotate_master`.
+- **purpose**: Dispatches `KeysCmd` subcommands to `master_fingerprint`, `rotate_master`, `list_root_admins`, `grant_root_admin`, or `revoke_root_admin`.
 - **inputs**: `cmd: KeysCmd`
 - **outputs**: `Result<()>`
-- **calls**: `master_fingerprint`, `rotate_master`
+- **calls**: `master_fingerprint`, `rotate_master`, `list_root_admins`, `grant_root_admin`, `revoke_root_admin` (cli)
 - **called_by**: `main`
 - **mutates**: varies
 
@@ -2871,6 +2961,36 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 - **calls**: `ApiClient::new`, `std::io::stdin().read_line`, `client.post`, `println!`
 - **called_by**: `run` (keys)
 - **mutates**: DB (`identities`, `anchor_identity`) + master key file + in-memory key, via the API — this CLI process itself mutates nothing locally
+
+### `list_root_admins` (cli)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: `hsip keys list-root-admins` — calls `GET /v1/admin/root-admins`, prints id/name/tenant/created_at for each, plus the grant/revoke command hints.
+- **inputs**: `api_url: Option<String>`, `key: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `client.get`, `println!`
+- **called_by**: `run` (keys)
+- **mutates**: nothing
+
+### `grant_root_admin` (cli)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: `hsip keys grant-root-admin <target-key-id>` — calls `POST /v1/admin/root-admins/grant` with `{"key_id": target_key_id}` via `client.post_json`, prints confirmation.
+- **inputs**: `target_key_id: String`, `api_url: Option<String>`, `key: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `client.post_json`, `println!`
+- **called_by**: `run` (keys)
+- **mutates**: `api_keys.is_root_admin` via the API — this CLI process itself mutates nothing locally
+
+### `revoke_root_admin` (cli)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/keys.rs`
+- **purpose**: `hsip keys revoke-root-admin <target-key-id>` — unless `--yes`, prints what the operation does and requires typing `yes` at an interactive stdin prompt before calling `POST /v1/admin/root-admins/revoke`. Same non-technical-audience reasoning as `rotate_master`.
+- **inputs**: `target_key_id: String`, `api_url: Option<String>`, `key: Option<String>`, `yes: bool`
+- **outputs**: `Result<()>`
+- **calls**: `ApiClient::new`, `std::io::stdin().read_line`, `client.post_json`, `println!`
+- **called_by**: `run` (keys)
+- **mutates**: `api_keys.is_root_admin` via the API — this CLI process itself mutates nothing locally
 
 ---
 

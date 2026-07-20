@@ -745,9 +745,15 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
     let key_hash = hash_key(&raw_key);
     let key_id = Uuid::new_v4().to_string();
 
+    // The bootstrap key is both this tenant's 'owner' (can manage other keys
+    // in it) and a root admin (can rotate the master key, grant/revoke
+    // other root admins) — this INSERT is what actually establishes both on
+    // a fresh install; db.rs's migration backfill only covers upgrades of
+    // an already-existing database, which doesn't apply here since this row
+    // doesn't exist yet when migrations run.
     sqlx::query(
-        "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
-         VALUES (?, ?, ?, 'admin', 'human', ?, 1)",
+        "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, role, is_root_admin, created_at, active)
+         VALUES (?, ?, ?, 'admin', 'human', 'owner', 1, ?, 1)",
     )
     .bind(&key_id)
     .bind(&tenant_id)

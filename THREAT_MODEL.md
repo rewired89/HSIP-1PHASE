@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.8-draft  
+**Version:** 0.9-draft  
 **Date:** 2026-07-20  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -219,7 +219,7 @@ Until this revision, the master key that encrypts every tenant's Ed25519 signing
 
 `POST /v1/admin/master-key/rotate` re-encrypts every `identities.signing_key_b64` row and the singleton `anchor_identity` row under a freshly generated key inside one database transaction, then durably persists the new key to disk (staging file + `fsync` + atomic rename) and swaps it into the running process's memory — no restart, no downtime for other tenants' non-identity operations.
 
-**Authorization:** gated to the bootstrap admin key specifically (see §5's note on the admin trust boundary below) — this is a system-wide operation touching every tenant's identity, not a tenant-scoped one.
+**Authorization:** gated to whichever key(s) hold the `is_root_admin` flag (see §4.14) — this is a system-wide operation touching every tenant's identity, not a tenant-scoped one.
 
 **Residual risk:** a `state.master_key.write().await` lock is held for the entire rotation, serializing it against every concurrent signing/encryption operation — a brief, deliberate stop-the-world rather than a narrow, hard-to-reproduce corruption window. Separately, if the process crashes in the exact gap between the DB transaction committing and the key-file rename completing, the DB holds ciphertext under the new key while the on-disk file still has the old one; the staging file is deliberately left in place (not cleaned up) specifically so an operator can complete that rename manually rather than face silent, undetected data loss. This is the same category of residual risk this document already documents for decision-attestation anchoring (§ Decision Attestations trust model in `CLAUDE.md`) — narrow, acknowledged, and recoverable, not eliminated.
 
@@ -231,6 +231,22 @@ Until this revision, the master key that encrypts every tenant's Ed25519 signing
 
 *Source: `crates/hsip-api/src/routes/admin.rs`, `crates/hsip-cli/src/commands/keys.rs`*
 
+### 4.14 RBAC: Tenant-Scoped Roles and Root-Admin Grants
+
+Auditing the model above surfaced two gaps at once, both closed this revision: (1) within a tenant, *any* active key — including a low-privilege `ai_agent` key — could mint new `human` keys or revoke *any* other key in the same tenant, including the tenant's own admin key, with zero check; (2) node-level "root admin" (§4.13's gate) was a single hardcoded credential — `name == "admin"` in the first tenant ever created — with no way to add a second one short of editing the database by hand.
+
+**Tenant-scoped (`api_keys.role`, `'owner' | 'member'`):** `POST`/`DELETE /v1/keys*` now requires the caller's own key to be `role='owner'`; a `member` key (the default for anything created via `POST /v1/keys` unless the caller explicitly requests `role: "owner"`) can neither create nor revoke keys, including itself. `GET /v1/keys` (list) stays open to any active tenant key — informational only. `revoke` additionally refuses (`409`) to remove a tenant's *last* remaining active `owner` — otherwise the tenant becomes permanently unable to manage its own keys, including recovering from that exact mistake.
+
+**Node-level (`api_keys.is_root_admin`, `0 | 1`):** replaces the `name == "admin"` heuristic with an explicit, grantable flag, not tied to any tenant. `POST /v1/admin/root-admins/grant` / `.../revoke` (root-admin-only) let an existing root admin add or remove the flag on any active key, by id, in any tenant — the mechanism that makes more than one root admin possible at all. `revoke` refuses (`409`) if it would leave zero root admins on the node — the equivalent lockout guard to the tenant-level one above, since there is no recovery path from zero root admins except editing the database directly. `GET /v1/admin/root-admins` (root-admin-gated) lists who currently holds the flag.
+
+**Migration / upgrade path:** fresh installs get `role='owner'`/`is_root_admin=1` set explicitly on the bootstrap key's `INSERT` (`main.rs::bootstrap_admin`) and `role='owner'` on each sandbox trial tenant's sole key (`routes::sandbox::provision`) — not left to the backfill below, since a row created *after* migrations run in the same boot was never touched by them. Upgraded (pre-existing) databases get a one-time backfill in `db.rs`: the earliest-created key in each tenant becomes `'owner'`, every other still-unset key becomes `'member'`; the key named `admin` in the very first tenant ever created — the exact key §4.13's old gate already trusted — becomes a root admin, so nobody loses admin access across the upgrade.
+
+**Audit trail:** `POST`/`DELETE /v1/keys*` now write `key.created`/`key.revoked` audit entries — both were previously state-changing operations with no audit trail at all, a gap independent of but found alongside this work. Grant/revoke write `admin.root_admin_granted`/`admin.root_admin_revoked` on the target key's own tenant. `metrics::ROOT_ADMIN_CHANGES{action}` covers both.
+
+**Still not a full RBAC system, by design:** `is_root_admin` is one flat capability covering every node-level operation (no "can rotate but not grant," no per-operation scoping); `role` is a two-tier owner/member split, not fine-grained per-action permissions ("can create `ai_agent` keys but not `human` keys" isn't expressible). Both are sized to what HSIP's current operations actually need — two node-level operations sharing one gate, one tenant-level capability (key management) sharing one gate — not built out speculatively ahead of a second *kind* of operation that would need finer scoping. Revisit with real scoped grants only when one shows up.
+
+*Source: `crates/hsip-api/src/routes/keys.rs`, `crates/hsip-api/src/routes/admin.rs`, `crates/hsip-api/src/db.rs`, `crates/hsip-cli/src/commands/keys.rs`*
+
 ---
 
 ## 5. Trust Boundaries
@@ -241,7 +257,8 @@ Until this revision, the master key that encrypts every tenant's Ed25519 signing
 | HSIP server → SQLite | Trusted | Database must not be publicly accessible |
 | Master key storage → HSIP server | Critical | Compromise = all signing keys exposed |
 | Tenant A ↔ Tenant B | Untrusted | Isolated by `tenant_id` on every query |
-| Admin key holder (bootstrap tenant, key named `admin`) | Full — now including master key rotation | Can provision all tenant keys and, as of §4.13, rotate the node's master key (a system-wide operation touching every tenant's identity). This is a single global admin tied to the first tenant ever created, not a real RBAC system — protect this key like the master key itself. |
+| Root-admin key holder (`is_root_admin=1`, any tenant) | Full node-level — master key rotation + granting/revoking root-admin on other keys | As of §4.13/§4.14, can rotate the node's master key (a system-wide operation touching every tenant's identity) and grant/revoke the flag itself. No longer tied to a single hardcoded key — the bootstrap admin key starts with it, but any root admin can add more. Still one flat capability, not a real RBAC system — protect every root-admin key like the master key itself. |
+| Owner-role key holder (`role='owner'`, own tenant) | Full within its own tenant's key management | Can create and revoke keys — including granting `owner` to others — in its own tenant. Cannot see or touch another tenant's keys, and cannot reach node-level operations without also holding `is_root_admin`. |
 | AI agent key holder | Scoped | Velocity-limited, auto-revoked at 1000 req/min |
 | Trusted peer (federated trust) | Explicit | Verify key manually registered; messages verified locally |
 
@@ -276,7 +293,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | **Single maintainer, no succession plan** | Medium | Relevant to any team evaluating HSIP for compliance-grade audit trails: patch timelines and long-term availability are best-effort, not contractual (see §9). No code fix for this — flagged here for buyer due diligence, not left implicit in the disclosure section alone. |
 | Master key on filesystem (no HSM) | Medium | Use `HSIP_MASTER_KEY` env var + external secrets manager for production — now functional, see §6. Rotation of an env-var-sourced key can now be automated via `HSIP_ROTATION_HOOK` (§4.13) instead of being purely manual. |
 | **Rotation hook execution is a new trust boundary** | Low | `HSIP_ROTATION_HOOK` runs an operator-configured executable with the new master key on stdin. The path is only ever read from server-side environment configuration, never from an HTTP request — no caller can influence which script runs or with what arguments. The operator who sets this env var is implicitly trusting that script already, the same way `config.toml` or `master_key_path` are already-trusted operator-supplied paths; HSIP does not sandbox or validate the hook's contents. |
-| **Single global admin model** | Low-Medium | `routes::admin::require_root_admin` (§4.13) authorizes master key rotation to exactly one key: the one named `admin` in the first tenant ever created. There is no RBAC, no multiple admins, no scoped permissions — the bootstrap admin key is a de facto root credential for one system-wide operation today, and any future node-level operation would need the same treatment or a real permissions model. |
+| **Flat RBAC model, not scoped permissions** | Low | §4.14 closed the "single hardcoded root-admin credential" gap (multiple root admins can now exist via grant/revoke) and the "any key can manage any other key in its tenant" gap (now `role='owner'`-gated). What remains by design: `is_root_admin` is one flat capability covering every node-level operation (no "can rotate but not grant"), and `role` is a two-tier split, not per-action scoped permissions. Revisit only when an operation shows up that genuinely needs finer scoping than that. |
 | **SQLite → PostgreSQL migration path is undocumented and untested** | Medium | `DATABASE_URL` pointing at PostgreSQL is supported by `db.rs`'s `AnyPool`, but no migration tooling or tested procedure exists for moving an existing SQLite deployment's data over. Treat a PostgreSQL deployment as a fresh install, not an upgrade, until this is tested. |
 | **OpenTimestamps calendar submission unverified end-to-end** | Medium | `anchor.rs`'s HTTP client logic is unit-tested against a mock server only. Outbound HTTPS to `*.calendar.opentimestamps.org` has been confirmed blocked in every sandboxed environment this project has been developed in to date (including this session's, via a 403 on the CONNECT tunnel) — real-network submission has never been observed to complete. Verify from an unrestricted network before relying on it for compliance purposes. |
 | In-memory rate limiter resets on restart | Low | A burst attack timed around a restart or deploy can temporarily exceed rate limits |

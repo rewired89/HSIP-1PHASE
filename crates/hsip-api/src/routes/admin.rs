@@ -1,18 +1,25 @@
 //! Node-level administrative operations that are not scoped to a single
-//! tenant — currently just master key rotation. Distinct from every other
-//! route in this file tree, which all operate within one tenant's data.
+//! tenant — master key rotation, and managing who else can do it. Distinct
+//! from every other route in this file tree, which all operate within one
+//! tenant's data.
 //!
-//! HSIP does not have a first-class "root admin" concept distinct from
-//! "the first tenant's key named admin" (see `main.rs::bootstrap_admin`).
-//! `require_root_admin` below is deliberately stricter than "any key named
-//! admin" — it also requires the calling tenant to be the very first tenant
-//! ever created, so a tenant in a multi-tenant deployment can't grant
-//! itself global authority just by naming one of its own keys "admin".
-//! This is a known limitation of HSIP's current admin model, not a full
-//! superuser system — documented here and in THREAT_MODEL.md.
+//! Root-admin is an explicit, grantable flag (`api_keys.is_root_admin`),
+//! not tied to any particular tenant or key name. It replaces an earlier
+//! model where the only root admin was "the key named `admin` in the first
+//! tenant ever created" — a single hardcoded credential with no way to add
+//! a second one short of editing the database by hand. The bootstrap admin
+//! key still gets `is_root_admin=1` automatically (see
+//! `main.rs::bootstrap_admin` and `db.rs`'s upgrade backfill), but any
+//! existing root admin can now grant or revoke the flag on other keys via
+//! `POST /v1/admin/root-admins/grant` / `.../revoke` below. This is still
+//! not a full RBAC/permissions system — root-admin is a single flat
+//! capability covering every node-level operation, not scoped grants — but
+//! it removes the single-hardcoded-credential limitation. See
+//! THREAT_MODEL.md for the residual "one flat capability, not scoped
+//! roles" tradeoff.
 
 use axum::{extract::State, http::HeaderMap, Json};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 
@@ -25,11 +32,7 @@ use crate::{
     state::AppState,
 };
 
-async fn require_root_admin(
-    db: &crate::db::Db,
-    headers: &HeaderMap,
-    tenant_id: &str,
-) -> ApiResult<()> {
+async fn require_root_admin(db: &crate::db::Db, headers: &HeaderMap) -> ApiResult<()> {
     let token = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
@@ -38,23 +41,19 @@ async fn require_root_admin(
         .ok_or_else(|| ApiError::Unauthorized("Missing Authorization: Bearer <key>".into()))?;
     let key_hash = hash_key(token);
 
-    let key_row = sqlx::query("SELECT name FROM api_keys WHERE key_hash = ? AND tenant_id = ?")
-        .bind(&key_hash)
-        .bind(tenant_id)
-        .fetch_optional(db)
-        .await?
-        .ok_or_else(|| ApiError::Internal("authenticated key vanished mid-request".into()))?;
-    let key_name: String = key_row.try_get(0)?;
+    let key_row =
+        sqlx::query("SELECT is_root_admin FROM api_keys WHERE key_hash = ? AND active = 1")
+            .bind(&key_hash)
+            .fetch_optional(db)
+            .await?
+            .ok_or_else(|| ApiError::Internal("authenticated key vanished mid-request".into()))?;
+    let is_root_admin: i64 = key_row.try_get(0)?;
 
-    let root_tenant_row = sqlx::query("SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1")
-        .fetch_optional(db)
-        .await?
-        .ok_or_else(|| ApiError::Internal("no tenants exist".into()))?;
-    let root_tenant_id: String = root_tenant_row.try_get(0)?;
-
-    if key_name != "admin" || tenant_id != root_tenant_id {
+    if is_root_admin == 0 {
         return Err(ApiError::Unauthorized(
-            "This operation is restricted to the bootstrap admin key.".into(),
+            "This operation is restricted to a root-admin key. An existing root admin can \
+             grant this key access via POST /v1/admin/root-admins/grant."
+                .into(),
         ));
     }
     Ok(())
@@ -173,10 +172,13 @@ pub struct MasterKeyFingerprintResponse {
 /// server logs or triggering an actual rotation (which changes the key).
 pub async fn master_key_fingerprint(
     State(state): State<AppState>,
-    tenant: TenantId,
+    // Extractor still runs auth/rate-limit/replay checks even though the
+    // resolved tenant_id itself is unused now that require_root_admin
+    // checks the caller's is_root_admin flag directly instead.
+    _tenant: TenantId,
     headers: HeaderMap,
 ) -> ApiResult<Json<MasterKeyFingerprintResponse>> {
-    require_root_admin(&state.db, &headers, &tenant.0).await?;
+    require_root_admin(&state.db, &headers).await?;
 
     let key = state.master_key.read().await;
     Ok(Json(MasterKeyFingerprintResponse {
@@ -229,10 +231,10 @@ pub struct RotateMasterKeyResponse {
 /// this cost is the right tradeoff.
 pub async fn rotate_master_key(
     State(state): State<AppState>,
-    tenant: TenantId,
+    _tenant: TenantId,
     headers: HeaderMap,
 ) -> ApiResult<Json<RotateMasterKeyResponse>> {
-    require_root_admin(&state.db, &headers, &tenant.0).await?;
+    require_root_admin(&state.db, &headers).await?;
 
     let Some(persistence) = resolve_persistence(&state) else {
         return Err(ApiError::BadRequest(
@@ -424,4 +426,172 @@ pub async fn rotate_master_key(
         rotation_hook: rotation_hook_out,
         note,
     }))
+}
+
+// ── Root-admin management ───────────────────────────────────────────────────
+//
+// is_root_admin is a node-wide flag, not scoped to any one tenant — the
+// key being granted/revoked/listed can belong to any tenant, not just the
+// caller's own. Every handler here still requires TenantId as an extractor
+// (for auth/rate-limit/replay enforcement) even though the resolved
+// tenant_id itself is unused.
+
+#[derive(Deserialize)]
+pub struct RootAdminKeyRequest {
+    pub key_id: String,
+}
+
+#[derive(Serialize)]
+pub struct RootAdminRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub name: String,
+    pub created_at: i64,
+}
+
+async fn root_admin_count(db: &crate::db::Db) -> ApiResult<i64> {
+    let row = sqlx::query("SELECT COUNT(*) FROM api_keys WHERE is_root_admin = 1 AND active = 1")
+        .fetch_one(db)
+        .await?;
+    Ok(row.try_get(0)?)
+}
+
+/// `GET /v1/admin/root-admins` — lists every active key currently holding
+/// the root-admin flag, across all tenants. Root-admin-gated so this
+/// doesn't leak "who holds node-level authority" to anyone but the people
+/// who already have it.
+pub async fn list_root_admins(
+    State(state): State<AppState>,
+    _tenant: TenantId,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<RootAdminRecord>>> {
+    require_root_admin(&state.db, &headers).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, tenant_id, name, created_at FROM api_keys
+         WHERE is_root_admin = 1 AND active = 1 ORDER BY created_at ASC",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let out = rows
+        .iter()
+        .map(|r| -> Result<RootAdminRecord, sqlx::Error> {
+            Ok(RootAdminRecord {
+                id: r.try_get(0)?,
+                tenant_id: r.try_get(1)?,
+                name: r.try_get(2)?,
+                created_at: r.try_get(3)?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Json(out))
+}
+
+/// `POST /v1/admin/root-admins/grant` — an existing root admin grants the
+/// flag to another active key (by id, any tenant). This is the mechanism
+/// that makes it possible to have more than one root admin at all — before
+/// this existed, the only root admin was whichever key `bootstrap_admin`
+/// created on first boot, with no way to add a second short of editing the
+/// database by hand.
+pub async fn grant_root_admin(
+    State(state): State<AppState>,
+    _tenant: TenantId,
+    headers: HeaderMap,
+    Json(req): Json<RootAdminKeyRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_root_admin(&state.db, &headers).await?;
+
+    let row = sqlx::query("SELECT tenant_id, active FROM api_keys WHERE id = ?")
+        .bind(&req.key_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Key {} not found", req.key_id)))?;
+    let target_tenant: String = row.try_get(0)?;
+    let active: i64 = row.try_get(1)?;
+    if active == 0 {
+        return Err(ApiError::BadRequest(
+            "Cannot grant root-admin to a revoked key.".into(),
+        ));
+    }
+
+    sqlx::query("UPDATE api_keys SET is_root_admin = 1 WHERE id = ?")
+        .bind(&req.key_id)
+        .execute(&state.db)
+        .await?;
+
+    let now = now_ms();
+    let _ = crate::audit_log::record(
+        &state.db,
+        &target_tenant,
+        "admin.root_admin_granted",
+        None,
+        Some(&format!("key_id={}", req.key_id)),
+        now,
+    )
+    .await;
+    metrics::ROOT_ADMIN_CHANGES
+        .with_label_values(&["granted"])
+        .inc();
+
+    Ok(Json(
+        serde_json::json!({ "granted": req.key_id, "tenant_id": target_tenant }),
+    ))
+}
+
+/// `POST /v1/admin/root-admins/revoke` — refuses if this would leave zero
+/// root admins on the node (would lock every tenant out of master key
+/// rotation with no way to recover except editing the database by hand —
+/// the exact failure mode granting a second root admin exists to avoid).
+pub async fn revoke_root_admin(
+    State(state): State<AppState>,
+    _tenant: TenantId,
+    headers: HeaderMap,
+    Json(req): Json<RootAdminKeyRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_root_admin(&state.db, &headers).await?;
+
+    let row = sqlx::query("SELECT tenant_id, is_root_admin FROM api_keys WHERE id = ?")
+        .bind(&req.key_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Key {} not found", req.key_id)))?;
+    let target_tenant: String = row.try_get(0)?;
+    let is_admin: i64 = row.try_get(1)?;
+    if is_admin == 0 {
+        return Err(ApiError::BadRequest("Key is not a root admin.".into()));
+    }
+
+    if root_admin_count(&state.db).await? <= 1 {
+        return Err(ApiError::Conflict(
+            "Cannot revoke the last root admin — this would lock every tenant out of \
+             node-level operations (master key rotation) with no way to recover except \
+             editing the database directly."
+                .into(),
+        ));
+    }
+
+    sqlx::query("UPDATE api_keys SET is_root_admin = 0 WHERE id = ?")
+        .bind(&req.key_id)
+        .execute(&state.db)
+        .await?;
+
+    let now = now_ms();
+    let _ = crate::audit_log::record(
+        &state.db,
+        &target_tenant,
+        "admin.root_admin_revoked",
+        None,
+        Some(&format!("key_id={}", req.key_id)),
+        now,
+    )
+    .await;
+    metrics::ROOT_ADMIN_CHANGES
+        .with_label_values(&["revoked"])
+        .inc();
+
+    Ok(Json(
+        serde_json::json!({ "revoked": req.key_id, "tenant_id": target_tenant }),
+    ))
 }

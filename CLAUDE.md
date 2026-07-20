@@ -124,8 +124,11 @@ POST      /v1/trust/verify          Verify a message signature from a trusted pe
 POST/GET  /v1/decisions             Sign + chain an AI-agent decision attestation / list this tenant's decisions
 GET       /v1/decisions/:id/proof   Full self-contained verification bundle (signature + Merkle proof + anchor)
 POST      /v1/decisions/verify      Pure verification of a bundle — no auth, no DB call, runnable by anyone
-POST      /v1/admin/master-key/rotate  Rotate the master key (bootstrap admin key only) — see Master Key Rotation below
-GET       /v1/admin/master-key/fingerprint  SHA-256 fingerprint of the running master key — read-only, no mutation, admin key only
+POST      /v1/admin/master-key/rotate  Rotate the master key (root-admin key only) — see Master Key Rotation below
+GET       /v1/admin/master-key/fingerprint  SHA-256 fingerprint of the running master key — read-only, no mutation, root-admin key only
+GET       /v1/admin/root-admins      List every active key holding root-admin privilege — root-admin key only, see RBAC below
+POST      /v1/admin/root-admins/grant   Grant root-admin to another active key by id — root-admin key only
+POST      /v1/admin/root-admins/revoke  Revoke root-admin from a key by id — refused if it's the last one — root-admin key only
 GET       /health                   {"status":"ok","version":"0.2.0"}
 GET       /metrics                  Prometheus metrics
 GET       /openapi.json             OpenAPI 3.0 spec
@@ -162,7 +165,7 @@ All tables created at startup in `db::run_migrations()` — **no separate migrat
 | Table | Key columns | Notes |
 |---|---|---|
 | `tenants` | id, name, created_at | — |
-| `api_keys` | id, tenant_id, key_hash, name, agent_type, expires_at, active | Raw key never stored |
+| `api_keys` | id, tenant_id, key_hash, name, agent_type, role, is_root_admin, expires_at, active | Raw key never stored. `role` ('owner'\|'member') gates tenant-scoped key management (create/revoke other keys in the same tenant) — see `routes/keys.rs`. `is_root_admin` (0/1) gates node-level operations spanning every tenant (master key rotation) — see `routes/admin.rs` and RBAC below. |
 | `identities` | tenant_id, signing_key_b64, verify_key_b64 | Private key encrypted with ChaCha20-Poly1305 |
 | `consents` | id, tenant_id, peer_verify_key, status, expires_ms, granted_by_key_type | UNIQUE(tenant_id, peer_verify_key). `granted_by_key_type` (human/service/ai_agent) records which kind of key authorized the grant — nullable, pre-migration rows are NULL. |
 | `messages` | id, tenant_id, content, signature, timestamp | — |
@@ -188,7 +191,7 @@ Was previously impossible — the master key was loaded once into an `Arc<Vec<u8
 
 **What it does, in order:** generates a new 32-byte key → re-encrypts every tenant's `identities.signing_key_b64` and the singleton `anchor_identity` row inside one DB transaction → writes the new key to a staging file next to the real master key path and `fsync`s it → commits the transaction → atomically renames the staging file onto the real path → swaps the in-memory key. A `state.master_key.write().await` guard is held for the *entire* operation, not just the final swap — without that, a concurrent identity creation could encrypt a new row under the old key after this function's read but before the in-memory swap, permanently orphaning that one row. Writes a `master_key.rotated` audit entry per tenant touched and returns SHA-256 fingerprints (never the raw key) of the old and new key.
 
-**Gating:** `require_root_admin()` in `routes/admin.rs` — requires the calling key's `name == "admin"` *and* its tenant to be the very first tenant ever created. HSIP has no first-class superuser concept distinct from "the bootstrap admin key," so this is deliberately stricter than "any key named admin" (a tenant in a multi-tenant deployment must not be able to grant itself global authority by naming one of its own keys "admin"). Documented limitation, not a full RBAC system.
+**Gating:** `require_root_admin()` in `routes/admin.rs` — requires the calling key's `is_root_admin` column to be `1`. See RBAC below for how that flag is granted/revoked; it replaced an earlier "`name == "admin"` and tenant is the first ever created" heuristic that only ever supported exactly one root admin.
 
 **`HSIP_MASTER_KEY`-sourced keys:** resolved via `routes::admin::resolve_persistence` / `KeyPersistence` (`File(path)` | `Hook(command)`). When the key comes from `HSIP_MASTER_KEY` (`state.master_key_path` is `None`), rotation isn't automatically refused anymore — if `HSIP_ROTATION_HOOK` names an executable, that script is invoked with the new key hex-encoded on stdin (never as a CLI arg — visible in `ps`) and `HSIP_ROTATION_OLD_FINGERPRINT`/`HSIP_ROTATION_NEW_FINGERPRINT` env vars for context. Its exit code is the only signal trusted: non-zero or a 30s timeout aborts rotation with the DB transaction still uncommitted — nothing changes. **HSIP never holds Vault/AWS/etc. credentials itself** — the hook is the operator's own trusted tooling, run with whatever auth it already has; this was a deliberate design choice over embedding a specific vendor's SDK (see the QA-driven design discussion this originated from) precisely to avoid giving the HSIP process a new secret to protect. If no `master_key_path` *and* no `HSIP_ROTATION_HOOK`, rotation still refuses with an actionable error, same as before. Covered by `test_master_key_rotation_hook_for_env_sourced_key` (Unix-only — builds/chmods shell scripts as test hooks), which proves: refusal with no hook, a succeeding hook receives exactly the new key and the DB genuinely re-encrypts, and — the safety-critical case — a *failing* hook leaves the database completely untouched, not partially rotated. Also verified end-to-end against a real running server with `HSIP_MASTER_KEY` + `HSIP_ROTATION_HOOK` both set.
 
@@ -197,6 +200,29 @@ Was previously impossible — the master key was loaded once into an `Arc<Vec<u8
 **Read-only companion:** `GET /v1/admin/master-key/fingerprint` — same `require_root_admin()` gate, no mutation, returns the current key's fingerprint, `master_key_path`, and `rotation_available` (whether rotation currently has anywhere to persist a new key — `true` for file-backed keys or env-var-sourced keys with a hook configured). Exists because before it did, the *only* way to see a fingerprint was the startup log or a rotation response — there was no way to check "does my backup file actually match what's running right now" without either grepping server logs or triggering a real rotation. Covered by `test_master_key_fingerprint_is_read_only_and_admin_gated` — proves it's idempotent (same fingerprint on repeated calls) and admin-gated the same way rotation is.
 
 **CLI:** `hsip keys master-fingerprint` and `hsip keys rotate-master` in `crates/hsip-cli/src/commands/keys.rs`. `rotate-master` prints what it's about to do and requires typing `yes` at an interactive prompt before calling the API — `--yes` skips that for scripts/automation. This was deliberately built as a CLI command and not left as "call the HTTP endpoint yourself" — HSIP's original design point was non-technical users, and requiring hand-rolled `curl` with bearer auth for a rotation operation would have made it unreachable for exactly that audience, while `--yes` keeps it scriptable for the enterprise/ops use case the CLI also needs to serve.
+
+## RBAC: Tenant-Scoped Roles and Root-Admin Grants
+
+Two independent, deliberately simple layers — not a general permissions system. Added because auditing the original model surfaced two real gaps at once: (1) within a tenant, *any* active key — including a low-privilege `ai_agent` key — could mint new `human` keys or revoke *any* other key in the same tenant, including the tenant's own admin key, with zero check; (2) node-level "root admin" was a single hardcoded credential (`name == "admin"` in the first tenant ever created) with no way to add a second one short of editing the database by hand.
+
+### Tenant-scoped: `api_keys.role` ('owner' | 'member')
+
+- `owner` can create and revoke keys in its own tenant via `POST`/`DELETE /v1/keys*`. `member` (the default for every key created via `POST /v1/keys` unless the caller explicitly requests `"role":"owner"`) can do neither — same 401 shape as every other privilege check in this codebase.
+- `GET /v1/keys` (list) stays open to any active key in the tenant — informational only, not a mutation, and the dashboard/CLI need it to show key metadata regardless of the caller's role.
+- `routes::keys::revoke` refuses to revoke a tenant's *last* remaining active `owner` key (`409 Conflict`) — otherwise the tenant becomes permanently unable to manage its own keys, including recovering from that exact mistake.
+- Fresh installs: `main.rs::bootstrap_admin` sets `role='owner'` explicitly on the bootstrap key's INSERT. `routes::sandbox::provision` does the same for each trial tenant's sole key. Upgraded (pre-existing) databases: `db.rs`'s migration backfill makes the earliest-created key in each tenant `'owner'`, every other still-NULL key `'member'`.
+
+### Node-level: `api_keys.is_root_admin` (0 | 1)
+
+- Gates `POST /v1/admin/master-key/rotate` and `GET /v1/admin/master-key/fingerprint` via `require_root_admin()` — a straight `SELECT is_root_admin FROM api_keys WHERE key_hash=? AND active=1` check, no tenant scoping (the flag is node-wide by design; an anchor batch and a master key both span every tenant).
+- `POST /v1/admin/root-admins/grant` / `.../revoke` (root-admin-only, `key_id` in the body) are how a second, third, etc. root admin gets created — the mechanism that didn't exist before this. `revoke` refuses (`409 Conflict`) if it would leave zero root admins on the node, mirroring the last-owner guard above; there'd be no way to recover except editing the database directly.
+- `GET /v1/admin/root-admins` lists every active root-admin key (id, tenant_id, name, created_at) — root-admin-gated so it doesn't leak "who holds node-level authority" to anyone but the people who already have it.
+- Every grant/revoke writes an `admin.root_admin_granted`/`admin.root_admin_revoked` audit entry (on the *target* key's own tenant) and increments `metrics::ROOT_ADMIN_CHANGES{action}`. `routes::keys::create`/`revoke` similarly write `key.created`/`key.revoked` now — both were previously state-changing operations with no audit trail at all, a gap independent of but found alongside this work.
+- Fresh installs: `bootstrap_admin` sets `is_root_admin=1` explicitly. Upgraded databases: `db.rs`'s migration backfill sets it for the key named `admin` in the very first tenant ever created — the exact key the old heuristic already trusted, so nobody loses admin access on upgrade.
+
+**CLI:** `hsip keys list-root-admins`, `hsip keys grant-root-admin <key_id>`, `hsip keys revoke-root-admin <key_id>` (interactive `yes` confirm, `--yes` for scripts) in `crates/hsip-cli/src/commands/keys.rs` — same non-technical-audience reasoning as `rotate-master` above.
+
+**Still not a full RBAC system, by design:** `is_root_admin` is one flat capability covering every node-level operation, not scoped grants (no "can rotate but not grant," no per-operation permissions). `role` is a two-tier owner/member split, not fine-grained per-action permissions. Both are deliberately as simple as the current two node-level operations (rotate + fingerprint) and the one tenant-level capability (key management) actually need — see THREAT_MODEL.md for the residual tradeoff. Revisit with real scoped grants only when an operation shows up that the flat model can't express.
 
 ### Admin Key Location (platform-aware)
 
@@ -242,9 +268,14 @@ hsip trust list [--api-url URL] [--key K]
 hsip trust remove <id> [--api-url URL] [--key K]
 hsip trust verify --from <label> <content> <signature> [--api-url URL] [--key K]
 
-# Master key inspection/rotation (admin key only)
+# Master key inspection/rotation (root-admin key only)
 hsip keys master-fingerprint [--api-url URL] [--key K]
 hsip keys rotate-master [--yes] [--api-url URL] [--key K]
+
+# Root-admin management (root-admin key only)
+hsip keys list-root-admins [--api-url URL] [--key K]
+hsip keys grant-root-admin <target-key-id> [--api-url URL] [--key K]
+hsip keys revoke-root-admin <target-key-id> [--yes] [--api-url URL] [--key K]
 ```
 
 The existing commands in `main.rs` handle: keygen, init, key import/export (plain + encrypted), consent over UDP, session management, token issue/verify, discovery, reputation, daemon, audit export/verify/query. Do not delete these — they are separate functionality.
@@ -268,7 +299,7 @@ crates/hsip-cli/src/commands/
   util.rs       admin_key_path() + load_admin_key() — platform-aware, shared by all commands
   agent.rs      AgentCmd enum: Register, List, Revoke, Discover + status() pub fn
   trust.rs      TrustCmd enum: Add, List, Remove, Verify
-  keys.rs       KeysCmd enum: MasterFingerprint, RotateMaster (interactive y/N confirm, --yes to skip)
+  keys.rs       KeysCmd enum: MasterFingerprint, RotateMaster, ListRootAdmins, GrantRootAdmin, RevokeRootAdmin (interactive y/N confirm, --yes to skip)
   up.rs         UpArgs + run() — onboarding wizard
   diag.rs       Diagnostics (pre-existing)
   handshake.rs  UDP handshake (pre-existing)
@@ -497,6 +528,9 @@ Go: `sdks/go/hsip/client.go`
 - **Consent grant/revoke must record `granted_by_key_type`/`revoked_by=` (via `resolve_granting_key_type`).** Consent is the one place HSIP claims to represent authorization — losing track of whether a human or an AI agent (acting on its own credential) was the actor defeats the point of calling it "consent."
 - **`HSIP_ROTATION_HOOK` must receive the key on stdin, never as a CLI argument.** Process arguments are visible via `ps`/process listings on some systems; stdin is not. Don't add a `--key <hex>`-style invocation as a "convenience" later. HSIP must never hold Vault/AWS/etc. credentials itself — the hook is the operator's own trusted tooling, not a new secret HSIP manages; don't add vendor SDKs to `hsip-api` to "simplify" this.
 - **HTTP replay protection (`x-hsip-timestamp`/`x-hsip-nonce`) must stay fully opt-in.** `check_replay_protection` in `auth.rs` is a no-op when neither header is present — do not make either header mandatory, or every existing caller (all current SDKs, the CLI, the dashboard) breaks. If only one of the two is sent, that's a `400`, never silently treated as "not opted in" — a caller must not be able to think it's protected when it isn't.
+- **`routes::keys::create`/`revoke` must keep checking `role == 'owner'` before mutating.** Before this existed, any active key in a tenant — including a low-privilege `ai_agent` key — could mint new `human` keys or revoke any other key in the same tenant, including the tenant's own owner key. Don't relax this to "any active key" again, and don't let `revoke` drop a tenant's last active `owner` key (it must return `409 Conflict` instead — see the last-owner guard).
+- **`routes::admin::require_root_admin` must keep checking `is_root_admin`, never key name or tenant position.** The old `name == "admin" && tenant is first-ever` heuristic only ever supported one root admin; `POST /v1/admin/root-admins/grant`/`.../revoke` is the only sanctioned way to change who holds the flag, and `revoke` must keep refusing to drop the last remaining root admin on the node (`409 Conflict`) — there is no recovery path from zero root admins except editing the database directly.
+- **New tenants' first key, and the bootstrap admin key, must get `role`/`is_root_admin` set explicitly on `INSERT`, not left to migration backfill.** `db.rs`'s backfill only fixes up rows that already existed *before* migrations ran on a given boot — a row created by `bootstrap_admin` or `routes::sandbox::provision` afterward, in the same process lifetime, was never touched by that pass and would be stuck with `role=NULL`/`is_root_admin=0` forever if the INSERT itself didn't set them.
 
 ---
 
@@ -533,6 +567,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Read-only `GET /v1/admin/master-key/fingerprint` + `hsip keys master-fingerprint`/`rotate-master` CLI (interactive y/N confirm, `--yes` for scripts) — closed the gap where rotation and fingerprinting were only reachable by hand-rolling `curl` with bearer auth, unreachable for HSIP's original non-technical-user audience | `routes/admin.rs`, `commands/keys.rs`, `main.rs` |
 | `HSIP_ROTATION_HOOK`: vendor-agnostic auto-rotation for `HSIP_MASTER_KEY`-sourced keys. Rotation no longer unconditionally refuses when the key is env-var-sourced — a configured hook script receives the new key on stdin and is trusted by exit code only; HSIP never holds Vault/AWS/etc. credentials itself | `routes/admin.rs` |
 | HTTP replay protection: opt-in `x-hsip-timestamp`/`x-hsip-nonce` headers checked in the `TenantId` extractor, per-key nonce dedup in a swept `DashMap`, `metrics::REPLAY_REJECTED` — previously the HTTP API had no defense against a captured request being resent verbatim (THREAT_MODEL.md §4.3's documented gap), only rate limiting and key expiry | `auth.rs`, `state.rs`, `main.rs`, `metrics.rs` |
+| RBAC beyond the bootstrap admin key: tenant-scoped `role` ('owner'\|'member') gating key create/revoke (previously any active key, including an `ai_agent` key, could mint or revoke any key in its tenant with no check) + node-level `is_root_admin` flag replacing the single hardcoded "`name==admin` in the first tenant" credential, with grant/revoke/list endpoints and CLI so more than one root admin can exist. Last-owner and last-root-admin lockout guards; `key.created`/`key.revoked`/`admin.root_admin_granted`/`admin.root_admin_revoked` audit entries (key create/revoke had none before); `metrics::ROOT_ADMIN_CHANGES` | `db.rs`, `main.rs`, `routes/keys.rs`, `routes/admin.rs`, `routes/sandbox.rs`, `routes/mod.rs`, `metrics.rs`, `commands/keys.rs` |
 
 ---
 
@@ -557,6 +592,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - `GET /v1/admin/master-key/fingerprint` (read-only) + `hsip keys master-fingerprint` / `hsip keys rotate-master` CLI — closes the "admin has to hand-roll curl with bearer auth" gap for the audience HSIP was originally built for
 - `HSIP_ROTATION_HOOK` — vendor-agnostic auto-rotation for `HSIP_MASTER_KEY`-sourced deployments, without HSIP ever holding secrets-manager credentials
 - HTTP replay protection — opt-in `x-hsip-timestamp`/`x-hsip-nonce` headers, closes THREAT_MODEL.md §4.3's previously-open "HTTP API has no per-request replay defense" gap without breaking any existing caller
+- RBAC beyond the bootstrap admin key — tenant-scoped owner/member roles for key management, node-level `is_root_admin` flag + grant/revoke/list endpoints replacing the single-hardcoded-credential root-admin model. Still a flat capability (not scoped grants) and a two-tier role split (not fine-grained permissions) by design — see the RBAC section above for why that's the right amount for what HSIP needs today
 
 ### Remaining
 
@@ -571,9 +607,10 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - **Dashboard audit verify indicator** — surface `GET /v1/audit/verify`'s `valid`/`unchained` fields somewhere in the Audit tab so a broken chain is visible without calling the API directly.
 - **Externally anchor the audit log hash chain** — decisions get Merkle-batched and submitted to OpenTimestamps (see Decision Attestations above); the audit log's BLAKE3 chain (see Audit Log Hash Chain above) is self-verifiable but not yet anchored outside this database, so an attacker with DB write access can still delete the whole chain undetected, just not alter what remains. Same shape of fix as decisions, not yet done for audit.
 - **Document and test a real SQLite → PostgreSQL migration path** — `DATABASE_URL` pointing at Postgres works for a fresh install (`db::run_migrations()` is backend-agnostic SQL), but there's no tested procedure for moving an existing SQLite deployment's data over. Treat it as a fresh install until this exists.
-- **Real RBAC beyond "the bootstrap admin key"** — `routes::admin::require_root_admin` is a single global admin tied to the first tenant ever created, not a proper permissions system. Deliberately not built out further yet: two node-level operations (rotate + fingerprint) both fit the same single-admin gate cleanly, and a real permissions model (roles, scoped grants, multiple admins) is real design work that shouldn't be bolted on speculatively before there's a second *kind* of operation that actually needs it. Revisit when one shows up — likely the first candidate for HSIP's enterprise-readiness track, since "single root credential, no RBAC" is a real objection in an enterprise security review.
 - **Dashboard: surface master key rotation + its audit trail** — no UI for `POST /v1/admin/master-key/rotate` yet; an admin has to call it directly.
 - **SDK/CLI adoption of `x-hsip-timestamp`/`x-hsip-nonce`** — the server-side replay-protection check exists, but no HSIP-authored client sends these headers yet. Port once a caller (SDK or CLI) actually needs replay protection, same pattern as decision-attestation SDK parity above — don't add it speculatively to every SDK before there's a caller who needs it.
+- **Real scoped-permission RBAC beyond flat `role`/`is_root_admin`** — the current model is deliberately two flat capabilities (tenant owner/member, node root-admin/not), not per-action scoped grants ("can rotate the master key but not grant root-admin to others," "can create ai_agent keys but not human keys," etc.). Fits everything HSIP needs today cleanly; revisit only when an operation shows up that the flat model genuinely can't express, same reasoning as before this round of work — don't bolt on a scoped-permissions engine speculatively.
+- **Dashboard: surface tenant `role` and root-admin management** — no UI yet for seeing/changing a key's `role`, or for `GET/POST /v1/admin/root-admins*`; both are curl/CLI-only today.
 
 ### Before adding new API routes
 1. Add the route function in the relevant `crates/hsip-api/src/routes/*.rs` file

@@ -89,10 +89,13 @@ pub async fn provision(
     let key_hash = hash_key(&raw_key);
     let key_id = Uuid::new_v4().to_string();
 
+    // 'owner' since this is the sandbox tenant's only key — if the trial
+    // user creates additional keys via POST /v1/keys, this is the one that
+    // has to be allowed to do it.
     sqlx::query(
         "INSERT INTO api_keys
-         (id, tenant_id, key_hash, name, agent_type, created_at, expires_at, active)
-         VALUES (?, ?, ?, 'sandbox-trial', 'human', ?, ?, 1)",
+         (id, tenant_id, key_hash, name, agent_type, role, created_at, expires_at, active)
+         VALUES (?, ?, ?, 'sandbox-trial', 'human', 'owner', ?, ?, 1)",
     )
     .bind(&key_id)
     .bind(&tenant_id)
