@@ -9,16 +9,21 @@
 //! whatever they hand back as an opaque blob (`decision_anchors.ots_proof`)
 //! — it does not parse or validate the OpenTimestamps `.ots` binary format,
 //! and it does not yet poll calendars to "upgrade" a pending commitment
-//! into one confirmed by a mined Bitcoin block. Both are natural next steps
-//! once submission is confirmed working against real calendar servers.
+//! into one confirmed by a mined Bitcoin block. That's the natural next step
+//! now that submission itself is confirmed working — see below.
 //!
-//! **This client could not be live-tested against real calendars during
-//! development**: the sandbox this was built in blocks outbound HTTPS to
-//! arbitrary hosts by policy (confirmed via `alice.btc.calendar
-//! .opentimestamps.org` and `bob.btc.calendar.opentimestamps.org` both
-//! getting a `403` on the CONNECT tunnel, logged by the sandbox's own
-//! egress proxy). Verify connectivity in a real deployment before relying
-//! on this for anything.
+//! **Live-tested against real calendars, from a real unrestricted network**
+//! (every sandbox this project had previously been developed in blocked
+//! outbound HTTPS to arbitrary hosts by policy — this had only ever been
+//! unit-tested against a mocked calendar until now). Ran a real `hsip-api`
+//! server in desktop mode, recorded a decision, and let the anchor job
+//! submit it for real: `GET /v1/decisions/:id/proof` came back
+//! `ots_status: "pending"` with a genuine calendar receipt in `ots_proof`
+//! — decoding those bytes shows `alice.btc.calendar.opentimestamps.org`'s
+//! own URL embedded in its response, and the byte count matches a direct
+//! curl/`Invoke-WebRequest` `POST <calendar>/digest` against the same
+//! calendar. Not a placeholder or a mocked response — see THREAT_MODEL.md
+//! §4.20 for the full verification writeup.
 
 use anyhow::{bail, Context, Result};
 

@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.16-draft  
+**Version:** 0.17-draft  
 **Date:** 2026-07-20  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -341,6 +341,34 @@ A full-codebase security self-review — not a third-party audit (the author bui
 
 ---
 
+### 4.20 OpenTimestamps Calendar Submission Verified Against Real Calendars — Previously Blocked in Every Sandbox
+
+Every prior attempt to verify `anchor.rs` against real OpenTimestamps calendars (§4.16's residual-risk table entry, §7) had run inside a sandboxed development environment whose egress proxy blocked outbound HTTPS to arbitrary hosts by policy — confirmed each time via an explicit `403` on the CONNECT tunnel to `alice.btc.calendar.opentimestamps.org` and `bob.btc.calendar.opentimestamps.org`, logged by the sandbox's own proxy as a policy denial, not a transient failure. That meant `anchor.rs`'s HTTP client logic had only ever been exercised against a `wiremock`-mocked calendar (`tests/anchor.rs`'s unit tests) — real submission had never been observed to complete, end to end, in this project's history.
+
+Verified for the first time from an actual unrestricted network: the repo owner ran a real `hsip-api` server (`cargo run -p hsip-api --bin hsip-api`, desktop mode, Windows 11) outside any sandbox, from their own machine.
+
+**Step 1 — raw connectivity, independent of any HSIP code:** a direct `Invoke-WebRequest POST <calendar>/digest` (the exact OpenTimestamps calendar protocol `anchor.rs` uses — `Content-Type: application/x-www-form-urlencoded`, raw 32-byte digest body) against all three of `DEFAULT_CALENDARS` returned real `HTTP 200` responses with real, nonzero-length bodies:
+
+| Calendar | Result |
+|---|---|
+| `alice.btc.calendar.opentimestamps.org` | `HTTP 200`, 137 bytes |
+| `bob.btc.calendar.opentimestamps.org` | `HTTP 200`, 135 bytes |
+| `finney.calendar.eternitywall.com` | `HTTP 200`, 121 bytes |
+
+**Step 2 — the full HSIP pipeline, not just raw connectivity:** recorded a real decision via `POST /v1/decisions` against the running server, then let `anchor_job.rs`'s background loop pick it up (fires on its very first cycle when no prior anchor exists yet in the DB, rather than waiting the full `INTERVAL_TRIGGER_MS`). The server's own log confirmed a real, successful anchor:
+
+```
+INFO hsip_api: anchored decision batch anchor_id=a66ff9bf-01ad-4961-9a82-7f8558a0b729 leaf_count=1 ots_status=pending
+```
+
+`GET /v1/decisions/:id/proof` returned `"anchored": true`, `"ots_status": "pending"` (the correct success state for this MVP — `anchor.rs` doesn't parse the `.ots` format or poll for Bitcoin confirmation yet, so "pending" is what a working submission looks like, not a failure), and a real `ots_proof` blob. Decoding those base64 bytes independently confirmed it is a genuine calendar response, not a placeholder: the raw bytes literally contain `https://alice.btc.calendar.opentimestamps.org` (the calendar's own URL, embedded in its response) and the byte count — 137 — is the exact same figure Step 1's raw request against that same calendar returned. This rules out a stub, a cached mock, or a same-length coincidence.
+
+**What this closes, and what's still open:** this confirms the submission half of §4.16's residual-risk table entry — calendar submission genuinely works, end to end, over a real network, through the real code path (not just the mocked unit tests). What §4.16/§7 still correctly flag as open: the "upgrade" step (polling calendars later for a Bitcoin-confirmed proof, flipping `ots_status` to `confirmed`) remains unimplemented — this verification only exercised the initial `pending`-commitment submission, which is all `anchor.rs` currently does.
+
+*Source: `crates/hsip-api/src/anchor.rs`, `crates/hsip-api/src/anchor_job.rs`, verified against a real running `hsip-api` server from an unrestricted Windows 11 network, 2026-07-20.*
+
+---
+
 ## 5. Trust Boundaries
 
 | Boundary | Trust level | Notes |
@@ -387,7 +415,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | **Rotation hook execution is a new trust boundary** | Low | `HSIP_ROTATION_HOOK` runs an operator-configured executable with the new master key on stdin. The path is only ever read from server-side environment configuration, never from an HTTP request — no caller can influence which script runs or with what arguments. The operator who sets this env var is implicitly trusting that script already, the same way `config.toml` or `master_key_path` are already-trusted operator-supplied paths; HSIP does not sandbox or validate the hook's contents. |
 | **Flat RBAC model, not scoped permissions** | Low | §4.14 closed the "single hardcoded root-admin credential" gap (multiple root admins can now exist via grant/revoke) and the "any key can manage any other key in its tenant" gap (now `role='owner'`-gated). What remains by design: `is_root_admin` is one flat capability covering every node-level operation (no "can rotate but not grant"), and `role` is a two-tier split, not per-action scoped permissions. Revisit only when an operation shows up that genuinely needs finer scoping than that. |
 | **`hsip-migrate` is a straightforward row-copy tool, not a zero-downtime replication system** | Low | §4.16 closed the "no migration tooling exists at all" gap, and along the way found and fixed that PostgreSQL had never actually worked for *any* HSIP deployment, fresh or migrated (see §4.16 for both bugs). What remains by design: `hsip-migrate` requires stopping writes to the source SQLite database before running (it's a one-shot `SELECT` + transactional `INSERT` copy, not continuous replication) and is meant for a planned maintenance-window cutover, not a live migration. |
-| **OpenTimestamps calendar submission unverified end-to-end** | Medium | `anchor.rs`'s HTTP client logic is unit-tested against a mock server only. Outbound HTTPS to `*.calendar.opentimestamps.org` has been confirmed blocked in every sandboxed environment this project has been developed in to date (including this session's, via a 403 on the CONNECT tunnel) — real-network submission has never been observed to complete. Verify from an unrestricted network before relying on it for compliance purposes. |
+| ~~OpenTimestamps calendar submission unverified end-to-end~~ — **closed, §4.20** | Was: Medium | §4.20 verified real submission end-to-end from an unrestricted network: raw connectivity to all three `DEFAULT_CALENDARS`, plus a real decision recorded and anchored through the actual `hsip-api` server with a genuine, independently-decoded calendar receipt (`ots_status: "pending"`) — not a mock. What's still open, tracked separately below: the Bitcoin-confirmation "upgrade" polling step. |
 | Rate-limit/velocity snapshot interval (was: full reset on restart) | Low | §4.6 closed the "in-memory only, full reset on every restart" gap — `rate_limit_state` now persists rate-limit, AI-agent-velocity, and sandbox-provisioning counters across restarts. Residual window: up to `SNAPSHOT_INTERVAL_SECS` (30s) of state can still be lost on a crash or unclean restart, since this is a periodic snapshot rather than a write-through on every request. |
 | SQLite without WAL under write contention | Low | Low risk for single-tenant deployments; use `DATABASE_URL` pointing at PostgreSQL for high-concurrency — this recommendation is now actually backed by a working, tested PostgreSQL path (§4.16); before this it was untested advice pointing at a backend that, per §4.16, could not actually complete a single write. |
 | Mutual TLS is opt-in, not enforced by default (was: no peer auth at the transport layer at all) | Low | §4.15 closed the "no automatic peer auth at the transport layer" gap — `[server.tls] client_ca_path` lets an operator require and verify client certificates. What remains by design: it's off by default (as TLS itself always has been for HSIP, a self-hosted/desktop-first product), and HSIP does not run its own CA or issue certificates — the operator brings their own PKI. |
@@ -412,6 +440,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Mutual TLS (`client_ca_path`) | Unit-tested in `mtls.rs` against real X.509 certificates generated via the system `openssl` CLI (not mocked). Also manually verified end-to-end against a real running server in server mode: a client certificate signed by the configured CA (with the required `clientAuth` EKU) connects and receives a genuine response; a certificate from an untrusted CA, and a request with no client certificate at all, are both rejected at the TLS handshake itself, confirmed via `curl`'s verbose TLS trace. |
 | PostgreSQL schema/query compatibility | `crates/hsip-api/tests/postgres_compat.rs` (`#[ignore]`-by-default, run against `HSIP_TEST_POSTGRES_URL`) — proves `run_migrations` succeeds and a real epoch-ms timestamp / `BYTEA` blob round-trip correctly. Also manually verified end-to-end against a real PostgreSQL 16 instance: full server lifecycle (identity, messages, consent, decisions, audit chain) against a Postgres-backed server, `hsip-migrate` run against a populated SQLite database, and a fresh server started against the migrated Postgres database confirming the same tenant/identity, the original admin key, an intact audit hash chain, and a successful anchor-job run — see §4.16. |
 | Federated trust (`/v1/trust/*`) | Previously **zero** integration coverage — the missing-table bug in §4.18 went undetected precisely because nothing exercised these routes end-to-end. `tests/integration.rs::test_trust_add_list_verify_remove` now covers add/list/verify (valid and tampered signature)/remove over the real HTTP stack. Also manually verified through the dashboard's new Trust page against a real running server. |
+| OpenTimestamps calendar submission | **Now verified end-to-end from a real unrestricted network** (§4.20) — previously only unit-tested against a `wiremock` mock, since every sandboxed environment this project had been developed in blocked outbound HTTPS to the calendar hosts by policy. Raw connectivity confirmed to all three `DEFAULT_CALENDARS`; a real decision recorded and anchored through the live `hsip-api` server produced a genuine calendar receipt (`ots_status: "pending"`), independently confirmed by decoding the response bytes and finding the calendar's own URL embedded in them. The Bitcoin-confirmation "upgrade" polling step remains unimplemented — this verified submission only. |
 | Dependency vulnerability scanning | `cargo audit` runs on every build |
 | Minimum supported Rust version | 1.88.0 |
 
