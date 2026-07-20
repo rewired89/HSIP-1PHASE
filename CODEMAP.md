@@ -1415,7 +1415,7 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 ### `MasterKeyFingerprintResponse`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/admin.rs`
-- **purpose**: Response for `GET /v1/admin/master-key/fingerprint`: fingerprint, master_key_path (`None` when sourced from `HSIP_MASTER_KEY`).
+- **purpose**: Response for `GET /v1/admin/master-key/fingerprint`: fingerprint, master_key_path (`None` when sourced from `HSIP_MASTER_KEY`), rotation_available (whether rotation currently has anywhere to persist a new key — file-backed, or env-var-sourced with `HSIP_ROTATION_HOOK` set).
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1428,14 +1428,44 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **purpose**: `GET /v1/admin/master-key/fingerprint` — read-only, no mutation. Returns the SHA-256 fingerprint of the master key currently in use, gated by the same `require_root_admin` check as rotation. Exists so an operator can confirm a backup file matches production without either grepping logs or triggering an actual rotation.
 - **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`
 - **outputs**: `ApiResult<Json<MasterKeyFingerprintResponse>>`
-- **calls**: `require_root_admin`, `fingerprint`
+- **calls**: `require_root_admin`, `fingerprint`, `resolve_persistence`
 - **called_by**: Axum router
 - **mutates**: nothing
+
+### `KeyPersistence`
+- **type**: enum
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: Where a rotated key can be durably persisted — `File(String)` (a path this process owns) or `Hook(String)` (an `HSIP_ROTATION_HOOK` command to invoke). Resolved once up front so rotation either has somewhere to put the new key or refuses before touching the database.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `resolve_persistence`, `rotate_master_key`
+- **mutates**: nothing
+
+### `resolve_persistence`
+- **type**: function
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: Returns `Some(KeyPersistence::File(path))` if `state.master_key_path` is set; otherwise `Some(KeyPersistence::Hook(cmd))` if `HSIP_ROTATION_HOOK` is a non-empty env var; otherwise `None` (rotation must refuse).
+- **inputs**: `state: &AppState`
+- **outputs**: `Option<KeyPersistence>`
+- **calls**: `std::env::var`
+- **called_by**: `rotate_master_key`, `master_key_fingerprint`
+- **mutates**: nothing
+
+### `run_rotation_hook`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: Spawns the configured `HSIP_ROTATION_HOOK` executable, writes the new key hex-encoded to its stdin (never as a process argument — visible via `ps` on some systems), sets `HSIP_ROTATION_OLD_FINGERPRINT`/`HSIP_ROTATION_NEW_FINGERPRINT` env vars for the hook's own logging, and waits up to `ROTATION_HOOK_TIMEOUT_SECS` (30s) for it to exit. Only a zero exit code is treated as success; stderr is captured and capped at 2000 chars in the error message on failure.
+- **inputs**: `hook_path: &str`, `old_key: &[u8]`, `new_key: &[u8]`
+- **outputs**: `anyhow::Result<()>`
+- **calls**: `tokio::process::Command`, `tokio::time::timeout`
+- **called_by**: `rotate_master_key`
+- **mutates**: nothing directly — the hook process itself is expected to write to wherever the operator's secrets manager lives
 
 ### `RotateMasterKeyResponse`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/admin.rs`
-- **purpose**: Response for `POST /v1/admin/master-key/rotate`: identities_reencrypted, anchor_identity_reencrypted, old/new key fingerprints, master_key_path, a note reminding the operator to back up the new file.
+- **purpose**: Response for `POST /v1/admin/master-key/rotate`: identities_reencrypted, anchor_identity_reencrypted, old/new key fingerprints, master_key_path (`Some` for file-backed) XOR rotation_hook (`Some` for hook-backed), a note (different wording per persistence mode).
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1445,12 +1475,12 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 ### `rotate_master_key`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/admin.rs`
-- **purpose**: `POST /v1/admin/master-key/rotate` — generates a new 32-byte master key, re-encrypts every `identities.signing_key_b64` row and the singleton `anchor_identity` row under it inside one DB transaction, durably swaps the key file (staging file write + `fsync` + atomic rename — never a half-written key on disk), then swaps the in-memory key. Holds `state.master_key.write().await` for the *entire* operation (not just the final swap) — see the function's doc comment for the concurrency race this closes. Refuses with `ApiError::BadRequest` if `state.master_key_path` is `None` (key sourced from `HSIP_MASTER_KEY`, nothing this process can rewrite). Writes one `master_key.rotated` audit entry per tenant touched and increments `metrics::MASTER_KEY_ROTATIONS`.
+- **purpose**: `POST /v1/admin/master-key/rotate` — generates a new 32-byte master key, re-encrypts every `identities.signing_key_b64` row and the singleton `anchor_identity` row under it inside one DB transaction, then persists the new key via whichever `KeyPersistence` mode `resolve_persistence` returns (file: staging file write + `fsync` + atomic rename; hook: `run_rotation_hook`) *before* committing the transaction, then swaps the in-memory key. Holds `state.master_key.write().await` for the *entire* operation (not just the final swap) — see the function's doc comment for the concurrency race this closes. Refuses with `ApiError::BadRequest` if `resolve_persistence` returns `None` (env-var-sourced key, no hook configured). Writes one `master_key.rotated` audit entry per tenant touched and increments `metrics::MASTER_KEY_ROTATIONS`.
 - **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`
 - **outputs**: `ApiResult<Json<RotateMasterKeyResponse>>`
-- **calls**: `require_root_admin`, `state.db.begin`, `key_encryption::{decrypt_signing_key, encrypt_signing_key}`, `std::fs::{File::create, rename}`, `audit_log::record`, `fingerprint`
+- **calls**: `require_root_admin`, `resolve_persistence`, `state.db.begin`, `key_encryption::{decrypt_signing_key, encrypt_signing_key}`, `std::fs::{File::create, rename}`, `run_rotation_hook`, `audit_log::record`, `fingerprint`
 - **called_by**: Axum router
-- **mutates**: `identities`, `anchor_identity` tables (within a transaction), the master key file on disk, `state.master_key` (in-memory)
+- **mutates**: `identities`, `anchor_identity` tables (within a transaction), the master key file on disk or the hook's own target, `state.master_key` (in-memory)
 
 ---
 
@@ -2765,7 +2795,7 @@ elapsed) and submits the root to OpenTimestamps. DB-touching orchestration;
 ### `FingerprintResponse` / `RotateResponse`
 - **type**: structs
 - **file**: `crates/hsip-cli/src/commands/keys.rs`
-- **purpose**: Deserialize `GET /v1/admin/master-key/fingerprint` and `POST /v1/admin/master-key/rotate` responses respectively.
+- **purpose**: Deserialize `GET /v1/admin/master-key/fingerprint` (fingerprint, master_key_path, rotation_available) and `POST /v1/admin/master-key/rotate` (adds rotation_hook alongside master_key_path — exactly one of the two is `Some`) responses respectively.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none

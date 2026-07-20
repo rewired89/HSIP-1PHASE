@@ -52,6 +52,7 @@ pub enum KeysCmd {
 struct FingerprintResponse {
     fingerprint: String,
     master_key_path: Option<String>,
+    rotation_available: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -60,7 +61,8 @@ struct RotateResponse {
     anchor_identity_reencrypted: bool,
     old_key_fingerprint: String,
     new_key_fingerprint: String,
-    master_key_path: String,
+    master_key_path: Option<String>,
+    rotation_hook: Option<String>,
     note: String,
 }
 
@@ -140,9 +142,15 @@ fn master_fingerprint(api_url: Option<String>, key: Option<String>) -> Result<()
     println!("Master key fingerprint: {}", resp.fingerprint);
     match &resp.master_key_path {
         Some(path) => println!("Source: file at {path}"),
-        None => println!(
-            "Source: HSIP_MASTER_KEY env var (no file — `hsip keys rotate-master` will refuse)"
-        ),
+        None => println!("Source: HSIP_MASTER_KEY env var"),
+    }
+    if resp.rotation_available {
+        println!("Rotation: available (`hsip keys rotate-master`)");
+    } else {
+        println!(
+            "Rotation: NOT available — set HSIP_ROTATION_HOOK to a script that writes a new \
+             key to your secrets manager, or rotate the value at its source manually"
+        );
     }
     println!();
     println!("To confirm a backup file matches, on the machine holding the backup:");
@@ -191,7 +199,11 @@ fn rotate_master(api_url: Option<String>, key: Option<String>, yes: bool) -> Res
     );
     println!("  Old key fingerprint: {}", resp.old_key_fingerprint);
     println!("  New key fingerprint: {}", resp.new_key_fingerprint);
-    println!("  Key file:            {}", resp.master_key_path);
+    match (&resp.master_key_path, &resp.rotation_hook) {
+        (Some(path), _) => println!("  Key file:            {path}"),
+        (None, Some(hook)) => println!("  Persisted via hook:  {hook}"),
+        (None, None) => {}
+    }
     println!();
     println!("{}", resp.note);
 
