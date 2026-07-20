@@ -104,7 +104,10 @@ impl fmt::Display for PropertyResult {
                 writeln!(f, "  Formal spec: {}", property.formal_spec())?;
                 writeln!(f, "  Proof: {}", proof)
             }
-            PropertyResult::Violated { property, counterexample } => {
+            PropertyResult::Violated {
+                property,
+                counterexample,
+            } => {
                 writeln!(f, "  Status: ❌ VIOLATED")?;
                 writeln!(f, "  Formal spec: {}", property.formal_spec())?;
                 if let Some(ce) = counterexample {

@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.13-draft  
+**Version:** 0.14-draft  
 **Date:** 2026-07-20  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -295,6 +295,22 @@ A lightweight, `#[ignore]`-by-default regression test (`crates/hsip-api/tests/po
 
 ---
 
+### 4.17 Formal Verification Now Runs by Default (`hsip-verify` in the Workspace)
+
+`hsip-verify` — Z3 SMT-solver proofs of consent non-forgery, temporal consistency, and identity-binding soundness (see its own `README.md` for the formal specifications) — was previously excluded from the root `Cargo.toml`'s workspace `members`, because `z3-sys` builds the actual Z3 C++ solver from source on first compile. That meant its guarantees never ran as part of `cargo build --workspace` / `cargo test --workspace`, including in CI, unless someone remembered to run `cargo build -p hsip-verify` separately — which, per §8's audit table before this revision, nothing did.
+
+It's now a normal workspace member. No code inside `hsip-verify` changed (only whitespace, via `cargo fmt`, applied now that it's subject to this repo's formatting check for the first time) — the only actual blocker was environmental, not architectural: `cargo build -p hsip-verify` already worked standalone before this. This session's sandbox ran out of disk space partway through compiling Z3 the first time this was attempted, traced to a stale, redundant `crates/hsip-verify/target/` directory left over from building it outside the workspace — deleting it freed enough space for a clean `cargo build --workspace` to succeed with no dependency-resolution conflicts against the rest of the workspace.
+
+**Tradeoff accepted, not eliminated:** a from-scratch `cargo build --workspace` now costs roughly 8 extra minutes compiling Z3 from source via `cmake`. One-time per clean `target/` directory — Cargo caches the result like any other dependency, so this doesn't recur on incremental builds or CI cache hits. Requires `cmake` and a C++ toolchain wherever this workspace is built, which this workspace's other native dependencies (e.g. `curve25519-dalek`'s optional asm backends) already implicitly required.
+
+**Verified:** `cargo build --workspace` and `cargo test --workspace` both succeed with `hsip-verify` included — its 9 unit tests plus 10 integration tests (`tests/verification_tests.rs`) run real Z3 SMT queries, not mocked, alongside every other crate's tests.
+
+**Found and corrected while reviewing this change, unrelated to it:** this document previously misattributed HSIP's post-quantum crypto (ML-KEM-768/ML-DSA-65) to `hsip-verify` — the real implementation is `hsip-core::pqc` (a Cargo feature, on by default), and `hsip-core` has always been a normal workspace member. Corrected in §4 and §7's residual-risk table above.
+
+*Source: root `Cargo.toml` (`members`), `crates/hsip-verify/`*
+
+---
+
 ## 5. Trust Boundaries
 
 | Boundary | Trust level | Notes |
@@ -324,7 +340,7 @@ The following are **explicitly out of scope**. They must be addressed at the inf
 | **Consent coercion** | HSIP enforces cryptographic consent, not voluntary human consent | Application-layer UX and legal controls |
 | **Master key loss** | If `master.key` is lost, all encrypted signing keys are permanently unrecoverable | Back up the master key (a startup warning now reminds you to); `GET /v1/admin/master-key/fingerprint` / `hsip keys master-fingerprint` lets you *verify* that backup actually matches production without exposing or rotating the key; `POST /v1/admin/master-key/rotate` (§4.13) lets you *replace* a still-available key on a schedule, which reduces how long any one key's loss would matter, but does not help if the current key is already gone — that's still unrecoverable |
 | **HSM-backed key storage** | Master key lives on the filesystem by default | Point `HSIP_MASTER_KEY` at a secrets manager (Vault, AWS KMS) — **this now actually works**; previously the only code path that read `HSIP_MASTER_KEY` was dead code nothing called, so this documented mitigation was not functional. Fixed — see `main.rs::load_master_key`. |
-| **Post-quantum adversaries (current Ed25519)** | Ed25519 is not quantum-safe | ML-KEM-768 + ML-DSA-65 available via `hsip-verify` for environments requiring it |
+| **Post-quantum adversaries (current Ed25519)** | Ed25519 is not quantum-safe | ML-KEM-768 + ML-DSA-65 available via `hsip-core::pqc` (the `pqc` Cargo feature, on by default) for environments requiring it |
 | **Social engineering** | If an admin is phished, HSIP cannot detect it | Operational security, 2FA on the server, key rotation |
 
 ---
@@ -347,7 +363,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Mutual TLS is opt-in, not enforced by default (was: no peer auth at the transport layer at all) | Low | §4.15 closed the "no automatic peer auth at the transport layer" gap — `[server.tls] client_ca_path` lets an operator require and verify client certificates. What remains by design: it's off by default (as TLS itself always has been for HSIP, a self-hosted/desktop-first product), and HSIP does not run its own CA or issue certificates — the operator brings their own PKI. |
 | Audit log anchor cadence window | Low | §4.8.1 closed the "chain not anchored outside this database" gap — an attacker who deletes the whole chain *after* its last anchor is now detectable by comparing the anchored root against what remains. The residual window is the same shape as decisions' own: a chain deleted *before* its next anchor cycle runs (bounded by `INTERVAL_TRIGGER_MS` = 5 min) is still undetectable by this mechanism alone. |
 | Clock skew affects consent, credential, *and* decision-chain ordering | Low | All three subsystems trust the server's wall clock for expiry/ordering, not just consent. Use NTP synchronization in production. |
-| Post-quantum crypto (ML-KEM-768/ML-DSA-65) is not part of the default build | Informational, not a gap | These live in `hsip-verify`, excluded from the workspace (requires Z3 built from source — see `CLAUDE.md`). For HSIP's actual threat model — API-key theft, filesystem/DB compromise — this matters far less than the items above; don't let its prominence in dependency lists (§4.11) imply it's closer to production-ready than the excluded-crate status indicates. |
+| Post-quantum crypto (ML-KEM-768/ML-DSA-65) is not wired into any live protocol path | Informational, not a gap | Corrects a previous version of this table, which misattributed this to `hsip-verify` (excluded from the workspace at the time) — the actual implementation is `hsip-core::pqc`, gated by the `pqc` Cargo feature (on by default), and `hsip-core` has always been a normal workspace member, always built. It compiles and its own unit tests run, but nothing in `hsip-api`'s request path or `hsip-session`'s handshake code currently calls it — `grep -rn "pqc::"` outside `pqc.rs` itself returns nothing. For HSIP's actual threat model — API-key theft, filesystem/DB compromise — this matters far less than the items above; don't let its presence in dependency lists (§4.11) imply it's closer to wired-in-and-live than it actually is. |
 
 ---
 
@@ -356,7 +372,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | Item | Status |
 |---|---|
 | Third-party security audit | Not yet completed — planned for v1.0 |
-| Formal verification of protocol properties | `hsip-verify` crate uses Z3 SMT solver for cryptographic protocol proofs. **Excluded from the workspace build and from `cargo test --workspace`** — its guarantees do not currently run in CI. |
+| Formal verification of protocol properties | `hsip-verify` crate uses the Z3 SMT solver to prove consent non-forgery, temporal consistency, and identity-binding soundness. **Now a normal workspace member** (§4.17) — `cargo build --workspace`/`cargo test --workspace` build and run it, so its guarantees run in CI wherever those commands do. |
 | RFC compliance test vectors | RFC 8439 (ChaCha20-Poly1305), RFC 8032 (Ed25519) vectors pass in CI |
 | Audit log hash chain integrity | Covered by `hsip-api/tests/integration.rs::test_audit_chain_verify_detects_valid_and_tampered_chains` — writes a chain, verifies it, then directly tampers with a row via SQL (simulating OS-level DB compromise) and confirms `GET /v1/audit/verify` detects it. |
 | Master key rotation | Covered by `hsip-api/tests/integration.rs::test_master_key_rotation_reencrypts_and_swaps_live_key` — proves actual re-encryption (old key stops decrypting, the key now on disk decrypts), live in-memory key swap on the *same running process* (not just DB/file state), and rejection of a non-root-admin key. Also manually verified end-to-end against a running server: real `hsip keys rotate-master`/`master-fingerprint` CLI invocations, confirming fingerprints change, the key file on disk is rewritten, and `POST /v1/messages/sign` keeps working transparently across the rotation. |

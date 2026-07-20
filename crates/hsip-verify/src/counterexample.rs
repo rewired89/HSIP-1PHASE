@@ -102,7 +102,10 @@ mod tests {
             .build();
 
         assert_eq!(ce.property(), SecurityProperty::ConsentNonForgery);
-        assert_eq!(ce.get_detail("description"), Some(&"Test violation".to_string()));
+        assert_eq!(
+            ce.get_detail("description"),
+            Some(&"Test violation".to_string())
+        );
         assert_eq!(ce.get_detail("key1"), Some(&"value1".to_string()));
     }
 }

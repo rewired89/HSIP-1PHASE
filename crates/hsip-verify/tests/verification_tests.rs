@@ -1,8 +1,8 @@
 //! Comprehensive test harness for HSIP formal verification
 
-use hsip_verify::{Verifier, VerificationConfig, SecurityProperty, PropertyResult};
-use hsip_verify::models::{ConsentModel, IdentityModel, SignatureModel};
 use ed25519_dalek::SigningKey;
+use hsip_verify::models::{ConsentModel, IdentityModel, SignatureModel};
+use hsip_verify::{PropertyResult, SecurityProperty, VerificationConfig, Verifier};
 use rand::rngs::OsRng;
 
 #[test]
@@ -43,8 +43,14 @@ fn test_consent_non_forgery_property() {
             println!("   Proof: {}", proof);
             assert_eq!(property, SecurityProperty::ConsentNonForgery);
         }
-        PropertyResult::Violated { property, counterexample } => {
-            println!("❌ Property VIOLATED (expected in symbolic model): {}", property);
+        PropertyResult::Violated {
+            property,
+            counterexample,
+        } => {
+            println!(
+                "❌ Property VIOLATED (expected in symbolic model): {}",
+                property
+            );
             if let Some(ce) = counterexample {
                 println!("   Counterexample: {}", ce);
             }
@@ -77,7 +83,10 @@ fn test_temporal_consistency_property() {
             println!("   Proof: {}", proof);
             assert_eq!(property, SecurityProperty::TemporalConsistency);
         }
-        PropertyResult::Violated { property, counterexample } => {
+        PropertyResult::Violated {
+            property,
+            counterexample,
+        } => {
             println!("❌ Property VIOLATED (exploring edge cases): {}", property);
             if let Some(ce) = counterexample {
                 println!("   Counterexample: {}", ce);
@@ -110,8 +119,14 @@ fn test_identity_binding_property() {
             println!("   Proof: {}", proof);
             assert_eq!(property, SecurityProperty::IdentityBinding);
         }
-        PropertyResult::Violated { property, counterexample } => {
-            println!("❌ Property VIOLATED (expected in symbolic model): {}", property);
+        PropertyResult::Violated {
+            property,
+            counterexample,
+        } => {
+            println!(
+                "❌ Property VIOLATED (expected in symbolic model): {}",
+                property
+            );
             if let Some(ce) = counterexample {
                 println!("   Counterexample: {}", ce);
             }
@@ -188,7 +203,10 @@ fn test_identity_binding_concrete() {
     assert_ne!(peer_id1, peer_id2);
     assert_ne!(peer_id2, peer_id3);
     assert_ne!(peer_id1, peer_id3);
-    println!("✅ No collisions detected among {} peer IDs", model.bindings().len());
+    println!(
+        "✅ No collisions detected among {} peer IDs",
+        model.bindings().len()
+    );
 
     // Verify each binding
     assert!(model.verify_binding(&pub1, &peer_id1));
@@ -317,7 +335,10 @@ fn test_identity_collision_resistance() {
         );
     }
 
-    println!("✅ Generated {} unique peer IDs without collisions", num_keys);
+    println!(
+        "✅ Generated {} unique peer IDs without collisions",
+        num_keys
+    );
     assert!(!model.has_collision());
     println!("✅ Collision resistance verified for {} keys", num_keys);
 }
@@ -328,9 +349,9 @@ fn test_verification_performance() {
     println!("\n⚡ Testing Verification Performance");
 
     let config = VerificationConfig {
-        timeout_ms: 30000, // 30 seconds
+        timeout_ms: 30000,               // 30 seconds
         generate_counterexamples: false, // Skip for speed
-        verbosity: 0, // Quiet
+        verbosity: 0,                    // Quiet
     };
 
     let verifier = Verifier::new(config);

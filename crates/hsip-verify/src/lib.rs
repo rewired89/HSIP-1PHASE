@@ -12,12 +12,12 @@ use std::fmt;
 use z3::ast::{Ast, Bool, Int, BV};
 use z3::{Config, Context, SatResult, Solver};
 
-pub mod properties;
-pub mod models;
 pub mod counterexample;
+pub mod models;
+pub mod properties;
 
-pub use properties::{PropertyResult, SecurityProperty};
 pub use counterexample::Counterexample;
+pub use properties::{PropertyResult, SecurityProperty};
 
 /// Verification configuration
 #[derive(Debug, Clone)]
@@ -120,7 +120,10 @@ impl Verifier {
 
         // Define: can_forge = signature_valid ∧ ¬(knows_private_key)
         let knows_private_key = Bool::new_const(&ctx, "knows_private_key");
-        solver.assert(&can_forge._eq(&Bool::and(&ctx, &[&signature_valid, &knows_private_key.not()])));
+        solver.assert(&can_forge._eq(&Bool::and(
+            &ctx,
+            &[&signature_valid, &knows_private_key.not()],
+        )));
 
         // Property to verify: can_forge should be UNSAT (impossible)
         solver.assert(&can_forge);
@@ -132,7 +135,8 @@ impl Verifier {
                 // Property holds: cannot forge without private key
                 PropertyResult::Proven {
                     property: SecurityProperty::ConsentNonForgery,
-                    proof: "Signature validity implies knowledge of private key (UNSAT model)".to_string(),
+                    proof: "Signature validity implies knowledge of private key (UNSAT model)"
+                        .to_string(),
                 }
             }
             SatResult::Sat => {
@@ -147,12 +151,10 @@ impl Verifier {
                     counterexample,
                 }
             }
-            SatResult::Unknown => {
-                PropertyResult::Unknown {
-                    property: SecurityProperty::ConsentNonForgery,
-                    reason: "SMT solver timeout or resource limit".to_string(),
-                }
-            }
+            SatResult::Unknown => PropertyResult::Unknown {
+                property: SecurityProperty::ConsentNonForgery,
+                reason: "SMT solver timeout or resource limit".to_string(),
+            },
         }
     }
 
@@ -202,12 +204,11 @@ impl Verifier {
         let result = solver.check();
 
         match result {
-            SatResult::Unsat => {
-                PropertyResult::Proven {
-                    property: SecurityProperty::TemporalConsistency,
-                    proof: "Revocation immediately invalidates consent for all future times (UNSAT)".to_string(),
-                }
-            }
+            SatResult::Unsat => PropertyResult::Proven {
+                property: SecurityProperty::TemporalConsistency,
+                proof: "Revocation immediately invalidates consent for all future times (UNSAT)"
+                    .to_string(),
+            },
             SatResult::Sat => {
                 let counterexample = if self.config.generate_counterexamples {
                     self.extract_temporal_counterexample(&solver, &ctx)
@@ -219,12 +220,10 @@ impl Verifier {
                     counterexample,
                 }
             }
-            SatResult::Unknown => {
-                PropertyResult::Unknown {
-                    property: SecurityProperty::TemporalConsistency,
-                    reason: "SMT solver timeout".to_string(),
-                }
-            }
+            SatResult::Unknown => PropertyResult::Unknown {
+                property: SecurityProperty::TemporalConsistency,
+                reason: "SMT solver timeout".to_string(),
+            },
         }
     }
 
@@ -292,7 +291,11 @@ impl Verifier {
         }
     }
 
-    fn extract_consent_counterexample(&self, solver: &Solver, _ctx: &Context) -> Option<Counterexample> {
+    fn extract_consent_counterexample(
+        &self,
+        solver: &Solver,
+        _ctx: &Context,
+    ) -> Option<Counterexample> {
         let _model = solver.get_model()?;
         let mut details = HashMap::new();
 
@@ -307,7 +310,11 @@ impl Verifier {
         ))
     }
 
-    fn extract_temporal_counterexample(&self, solver: &Solver, ctx: &Context) -> Option<Counterexample> {
+    fn extract_temporal_counterexample(
+        &self,
+        solver: &Solver,
+        ctx: &Context,
+    ) -> Option<Counterexample> {
         let model = solver.get_model()?;
         let mut details = HashMap::new();
 
@@ -330,7 +337,11 @@ impl Verifier {
         ))
     }
 
-    fn extract_identity_counterexample(&self, solver: &Solver, _ctx: &Context) -> Option<Counterexample> {
+    fn extract_identity_counterexample(
+        &self,
+        solver: &Solver,
+        _ctx: &Context,
+    ) -> Option<Counterexample> {
         let _model = solver.get_model()?;
         let mut details = HashMap::new();
 
@@ -364,11 +375,15 @@ impl VerificationReport {
     }
 
     pub fn all_proven(&self) -> bool {
-        self.results.values().all(|r| matches!(r, PropertyResult::Proven { .. }))
+        self.results
+            .values()
+            .all(|r| matches!(r, PropertyResult::Proven { .. }))
     }
 
     pub fn has_violations(&self) -> bool {
-        self.results.values().any(|r| matches!(r, PropertyResult::Violated { .. }))
+        self.results
+            .values()
+            .any(|r| matches!(r, PropertyResult::Violated { .. }))
     }
 
     pub fn summary(&self) -> String {
@@ -443,7 +458,13 @@ mod tests {
         // Note: This is a simplified symbolic model. In practice, Ed25519 signatures
         // cannot be forged, but we would need to add cryptographic axioms to Z3 to prove this.
         // For now, we verify that the verification runs without crashing.
-        assert!(!matches!(result, PropertyResult::Violated { counterexample: None, .. }));
+        assert!(!matches!(
+            result,
+            PropertyResult::Violated {
+                counterexample: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -454,7 +475,13 @@ mod tests {
 
         // Temporal consistency should be provable with basic integer arithmetic
         // At minimum, should not have violations without counterexamples
-        assert!(!matches!(result, PropertyResult::Violated { counterexample: None, .. }));
+        assert!(!matches!(
+            result,
+            PropertyResult::Violated {
+                counterexample: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -465,6 +492,12 @@ mod tests {
 
         // Collision resistance is a cryptographic assumption - would need hash function axioms
         // We verify the model runs correctly
-        assert!(!matches!(result, PropertyResult::Violated { counterexample: None, .. }));
+        assert!(!matches!(
+            result,
+            PropertyResult::Violated {
+                counterexample: None,
+                ..
+            }
+        ));
     }
 }

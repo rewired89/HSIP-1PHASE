@@ -5,7 +5,7 @@
 //!
 //! Run with: cargo run --example verify_hsip --features verification
 
-use hsip_verify::{Verifier, VerificationConfig};
+use hsip_verify::{VerificationConfig, Verifier};
 
 fn main() {
     println!("╔═══════════════════════════════════════════════════════════╗");
@@ -23,7 +23,10 @@ fn main() {
 
     println!("Configuration:");
     println!("  • Timeout: {} ms per property", config.timeout_ms);
-    println!("  • Counterexample generation: {}", config.generate_counterexamples);
+    println!(
+        "  • Counterexample generation: {}",
+        config.generate_counterexamples
+    );
     println!("  • Verbosity level: {}", config.verbosity);
     println!();
 

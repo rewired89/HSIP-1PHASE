@@ -2,7 +2,7 @@
 
 use blake3;
 use data_encoding::BASE32_NOPAD;
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier as Ed25519Verifier};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier as Ed25519Verifier, VerifyingKey};
 use std::collections::HashMap;
 
 /// Formal model of the consent protocol

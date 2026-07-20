@@ -37,7 +37,10 @@ cargo build -p hsip-core
 cargo build -p hsip-cli
 cargo build -p hsip-mcp
 
-# hsip-verify is EXCLUDED from the workspace (needs Z3 SMT solver — build separately)
+# hsip-verify is a normal workspace member — cargo build --workspace builds it too.
+# First build compiles Z3 from source via z3-sys (~8 min, one-time — cached
+# by Cargo afterward like any other dependency). Requires cmake + a C++
+# toolchain (both already needed to build this workspace's other native deps).
 cargo build -p hsip-verify
 ```
 
@@ -67,7 +70,7 @@ cargo audit
 
 ---
 
-## Crate Map (16 total in workspace)
+## Crate Map (17 total in workspace)
 
 | Crate | Binary | Role | Status |
 |---|---|---|---|
@@ -78,7 +81,7 @@ cargo audit
 | `hsip-mcp` | `hsip-mcp` | MCP server (JSON-RPC over stdio). Exposes HSIP tools to AI clients. | Active development |
 | `hsip-common` | — | Shared types. | Stable |
 | `hsip-intercept` | — | Cross-platform network interception (Windows/Android/Linux/macOS). | Stable |
-| `hsip-verify` | — | **EXCLUDED from workspace.** Requires Z3 SMT solver. Build separately. | Do not add to Cargo.toml members |
+| `hsip-verify` | — | Formal verification of core HSIP security properties (consent non-forgery, temporal consistency, identity binding) via the Z3 SMT solver, invoked as a Rust library (`z3` crate, `static-link-z3` feature — no system Z3 install needed). A normal workspace member — see "Including hsip-verify in the Build" below for why it wasn't always one. | Working |
 | `hsip-session`, `hsip-net`, `hsip-auth`, `hsip-reputation`, `hsip-gateway`, `hsip-regenerative`, `hsip-telemetry-guard`, `hsip-integration-sdk` | — | Supporting crates in workspace but not actively integrated. | Stable — don't touch unless needed |
 
 ---
@@ -435,6 +438,18 @@ A `#[ignore]`-by-default regression test, `crates/hsip-api/tests/postgres_compat
 
 ---
 
+## Including hsip-verify in the Build
+
+`crates/hsip-verify` — formal verification of HSIP's core security properties (consent non-forgery, temporal consistency, identity-binding soundness) via the Z3 SMT solver — was excluded from the root `Cargo.toml`'s `members` list since it depends on `z3-sys`, which builds the Z3 SMT solver from source (via `cmake`) the first time it's compiled. It's now a normal workspace member.
+
+**What changed, and what didn't:** the crate itself needed no code changes — `cargo build -p hsip-verify` (the "build separately" workaround this repo used to document) already worked standalone. The only actual blocker was environmental: this session's sandbox ran out of disk space (`error: failed to build archive... No space left on device`) partway through compiling `z3-sys`, because a redundant, separately-resolved `target/` directory for `hsip-verify`'s standalone build (from being built outside the workspace) had accumulated alongside the main workspace `target/`. Deleting that stale standalone build directory freed enough space for a clean `cargo build --workspace` to succeed, building `hsip-verify` in the same pass as everything else with no dependency-resolution conflicts against the rest of the workspace (`z3`, `serde`, `chrono`, `ed25519-dalek`, etc. all resolved to versions compatible with what the rest of the workspace already used).
+
+**The real, ongoing tradeoff — not eliminated, just accepted:** a from-scratch `cargo build --workspace` now takes noticeably longer (~8 extra minutes) because `z3-sys` compiles the actual Z3 C++ source tree via `cmake` on first build. This is a one-time cost per clean `target/` directory — Cargo caches the compiled artifacts exactly like any other dependency, so incremental builds (the overwhelming majority of local dev iterations and CI cache-hit runs) are unaffected. Requires `cmake` and a C++ toolchain (`g++`/`gcc`) to be present wherever this workspace is built — both were already implicitly required by other native dependencies in this workspace (e.g. `curve25519-dalek`'s optional asm backends), so this isn't a new category of build requirement, just a heavier instance of one that already existed.
+
+**Verified:** `cargo build --workspace` and `cargo test --workspace` both succeed with `hsip-verify` included — its 9 unit tests (`src/models.rs`, `src/counterexample.rs`) plus 10 integration tests (`tests/verification_tests.rs`) all run real Z3 SMT queries (not mocked) and pass, alongside every other crate's existing test suite.
+
+---
+
 ## Auto-Discovery (`GET /v1/agents/discover`)
 
 Probes 12 well-known localhost ports with `tokio::spawn` + 150ms TCP timeout. Returns `DiscoveredAgent` list with `port`, `url`, `hint`, `description`, `already_registered`, `suggested_name`.
@@ -581,7 +596,7 @@ Go: `sdks/go/hsip/client.go`
 - **`pending_revocation` DashSet** must be updated before the async DB write when auto-revoking agent keys — blocks in-flight requests immediately.
 - **Audit entries must be written** for all state-changing operations (identity creation, credential issuance/revocation, consent grant/revoke, key events, trust peer add/remove/verify).
 - **In-memory SQLite tests require `max_connections = 1`** — each connection is a separate DB instance.
-- **`crates/hsip-verify` stays excluded from workspace** — do not add to root `Cargo.toml` members.
+- **`crates/hsip-verify` is a normal workspace member** — `cargo build --workspace`/`cargo test --workspace` build and test it like any other crate. Don't re-add it to the root `Cargo.toml`'s `exclude` list; see "Including hsip-verify in the Build" below for why it was excluded before and what changed.
 - **No migration files** — all schema is inline in `db::run_migrations()`. Add new tables/columns there.
 - **Every SQL bind placeholder must be `$1, $2, ...` (PostgreSQL-numbered), never `?`.** `sqlx::Any` does not rewrite placeholder syntax per backend — `?` is a SQLite/MySQL-only token and is a hard syntax error on PostgreSQL. `$N` works identically on both backends (confirmed empirically — see "SQLite → PostgreSQL Migration" above), so there is never a reason to use `?` in this codebase.
 - **Every `db.rs` column storing a millisecond-epoch timestamp or similarly wide value must be `BIGINT`, never `INTEGER`.** PostgreSQL's `INTEGER` is a real 4-byte `int4` (max ~2.1e9) and overflows on any real epoch-ms value (~1.7e12) — this silently broke every write against Postgres until found and fixed (see "SQLite → PostgreSQL Migration" above). Small bounded values (0/1 flags, in-batch Merkle indices) may stay `INTEGER`.
@@ -650,6 +665,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Persist rate limiter across restarts: new `rate_limit_persistence.rs` periodically snapshots `rate_limiter`/`agent_tracker`/`sandbox_rate` (all previously in-memory-only) into a new `rate_limit_state` table every 30s, restores live windows at startup — closes the "restart silently resets every abuse-detection counter" gap without adding a DB write to the hot auth path | `rate_limit_persistence.rs`, `db.rs`, `state.rs`, `main.rs`, `lib.rs` |
 | Mutual TLS: new `mtls.rs` + `[server.tls] client_ca_path` config option — server requires and verifies a client certificate signed by a configured CA before completing the TLS handshake, closing THREAT_MODEL.md's "no peer auth at transport layer" gap. Fully opt-in (`None` = byte-for-byte unchanged behavior). Also fixed a pre-existing latent panic: `reqwest`/`axum-server` enable different rustls crypto-provider features, so the first TLS operation in the process would have panicked the moment `[server.tls]` was ever actually enabled — now a default provider is installed explicitly at startup | `mtls.rs`, `config.rs`, `main.rs`, `config.example.toml` |
 | SQLite → PostgreSQL migration tooling: new `hsip-migrate` binary copies an existing SQLite deployment into PostgreSQL, reusing `db::run_migrations` for the target schema. Found and fixed **two bugs that meant PostgreSQL had never actually worked at all**, fresh install or migration: every ms-epoch column was `INTEGER` (4-byte `int4` on Postgres, overflows on real timestamps — widened to `BIGINT`), `uploads.data`/`ots_proof` used the SQLite-only `BLOB` type (doesn't exist on Postgres — changed to `BYTEA`), and every one of ~150 parameterized queries used `?` placeholders (`sqlx::Any` doesn't rewrite these per backend — Postgres syntax-errors on `?` — rewritten to `$1, $2, ...`, which SQLite also accepts identically). Verified end-to-end against a real PostgreSQL 16 instance: populated a SQLite deployment via a real running server, migrated it, and confirmed the migrated server preserved identity/keys/audit-chain-validity and its anchor job ran successfully against Postgres | `db.rs`, `bin/hsip_migrate.rs`, `Cargo.toml`, `tests/postgres_compat.rs`, and every route/module file containing a `sqlx::query` call |
+| `hsip-verify` (Z3 formal verification of consent non-forgery/temporal consistency/identity-binding soundness) is now a real workspace member instead of being excluded — `cargo build --workspace`/`cargo test --workspace` build and run its 9 unit + 10 integration tests, so its guarantees actually run in CI for the first time. No code changes inside the crate itself (only `cargo fmt`, since it had never been subject to this repo's formatting check before). Along the way, corrected a stale THREAT_MODEL.md claim that misattributed HSIP's post-quantum crypto (ML-KEM-768/ML-DSA-65) to `hsip-verify` — it actually lives in `hsip-core::pqc`, which was never excluded | root `Cargo.toml`, `crates/hsip-verify/` (formatting only) |
 
 ---
 
@@ -679,6 +695,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - Persist rate limiter across restarts — `rate_limit_persistence.rs` periodically snapshots the rate-limit/AI-agent-velocity/sandbox-provisioning DashMaps to a `rate_limit_state` table and restores live windows at startup; periodic snapshot (30s), not a write-through on every request, so the hot auth path still never touches the database
 - Mutual TLS — opt-in `[server.tls] client_ca_path`, closes the "no peer auth at transport layer" gap for HSIP's HTTPS server; also fixed a pre-existing latent crypto-provider panic that would have hit the very first production use of `[server.tls]`
 - SQLite → PostgreSQL migration tooling: `hsip-migrate` binary, plus the two underlying bugs (`INTEGER`/`BLOB` schema types, `?` vs `$N` bind placeholders) that meant PostgreSQL had never actually worked for any HSIP deployment — see "SQLite → PostgreSQL Migration" above. Verified end-to-end against a real PostgreSQL 16 instance, not just unit tests.
+- `hsip-verify` included in the build — moved from excluded (`cargo build -p hsip-verify` only) to a real workspace member, so its Z3-backed formal-verification tests run under `cargo build --workspace`/`cargo test --workspace` like everything else. See "Including hsip-verify in the Build" above.
 
 ### Remaining
 

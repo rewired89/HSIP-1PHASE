@@ -5948,3 +5948,96 @@ formatting.
 
 > All HSIP API methods (`GetOrCreateIdentity`, `GrantConsent`, `SignMessage`, `RegisterAgent`, `LogAction`, `DiscoverAgents`, etc.) follow the same pattern as Python SDK — they call `Client.do` with the appropriate path and body.
 
+---
+
+## `crates/hsip-verify/src/lib.rs`
+
+Formal verification of three HSIP security properties via the Z3 SMT solver: consent non-forgery, temporal consistency (revocation is permanent), and identity-binding soundness (no peer-ID collisions). See the crate's own `README.md` for the formal specifications. Now a normal workspace member (previously excluded — `cargo build --workspace`/`cargo test --workspace` didn't build or run it) — see "Including hsip-verify in the Build" in `CLAUDE.md` for why and what changed.
+
+### `VerificationConfig`
+- **type**: struct
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Tunable bounds for the symbolic model (number of symbolic peers/timestamps considered, etc.) passed to `Verifier::new`.
+- **called_by**: `Verifier::new`, crate consumers (`examples/verify_hsip.rs`, `tests/verification_tests.rs`)
+
+### `Verifier`
+- **type**: struct
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Owns a Z3 `Context` and runs each property proof against it.
+- **calls**: `z3::Context::new`
+- **called_by**: crate consumers
+
+### `Verifier::new`
+- **type**: function
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Builds a `Verifier` (and its underlying Z3 context) from a `VerificationConfig`.
+- **inputs**: `config: VerificationConfig`
+- **outputs**: `Self`
+- **mutates**: nothing
+
+### `Verifier::verify_all`
+- **type**: function
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Runs all three property proofs and aggregates them into one `VerificationReport`.
+- **inputs**: `&self`
+- **outputs**: `VerificationReport`
+- **calls**: `verify_consent_non_forgery`, `verify_temporal_consistency`, `verify_identity_binding`
+- **called_by**: crate consumers, `tests/verification_tests.rs::test_full_verification_suite`
+- **mutates**: nothing (each call builds a fresh Z3 `Solver`)
+
+### `Verifier::verify_consent_non_forgery`
+- **type**: function
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Proves a valid consent signature can only be produced by the holder of the corresponding private key — encodes the property as a Z3 formula and checks it's unsatisfiable to violate (i.e. proven, not just spot-tested).
+- **inputs**: `&self`
+- **outputs**: `PropertyResult` (proven / violated-with-counterexample, via `counterexample.rs`)
+- **called_by**: `verify_all`
+
+### `Verifier::verify_temporal_consistency`
+- **type**: function
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Proves that once consent is revoked at time `t`, it stays revoked for every `t' > t` — no timing-attack window where a stale "still granted" read is possible.
+- **inputs**: `&self`
+- **outputs**: `PropertyResult`
+- **called_by**: `verify_all`
+
+### `Verifier::verify_identity_binding`
+- **type**: function
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Proves a peer ID uniquely determines a single public key — no two distinct keys can derive the same peer ID (collision resistance of the identity-binding function within the symbolic model's bounds).
+- **inputs**: `&self`
+- **outputs**: `PropertyResult`
+- **called_by**: `verify_all`
+
+### `VerificationReport`
+- **type**: struct
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Aggregates named `PropertyResult`s from one `verify_all` run.
+- **calls**: none
+- **called_by**: `Verifier::verify_all`, crate consumers
+
+### `VerificationReport::all_proven` / `has_violations` / `summary` / `get_result` / `results`
+- **type**: functions
+- **file**: `crates/hsip-verify/src/lib.rs`
+- **purpose**: Query helpers over a completed report — whether every property proved, whether any was violated, a human-readable summary string, and lookup by property name.
+- **called_by**: crate consumers, `examples/verify_hsip.rs`
+
+---
+
+## `crates/hsip-verify/src/models.rs`
+
+Symbolic Z3 models of the consent protocol's state (grants, revocations, signatures) that `lib.rs`'s property proofs are built on top of, plus concrete (non-symbolic) equivalents exercised by `tests/verification_tests.rs`'s `*_concrete` tests as a sanity cross-check against the symbolic proofs.
+
+---
+
+## `crates/hsip-verify/src/properties.rs`
+
+Z3 formula builders for the three properties themselves (consent non-forgery, temporal consistency, identity binding) — the actual `∀`/`∃` encodings referenced in the crate's `README.md`, invoked by `lib.rs`'s `Verifier::verify_*` methods.
+
+---
+
+## `crates/hsip-verify/src/counterexample.rs`
+
+- **purpose**: When a property proof's negation is satisfiable (i.e. the property doesn't hold), builds a human-readable `Counterexample` from the Z3 model that satisfied it — concrete values showing exactly how the property fails, not just a bare "unsat/sat" result.
+- **called_by**: `lib.rs`'s `Verifier::verify_*` methods (on the violated path)
+

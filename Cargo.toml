@@ -10,8 +10,11 @@ members = [
     # hsip-intercept: now cross-platform (Windows/Android/Linux/macOS)
     # Build with: cargo build -p hsip-intercept
     "crates/hsip-intercept",
-    # hsip-verify excluded - requires z3-sys which needs Z3 built from source
-    # Build separately with: cargo build -p hsip-verify
+    # hsip-verify: pulls in z3-sys, which builds the Z3 SMT solver from
+    # source on first compile (~8 minutes, one-time — cached by Cargo like
+    # any other dependency afterward). Requires cmake + a C++ toolchain,
+    # both already required to build this workspace's other native deps.
+    "crates/hsip-verify",
     "crates/hsip-common",
     "crates/hsip-regenerative",
     "crates/hsip-telemetry-guard",
@@ -22,10 +25,7 @@ members = [
 ]
 
 
-exclude = [
-    "crates/hsip-session/fuzz",
-    "crates/hsip-verify",
-]
+exclude = ["crates/hsip-session/fuzz"]
 resolver = "2"
 
 [workspace.dependencies]
