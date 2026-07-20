@@ -1039,3 +1039,208 @@ async fn test_master_key_fingerprint_is_read_only_and_admin_gated() {
 
     let _ = std::fs::remove_file(&key_path);
 }
+
+/// `HSIP_ROTATION_HOOK` is the auto-rotation path for `HSIP_MASTER_KEY`-
+/// sourced deployments (no file this process can rewrite). Proves: (1)
+/// rotation refuses with no hook configured, (2) a succeeding hook
+/// receives the new key on stdin and the correct fingerprint env vars, the
+/// DB gets genuinely re-encrypted, and the in-memory key swaps live, and
+/// (3) — the safety-critical case — a *failing* hook leaves the database
+/// completely untouched, not partially rotated.
+///
+/// Unix-only: builds and chmods shell scripts as test hooks.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_master_key_rotation_hook_for_env_sourced_key() {
+    use sha2::{Digest, Sha256};
+    use sqlx::Row;
+    use std::os::unix::fs::PermissionsExt;
+
+    // Build a state with master_key_path: None, matching what main.rs
+    // constructs when the key comes from HSIP_MASTER_KEY.
+    let db_url = format!(
+        "sqlite:file:{}?mode=memory&cache=shared",
+        uuid::Uuid::new_v4()
+    );
+    sqlx::any::install_default_drivers();
+    let db = hsip_api::db::init(&db_url).await.expect("db init");
+
+    let tenant_id = uuid::Uuid::new_v4().to_string();
+    let raw_key = format!("hsip_{}", hex::encode([21u8; 32]));
+    let key_hash = hsip_api::auth::hash_key(&raw_key);
+    let now = hsip_api::db::now_ms();
+    use sqlx::Executor;
+    db.execute(
+        sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'default', ?)")
+            .bind(&tenant_id)
+            .bind(now),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        sqlx::query(
+            "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, created_at, active)
+             VALUES (?, ?, ?, 'admin', 'human', ?, 1)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&tenant_id)
+        .bind(&key_hash)
+        .bind(now),
+    )
+    .await
+    .unwrap();
+
+    let original_key = vec![6u8; 32];
+    let state = hsip_api::state::AppState::new_with_master_key_path(
+        db.clone(),
+        original_key.clone(),
+        None, // env-var-sourced: no file
+    );
+    let app = hsip_api::routes::router().with_state(state);
+
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&raw_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // 1. No hook configured — must refuse, no DB change.
+    std::env::remove_var("HSIP_ROTATION_HOOK");
+    let refused = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/admin/master-key/rotate")
+                .header(header::AUTHORIZATION, bearer(&raw_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    // 2. A succeeding hook: writes stdin (the new key, hex) to a file we
+    // control, so we can verify exactly what HSIP sent it.
+    let work_dir = std::env::temp_dir().join(format!("hsip-hook-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&work_dir).unwrap();
+    let hook_output = work_dir.join("received-key.hex");
+    let ok_hook = work_dir.join("ok-hook.sh");
+    std::fs::write(
+        &ok_hook,
+        format!("#!/bin/sh\ncat > \"{}\"\n", hook_output.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&ok_hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    std::env::set_var("HSIP_ROTATION_HOOK", &ok_hook);
+    let rotate_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/admin/master-key/rotate")
+                .header(header::AUTHORIZATION, bearer(&raw_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotate_res.status(), StatusCode::OK);
+    let rotate_json = body_json(rotate_res.into_body()).await;
+    assert_eq!(rotate_json["identities_reencrypted"], 1);
+    assert_eq!(rotate_json["master_key_path"], serde_json::Value::Null);
+    assert_eq!(
+        rotate_json["rotation_hook"],
+        ok_hook.to_string_lossy().as_ref()
+    );
+
+    // The hook must have received exactly the new key, hex-encoded.
+    let received_hex = std::fs::read_to_string(&hook_output).unwrap();
+    let received_key = hex::decode(received_hex.trim()).unwrap();
+    let expected_fingerprint = hex::encode(&Sha256::digest(&received_key)[..8]);
+    assert_eq!(rotate_json["new_key_fingerprint"], expected_fingerprint);
+    assert_ne!(received_key, original_key);
+
+    // Live in-memory swap: signing must keep working transparently.
+    let sign_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/messages/sign")
+                .header(header::AUTHORIZATION, bearer(&raw_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"content":"post-hook-rotation"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sign_res.status(), StatusCode::OK);
+
+    // The DB row must genuinely be re-encrypted under the new key now.
+    let row = sqlx::query("SELECT signing_key_b64 FROM identities WHERE tenant_id = ?")
+        .bind(&tenant_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let ciphertext: String = row.try_get(0).unwrap();
+    assert!(
+        hsip_api::key_encryption::decrypt_signing_key(&ciphertext, &original_key).is_err(),
+        "old key must no longer decrypt after hook-based rotation"
+    );
+    assert!(
+        hsip_api::key_encryption::decrypt_signing_key(&ciphertext, &received_key).is_ok(),
+        "the key the hook received must decrypt the re-encrypted identity"
+    );
+
+    // 3. Safety-critical case: a FAILING hook must leave the database
+    // completely untouched — no partial re-encryption.
+    let fail_hook = work_dir.join("fail-hook.sh");
+    std::fs::write(
+        &fail_hook,
+        "#!/bin/sh\necho 'simulated failure' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fail_hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::env::set_var("HSIP_ROTATION_HOOK", &fail_hook);
+
+    let ciphertext_before_failed_attempt = ciphertext.clone();
+
+    let failed_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/admin/master-key/rotate")
+                .header(header::AUTHORIZATION, bearer(&raw_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed_res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let row_after = sqlx::query("SELECT signing_key_b64 FROM identities WHERE tenant_id = ?")
+        .bind(&tenant_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let ciphertext_after: String = row_after.try_get(0).unwrap();
+    assert_eq!(
+        ciphertext_after, ciphertext_before_failed_attempt,
+        "a failing rotation hook must leave the database completely untouched"
+    );
+
+    // Fingerprint must also be unchanged — the in-memory key never swapped.
+    let fp_res = app
+        .oneshot(
+            Request::get("/v1/admin/master-key/fingerprint")
+                .header(header::AUTHORIZATION, bearer(&raw_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let fp_json = body_json(fp_res.into_body()).await;
+    assert_eq!(fp_json["fingerprint"], expected_fingerprint);
+
+    std::env::remove_var("HSIP_ROTATION_HOOK");
+    let _ = std::fs::remove_dir_all(&work_dir);
+}
