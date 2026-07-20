@@ -64,7 +64,7 @@ pub async fn add(
 
     sqlx::query(
         "INSERT INTO trusted_peers (id, tenant_id, label, verify_key, added_at)
-         VALUES (?, ?, ?, ?, ?)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT(tenant_id, verify_key) DO UPDATE SET label = excluded.label",
     )
     .bind(&id)
@@ -100,7 +100,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<TrustedPeer>>> {
     let rows = sqlx::query(
         "SELECT id, label, verify_key, added_at FROM trusted_peers
-         WHERE tenant_id = ? ORDER BY added_at DESC",
+         WHERE tenant_id = $1 ORDER BY added_at DESC",
     )
     .bind(&tenant.0)
     .fetch_all(&state.db)
@@ -128,7 +128,7 @@ pub async fn remove(
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let row =
-        sqlx::query("SELECT verify_key, label FROM trusted_peers WHERE id = ? AND tenant_id = ?")
+        sqlx::query("SELECT verify_key, label FROM trusted_peers WHERE id = $1 AND tenant_id = $2")
             .bind(&id)
             .bind(&tenant.0)
             .fetch_optional(&state.db)
@@ -138,7 +138,7 @@ pub async fn remove(
     let vk: String = row.try_get(0)?;
     let label: String = row.try_get(1)?;
 
-    sqlx::query("DELETE FROM trusted_peers WHERE id = ? AND tenant_id = ?")
+    sqlx::query("DELETE FROM trusted_peers WHERE id = $1 AND tenant_id = $2")
         .bind(&id)
         .bind(&tenant.0)
         .execute(&state.db)
@@ -165,14 +165,15 @@ pub async fn verify(
     tenant: TenantId,
     Json(req): Json<TrustVerifyRequest>,
 ) -> ApiResult<Json<TrustVerifyResponse>> {
-    let row = sqlx::query("SELECT verify_key FROM trusted_peers WHERE tenant_id = ? AND label = ?")
-        .bind(&tenant.0)
-        .bind(&req.label)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("No trusted peer with label \"{}\"", req.label))
-        })?;
+    let row =
+        sqlx::query("SELECT verify_key FROM trusted_peers WHERE tenant_id = $1 AND label = $2")
+            .bind(&tenant.0)
+            .bind(&req.label)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| {
+                ApiError::NotFound(format!("No trusted peer with label \"{}\"", req.label))
+            })?;
 
     let vk_b64: String = row.try_get(0)?;
 

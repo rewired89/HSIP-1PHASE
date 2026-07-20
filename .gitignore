@@ -84,8 +84,12 @@ tools/
 
 slowloris_test.py
 
-# Release binaries — built locally, distributed via ZIP not git
-bin/
+# Release binaries — built locally, distributed via ZIP not git. Anchored to
+# the repo root (leading /) so it doesn't also match src/bin/ directories,
+# which is Cargo's own convention for extra [[bin]] targets within a crate
+# (e.g. crates/hsip-api/src/bin/hsip_migrate.rs) — a bare "bin/" pattern
+# silently gitignored that source file the first time this project added one.
+/bin/
 
 # Database files (never commit runtime data)
 *.db

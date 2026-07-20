@@ -23,31 +23,31 @@ pub async fn erase(
     let tid = &tenant.0;
 
     // Delete in dependency order
-    sqlx::query("DELETE FROM credentials    WHERE tenant_id = ?")
+    sqlx::query("DELETE FROM credentials    WHERE tenant_id = $1")
         .bind(tid)
         .execute(&state.db)
         .await?;
-    sqlx::query("DELETE FROM messages       WHERE tenant_id = ?")
+    sqlx::query("DELETE FROM messages       WHERE tenant_id = $1")
         .bind(tid)
         .execute(&state.db)
         .await?;
-    sqlx::query("DELETE FROM consents       WHERE tenant_id = ?")
+    sqlx::query("DELETE FROM consents       WHERE tenant_id = $1")
         .bind(tid)
         .execute(&state.db)
         .await?;
-    sqlx::query("DELETE FROM identities     WHERE tenant_id = ?")
+    sqlx::query("DELETE FROM identities     WHERE tenant_id = $1")
         .bind(tid)
         .execute(&state.db)
         .await?;
-    sqlx::query("DELETE FROM audit_entries  WHERE tenant_id = ?")
+    sqlx::query("DELETE FROM audit_entries  WHERE tenant_id = $1")
         .bind(tid)
         .execute(&state.db)
         .await?;
-    sqlx::query("DELETE FROM api_keys       WHERE tenant_id = ?")
+    sqlx::query("DELETE FROM api_keys       WHERE tenant_id = $1")
         .bind(tid)
         .execute(&state.db)
         .await?;
-    sqlx::query("DELETE FROM tenants        WHERE id        = ?")
+    sqlx::query("DELETE FROM tenants        WHERE id        = $1")
         .bind(tid)
         .execute(&state.db)
         .await?;
@@ -82,7 +82,7 @@ pub async fn info(
     State(state): State<AppState>,
     tenant: TenantId,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let row = sqlx::query("SELECT name, created_at FROM tenants WHERE id = ?")
+    let row = sqlx::query("SELECT name, created_at FROM tenants WHERE id = $1")
         .bind(&tenant.0)
         .fetch_one(&state.db)
         .await?;

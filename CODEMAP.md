@@ -540,8 +540,8 @@
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
-- **called_by**: `init`, `init_with_config`
-- **mutates**: DB schema
+- **called_by**: `init`, `init_with_config`, `bin/hsip_migrate.rs::main` (creates the target schema before copying data — `pub` specifically so the migration binary can call it directly, guaranteeing the target schema can never drift from what the server itself expects)
+- **mutates**: DB schema. All millisecond-epoch/wide-range columns are `BIGINT` (not `INTEGER` — PostgreSQL's `INTEGER` is a 4-byte `int4`, max ~2.1e9, which overflows on a real epoch-ms timestamp, ~1.7e12); binary columns are `BYTEA` (not `BLOB` — doesn't exist on PostgreSQL). Also includes a one-time, non-fatal `ALTER TABLE ... ALTER COLUMN ... TYPE BIGINT` widening pass for any PostgreSQL database whose tables were created by an older revision of this function (safe — those installs could `CREATE TABLE` but every real-timestamp `INSERT` already failed, so there's no data to lose). See "SQLite → PostgreSQL Migration" in `CLAUDE.md`.
 
 ### `now_ms`
 - **type**: function
@@ -552,6 +552,77 @@
 - **calls**: `SystemTime::now().duration_since`
 - **called_by**: route handlers needing timestamps
 - **mutates**: nothing
+
+---
+
+## `crates/hsip-api/src/bin/hsip_migrate.rs`
+
+Second `[[bin]]` target in `hsip-api`'s `Cargo.toml` (binary name `hsip-migrate`). Copies an existing SQLite HSIP deployment's data into PostgreSQL. Built while investigating "SQLite → PostgreSQL migration tooling," which surfaced that PostgreSQL had never actually worked for any HSIP deployment at all — see `db::run_migrations`'s entry above and `CLAUDE.md`'s "SQLite → PostgreSQL Migration" section for the two bugs (INTEGER/BLOB schema types, `?` vs `$N` bind placeholders) found and fixed alongside this tool.
+
+### `Col` / `Table` / `Opts` / `Val`
+- **type**: enums/structs
+- **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
+- **purpose**: `Col` tags each column's Rust type for generic copy (`Text`/`OptText`/`Int`/`OptInt`/`Blob`/`OptBlob`). `Table` pairs a table name with its `&[(&str, Col)]` column list. `Opts` holds parsed CLI flags (`from`, `to`, `yes`, `force`). `Val` is the owned-value enum `extract` decodes a source row's column into, so `copy_table`'s bind loop doesn't need per-column-type generic code at the call site.
+- **called_by**: `TABLES`, `parse_args`, `extract`, `copy_table`
+
+### `TABLES`
+- **type**: variable (constant, `&[Table]`)
+- **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
+- **purpose**: Every table in `db::run_migrations`'s schema, with its exact column list and types, driving the copy loop. **Not** discovered dynamically — a table added to `db.rs` without a matching entry here silently isn't migrated (documented inline and in `CLAUDE.md`'s Key Invariants).
+- **called_by**: `main`
+
+### `parse_args`
+- **type**: function
+- **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
+- **purpose**: Manual `--from`/`--to`/`--yes`/`--force`/`--help` argument parsing (no `clap` dependency added just for five flags).
+- **inputs**: `std::env::args()`
+- **outputs**: `Result<Opts>`
+- **calls**: `print_usage` (on `--help`)
+- **called_by**: `main`
+
+### `redact`
+- **type**: function
+- **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
+- **purpose**: Strips a `user:password@` connection-string password before it's ever printed to stdout (terminal scrollback, CI logs).
+- **inputs**: `url: &str`
+- **outputs**: `String`
+- **called_by**: `main` (printing source/target URLs)
+
+### `extract`
+- **type**: function
+- **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
+- **purpose**: Reads one column from a source `AnyRow` into the owned `Val` matching its `Col` kind.
+- **inputs**: `row: &AnyRow`, `idx: usize`, `kind: Col`
+- **outputs**: `Result<Val>`
+- **called_by**: `copy_table`
+
+### `copy_table`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
+- **purpose**: `SELECT`s every row of one table from the source, then `INSERT`s each into the target inside the caller's transaction, using `$1, $2, ...` placeholders built from the table's column count.
+- **inputs**: `source: &AnyPool`, `tx: &mut Transaction<'_, Any>`, `table: &Table`
+- **outputs**: `Result<usize>` (rows copied)
+- **calls**: `extract`
+- **called_by**: `main`
+- **mutates**: target DB (via `tx`, not committed until `main` calls `tx.commit()`)
+
+### `row_count`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
+- **purpose**: `SELECT COUNT(*)` on a pool — used both for the "target already has data" safety check and the post-copy source/target verification pass.
+- **inputs**: `pool: &AnyPool`, `table: &str`
+- **outputs**: `Result<i64>`
+- **called_by**: `main`
+
+### `main` (hsip_migrate)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
+- **purpose**: Parses args, prompts for confirmation unless `--yes`, connects to both databases, calls `hsip_api::db::run_migrations` to create the target schema, refuses a non-empty target without `--force`, copies every `TABLES` entry inside one target-side transaction, commits, then verifies row counts match on both sides post-copy. Never writes to the source database.
+- **inputs**: none (reads `std::env::args()`)
+- **outputs**: `Result<()>`
+- **calls**: `parse_args`, `redact`, `hsip_api::db::run_migrations`, `row_count`, `copy_table`
+- **called_by**: OS (binary entry point)
+- **mutates**: target DB only
 
 ---
 

@@ -9,6 +9,10 @@ license = "LicenseRef-Proprietary"
 name = "hsip-api"
 path = "src/main.rs"
 
+[[bin]]
+name = "hsip-migrate"
+path = "src/bin/hsip_migrate.rs"
+
 [features]
 # Build with --features embed-dashboard to bundle the React UI into the binary.
 # Requires `dashboard/dist/` to exist (run `npm run build` in dashboard/ first).

@@ -33,7 +33,7 @@ async fn resolve_granting_key_type(
         .map(str::trim)
         .ok_or_else(|| ApiError::Unauthorized("Missing Authorization: Bearer <key>".into()))?;
     let key_hash = hash_key(token);
-    let row = sqlx::query("SELECT agent_type FROM api_keys WHERE key_hash = ? AND tenant_id = ?")
+    let row = sqlx::query("SELECT agent_type FROM api_keys WHERE key_hash = $1 AND tenant_id = $2")
         .bind(&key_hash)
         .bind(tenant_id)
         .fetch_optional(db)
@@ -128,7 +128,7 @@ pub async fn grant(
 
     sqlx::query(
         "INSERT INTO consents (id, tenant_id, peer_verify_key, status, granted_at, expires_ms, created_at, granted_by_key_type)
-         VALUES (?, ?, ?, 'granted', ?, ?, ?, ?)
+         VALUES ($1, $2, $3, 'granted', $4, $5, $6, $7)
          ON CONFLICT (tenant_id, peer_verify_key)
          DO UPDATE SET status='granted', granted_at=excluded.granted_at,
                        expires_ms=excluded.expires_ms, revoked_at=NULL,
@@ -179,8 +179,8 @@ pub async fn revoke(
     let revoked_by = resolve_granting_key_type(&state.db, &headers, &tenant.0).await?;
 
     let result = sqlx::query(
-        "UPDATE consents SET status='revoked', revoked_at=?
-         WHERE tenant_id=? AND peer_verify_key=?",
+        "UPDATE consents SET status='revoked', revoked_at=$1
+         WHERE tenant_id=$2 AND peer_verify_key=$3",
     )
     .bind(now)
     .bind(&tenant.0)
@@ -197,7 +197,7 @@ pub async fn revoke(
 
     let row = sqlx::query(
         "SELECT id, granted_at, expires_ms, created_at, granted_by_key_type
-         FROM consents WHERE tenant_id=? AND peer_verify_key=?",
+         FROM consents WHERE tenant_id=$1 AND peer_verify_key=$2",
     )
     .bind(&tenant.0)
     .bind(&req.peer_verify_key)
@@ -238,7 +238,7 @@ pub async fn list(
 
     let rows = sqlx::query(
         "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at, granted_by_key_type
-         FROM consents WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+         FROM consents WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
     )
     .bind(&tenant.0)
     .bind(limit)
@@ -278,7 +278,7 @@ pub async fn get(
 
     let row = sqlx::query(
         "SELECT id, peer_verify_key, status, granted_at, expires_ms, revoked_at, created_at, granted_by_key_type
-         FROM consents WHERE tenant_id=? AND peer_verify_key=?",
+         FROM consents WHERE tenant_id=$1 AND peer_verify_key=$2",
     )
     .bind(&tenant.0)
     .bind(&peer_key)

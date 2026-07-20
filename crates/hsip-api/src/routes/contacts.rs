@@ -35,7 +35,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<ContactRecord>>> {
     let rows = sqlx::query(
         "SELECT id, nickname, verify_key, added_at FROM contacts
-         WHERE tenant_id=? ORDER BY nickname ASC",
+         WHERE tenant_id=$1 ORDER BY nickname ASC",
     )
     .bind(&tenant.0)
     .fetch_all(&state.db)
@@ -81,7 +81,7 @@ pub async fn add(
     // Upsert: if key already exists for this tenant, update the nickname
     sqlx::query(
         "INSERT INTO contacts (id, tenant_id, nickname, verify_key, added_at)
-         VALUES (?, ?, ?, ?, ?)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT(tenant_id, verify_key) DO UPDATE SET nickname = excluded.nickname",
     )
     .bind(&id)
@@ -95,7 +95,7 @@ pub async fn add(
     // Re-fetch to get the real id (may differ if upsert hit existing row)
     let row = sqlx::query(
         "SELECT id, nickname, verify_key, added_at FROM contacts
-         WHERE tenant_id=? AND verify_key=?",
+         WHERE tenant_id=$1 AND verify_key=$2",
     )
     .bind(&tenant.0)
     .bind(&req.verify_key)
@@ -115,7 +115,7 @@ pub async fn remove(
     tenant: TenantId,
     Path(contact_id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let result = sqlx::query("DELETE FROM contacts WHERE id=? AND tenant_id=?")
+    let result = sqlx::query("DELETE FROM contacts WHERE id=$1 AND tenant_id=$2")
         .bind(&contact_id)
         .bind(&tenant.0)
         .execute(&state.db)

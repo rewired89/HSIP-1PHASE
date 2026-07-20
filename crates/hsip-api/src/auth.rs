@@ -60,8 +60,8 @@ impl FromRequestParts<AppState> for TenantId {
 
         let row = sqlx::query(
             "SELECT tenant_id, id, agent_type FROM api_keys
-             WHERE key_hash = ? AND active = 1
-               AND (expires_at IS NULL OR expires_at > ?)",
+             WHERE key_hash = $1 AND active = 1
+               AND (expires_at IS NULL OR expires_at > $2)",
         )
         .bind(&key_hash)
         .bind(now)
@@ -302,7 +302,7 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
             // happen.
             let mut revoked = false;
             for attempt in 1..=3u32 {
-                match sqlx::query("UPDATE api_keys SET active=0 WHERE id=?")
+                match sqlx::query("UPDATE api_keys SET active=0 WHERE id=$1")
                     .bind(&kid)
                     .execute(&db)
                     .await

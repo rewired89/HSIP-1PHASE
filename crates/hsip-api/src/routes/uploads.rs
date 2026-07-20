@@ -69,7 +69,7 @@ pub async fn upload(
 
     sqlx::query(
         "INSERT INTO uploads (id, tenant_id, filename, content_type, data, size, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(&id)
     .bind(&tenant_id)
@@ -101,7 +101,7 @@ pub async fn upload(
 /// The URL returned by `upload` is intentionally shareable without a token
 /// so the recipient can paste it directly into a browser.
 pub async fn serve(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    let row = sqlx::query("SELECT content_type, data FROM uploads WHERE id = ?")
+    let row = sqlx::query("SELECT content_type, data FROM uploads WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await;

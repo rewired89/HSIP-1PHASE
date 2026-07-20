@@ -61,7 +61,7 @@ pub async fn record(
     for attempt in 1..=MAX_ATTEMPTS {
         let prev_row = sqlx::query(
             "SELECT entry_hash FROM audit_entries
-             WHERE tenant_id = ? AND entry_hash IS NOT NULL
+             WHERE tenant_id = $1 AND entry_hash IS NOT NULL
              ORDER BY timestamp DESC LIMIT 1",
         )
         .bind(tenant_id)
@@ -86,7 +86,7 @@ pub async fn record(
         let result = sqlx::query(
             "INSERT INTO audit_entries
              (id, tenant_id, action, peer_verify_key, details, timestamp, prev_hash, entry_hash)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(&id)
         .bind(tenant_id)

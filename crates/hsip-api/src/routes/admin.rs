@@ -42,7 +42,7 @@ async fn require_root_admin(db: &crate::db::Db, headers: &HeaderMap) -> ApiResul
     let key_hash = hash_key(token);
 
     let key_row =
-        sqlx::query("SELECT is_root_admin FROM api_keys WHERE key_hash = ? AND active = 1")
+        sqlx::query("SELECT is_root_admin FROM api_keys WHERE key_hash = $1 AND active = 1")
             .bind(&key_hash)
             .fetch_optional(db)
             .await?
@@ -275,7 +275,7 @@ pub async fn rotate_master_key(
         })?;
         let re_encrypted = encrypt_signing_key(&key_bytes, &new_key);
 
-        sqlx::query("UPDATE identities SET signing_key_b64 = ? WHERE tenant_id = ?")
+        sqlx::query("UPDATE identities SET signing_key_b64 = $1 WHERE tenant_id = $2")
             .bind(&re_encrypted)
             .bind(&row_tenant_id)
             .execute(&mut *tx)
@@ -295,7 +295,7 @@ pub async fn rotate_master_key(
             ))
         })?;
         let re_encrypted = encrypt_signing_key(&key_bytes, &new_key);
-        sqlx::query("UPDATE anchor_identity SET signing_key_b64 = ? WHERE id = 1")
+        sqlx::query("UPDATE anchor_identity SET signing_key_b64 = $1 WHERE id = 1")
             .bind(&re_encrypted)
             .execute(&mut *tx)
             .await?;
@@ -503,7 +503,7 @@ pub async fn grant_root_admin(
 ) -> ApiResult<Json<serde_json::Value>> {
     require_root_admin(&state.db, &headers).await?;
 
-    let row = sqlx::query("SELECT tenant_id, active FROM api_keys WHERE id = ?")
+    let row = sqlx::query("SELECT tenant_id, active FROM api_keys WHERE id = $1")
         .bind(&req.key_id)
         .fetch_optional(&state.db)
         .await?
@@ -516,7 +516,7 @@ pub async fn grant_root_admin(
         ));
     }
 
-    sqlx::query("UPDATE api_keys SET is_root_admin = 1 WHERE id = ?")
+    sqlx::query("UPDATE api_keys SET is_root_admin = 1 WHERE id = $1")
         .bind(&req.key_id)
         .execute(&state.db)
         .await?;
@@ -552,7 +552,7 @@ pub async fn revoke_root_admin(
 ) -> ApiResult<Json<serde_json::Value>> {
     require_root_admin(&state.db, &headers).await?;
 
-    let row = sqlx::query("SELECT tenant_id, is_root_admin FROM api_keys WHERE id = ?")
+    let row = sqlx::query("SELECT tenant_id, is_root_admin FROM api_keys WHERE id = $1")
         .bind(&req.key_id)
         .fetch_optional(&state.db)
         .await?
@@ -572,7 +572,7 @@ pub async fn revoke_root_admin(
         ));
     }
 
-    sqlx::query("UPDATE api_keys SET is_root_admin = 0 WHERE id = ?")
+    sqlx::query("UPDATE api_keys SET is_root_admin = 0 WHERE id = $1")
         .bind(&req.key_id)
         .execute(&state.db)
         .await?;

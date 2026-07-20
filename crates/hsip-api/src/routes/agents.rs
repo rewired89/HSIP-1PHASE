@@ -102,7 +102,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<AgentStats>>> {
     let rows = sqlx::query(
         "SELECT id, name, active FROM api_keys
-         WHERE tenant_id = ? AND agent_type = 'ai_agent'
+         WHERE tenant_id = $1 AND agent_type = 'ai_agent'
          ORDER BY created_at DESC",
     )
     .bind(&tenant.0)
@@ -188,7 +188,7 @@ pub async fn discover(
 ) -> ApiResult<Json<Vec<DiscoveredAgent>>> {
     // Fetch registered agent names once so we can flag duplicates.
     let rows = sqlx::query(
-        "SELECT name FROM api_keys WHERE tenant_id = ? AND agent_type = 'ai_agent' AND active = 1",
+        "SELECT name FROM api_keys WHERE tenant_id = $1 AND agent_type = 'ai_agent' AND active = 1",
     )
     .bind(&tenant.0)
     .fetch_all(&state.db)

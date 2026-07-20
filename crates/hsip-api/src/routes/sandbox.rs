@@ -75,7 +75,7 @@ pub async fn provision(
 
     // Isolated tenant per trial user.
     let tenant_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, ?, ?)")
+    sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, $3)")
         .bind(&tenant_id)
         .bind(format!("sandbox-{}", &tenant_id[..8]))
         .bind(now)
@@ -95,7 +95,7 @@ pub async fn provision(
     sqlx::query(
         "INSERT INTO api_keys
          (id, tenant_id, key_hash, name, agent_type, role, created_at, expires_at, active)
-         VALUES (?, ?, ?, 'sandbox-trial', 'human', 'owner', ?, ?, 1)",
+         VALUES ($1, $2, $3, 'sandbox-trial', 'human', 'owner', $4, $5, 1)",
     )
     .bind(&key_id)
     .bind(&tenant_id)
@@ -178,7 +178,7 @@ async fn cleanup_expired_sandboxes(db: &Db) {
            SELECT 1 FROM api_keys k
            WHERE k.tenant_id = t.id
            AND k.active = 1
-           AND (k.expires_at IS NULL OR k.expires_at > ?)
+           AND (k.expires_at IS NULL OR k.expires_at > $1)
          )",
     )
     .bind(now)
@@ -203,43 +203,43 @@ async fn cleanup_expired_sandboxes(db: &Db) {
     // Delete all tenant data in dependency order. Errors are silently ignored
     // (cleanup is best-effort; the next provision call will retry).
     for id in &ids {
-        let _ = sqlx::query("DELETE FROM messages      WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM messages      WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM consents      WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM consents      WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM identities    WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM identities    WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM contacts      WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM contacts      WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM credentials   WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM credentials   WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM audit_entries WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM audit_entries WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM trusted_peers WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM trusted_peers WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM uploads       WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM uploads       WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM api_keys      WHERE tenant_id = ?")
+        let _ = sqlx::query("DELETE FROM api_keys      WHERE tenant_id = $1")
             .bind(id)
             .execute(db)
             .await;
-        let _ = sqlx::query("DELETE FROM tenants       WHERE id = ?")
+        let _ = sqlx::query("DELETE FROM tenants       WHERE id = $1")
             .bind(id)
             .execute(db)
             .await;
@@ -255,7 +255,7 @@ async fn count_active_sandboxes(db: &Db) -> i64 {
          JOIN api_keys k ON k.tenant_id = t.id
          WHERE t.name LIKE 'sandbox-%'
          AND k.active = 1
-         AND k.expires_at > ?",
+         AND k.expires_at > $1",
     )
     .bind(now)
     .fetch_one(db)

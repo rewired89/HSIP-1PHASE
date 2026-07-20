@@ -55,7 +55,7 @@ async fn load_or_create_anchor_identity(db: &Db, master_key: &[u8]) -> anyhow::R
     // failing the whole cycle.
     let inserted = sqlx::query(
         "INSERT INTO anchor_identity (id, signing_key_b64, verify_key_b64, created_at)
-         SELECT 1, ?, ?, ?
+         SELECT 1, $1, $2, $3
          WHERE NOT EXISTS (SELECT 1 FROM anchor_identity WHERE id = 1)",
     )
     .bind(&encrypted_b64)
@@ -132,7 +132,7 @@ pub async fn run_anchor_cycle_with_calendars(
 
     let rows = sqlx::query(
         "SELECT id, event_hash FROM decisions WHERE anchor_id IS NULL
-         ORDER BY created_at ASC LIMIT ?",
+         ORDER BY created_at ASC LIMIT $1",
     )
     .bind(MAX_BATCH_SIZE)
     .fetch_all(db)
@@ -183,7 +183,7 @@ pub async fn run_anchor_cycle_with_calendars(
     sqlx::query(
         "INSERT INTO decision_anchors
          (id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(&anchor_id)
     .bind(hex::encode(root))
@@ -197,7 +197,7 @@ pub async fn run_anchor_cycle_with_calendars(
     .await?;
 
     for (index, id) in ids.iter().enumerate() {
-        sqlx::query("UPDATE decisions SET anchor_id = ?, merkle_index = ? WHERE id = ?")
+        sqlx::query("UPDATE decisions SET anchor_id = $1, merkle_index = $2 WHERE id = $3")
             .bind(&anchor_id)
             .bind(index as i64)
             .bind(id)
@@ -207,7 +207,7 @@ pub async fn run_anchor_cycle_with_calendars(
 
     // One audit entry per distinct tenant touched by this batch — anchoring
     // is a system-level operation, but audit_entries is scoped per tenant.
-    let tenant_rows = sqlx::query("SELECT DISTINCT tenant_id FROM decisions WHERE anchor_id = ?")
+    let tenant_rows = sqlx::query("SELECT DISTINCT tenant_id FROM decisions WHERE anchor_id = $1")
         .bind(&anchor_id)
         .fetch_all(db)
         .await?;
@@ -269,7 +269,7 @@ async fn retry_pending_ots_submissions(db: &Db, calendars: &[&str]) {
         match anchor::submit_digest_to(calendars, &root).await {
             Ok(receipt) => {
                 let _ = sqlx::query(
-                    "UPDATE decision_anchors SET ots_proof = ?, ots_status = 'pending' WHERE id = ?",
+                    "UPDATE decision_anchors SET ots_proof = $1, ots_status = 'pending' WHERE id = $2",
                 )
                 .bind(&receipt.response_bytes)
                 .bind(&anchor_id)
@@ -340,7 +340,7 @@ pub async fn run_audit_anchor_cycle_with_calendars(
 
     let rows = sqlx::query(
         "SELECT id, entry_hash FROM audit_entries WHERE anchor_id IS NULL AND entry_hash IS NOT NULL
-         ORDER BY timestamp ASC LIMIT ?",
+         ORDER BY timestamp ASC LIMIT $1",
     )
     .bind(MAX_BATCH_SIZE)
     .fetch_all(db)
@@ -394,7 +394,7 @@ pub async fn run_audit_anchor_cycle_with_calendars(
     sqlx::query(
         "INSERT INTO audit_anchors
          (id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(&anchor_id)
     .bind(hex::encode(root))
@@ -408,7 +408,7 @@ pub async fn run_audit_anchor_cycle_with_calendars(
     .await?;
 
     for (index, id) in ids.iter().enumerate() {
-        sqlx::query("UPDATE audit_entries SET anchor_id = ?, merkle_index = ? WHERE id = ?")
+        sqlx::query("UPDATE audit_entries SET anchor_id = $1, merkle_index = $2 WHERE id = $3")
             .bind(&anchor_id)
             .bind(index as i64)
             .bind(id)
@@ -421,7 +421,7 @@ pub async fn run_audit_anchor_cycle_with_calendars(
     // anchor batch itself; this does not recurse within the same cycle
     // since the UPDATE above already ran before this INSERT.
     let tenant_rows =
-        sqlx::query("SELECT DISTINCT tenant_id FROM audit_entries WHERE anchor_id = ?")
+        sqlx::query("SELECT DISTINCT tenant_id FROM audit_entries WHERE anchor_id = $1")
             .bind(&anchor_id)
             .fetch_all(db)
             .await?;
@@ -485,7 +485,7 @@ async fn retry_pending_audit_ots_submissions(db: &Db, calendars: &[&str]) {
         match anchor::submit_digest_to(calendars, &root).await {
             Ok(receipt) => {
                 let _ = sqlx::query(
-                    "UPDATE audit_anchors SET ots_proof = ?, ots_status = 'pending' WHERE id = ?",
+                    "UPDATE audit_anchors SET ots_proof = $1, ots_status = 'pending' WHERE id = $2",
                 )
                 .bind(&receipt.response_bytes)
                 .bind(&anchor_id)

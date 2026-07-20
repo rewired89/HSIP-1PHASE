@@ -47,8 +47,8 @@ pub async fn list(
         let pattern = format!("%{act}%");
         sqlx::query(
             "SELECT id, action, peer_verify_key, details, timestamp, prev_hash, entry_hash
-             FROM audit_entries WHERE tenant_id=? AND action LIKE ?
-             ORDER BY timestamp DESC LIMIT ?",
+             FROM audit_entries WHERE tenant_id=$1 AND action LIKE $2
+             ORDER BY timestamp DESC LIMIT $3",
         )
         .bind(&tenant.0)
         .bind(&pattern)
@@ -58,8 +58,8 @@ pub async fn list(
     } else {
         sqlx::query(
             "SELECT id, action, peer_verify_key, details, timestamp, prev_hash, entry_hash
-             FROM audit_entries WHERE tenant_id=?
-             ORDER BY timestamp DESC LIMIT ?",
+             FROM audit_entries WHERE tenant_id=$1
+             ORDER BY timestamp DESC LIMIT $2",
         )
         .bind(&tenant.0)
         .bind(limit)
@@ -110,7 +110,7 @@ pub async fn verify_chain(
 ) -> ApiResult<Json<AuditVerifyResponse>> {
     let rows = sqlx::query(
         "SELECT id, tenant_id, action, peer_verify_key, details, timestamp, prev_hash, entry_hash
-         FROM audit_entries WHERE tenant_id=?
+         FROM audit_entries WHERE tenant_id=$1
          ORDER BY timestamp ASC",
     )
     .bind(&tenant.0)
@@ -176,7 +176,7 @@ pub async fn proof(
 ) -> ApiResult<Json<AuditProofBundle>> {
     let row = sqlx::query(
         "SELECT action, peer_verify_key, details, timestamp, prev_hash, entry_hash, anchor_id, merkle_index
-         FROM audit_entries WHERE id = ? AND tenant_id = ?",
+         FROM audit_entries WHERE id = $1 AND tenant_id = $2",
     )
     .bind(&id)
     .bind(&tenant.0)
@@ -224,7 +224,7 @@ pub async fn proof(
 
     let anchor_row = sqlx::query(
         "SELECT merkle_root, anchor_signature, anchor_verify_key, ots_proof, ots_status
-         FROM audit_anchors WHERE id = ?",
+         FROM audit_anchors WHERE id = $1",
     )
     .bind(&anchor_id)
     .fetch_optional(&state.db)
@@ -239,7 +239,7 @@ pub async fn proof(
     let ots_status: String = anchor_row.try_get(4)?;
 
     let leaf_rows = sqlx::query(
-        "SELECT entry_hash FROM audit_entries WHERE anchor_id = ? ORDER BY merkle_index ASC",
+        "SELECT entry_hash FROM audit_entries WHERE anchor_id = $1 ORDER BY merkle_index ASC",
     )
     .bind(&anchor_id)
     .fetch_all(&state.db)

@@ -24,7 +24,7 @@ pub async fn create_or_get(
     State(state): State<AppState>,
     tenant: TenantId,
 ) -> ApiResult<Json<IdentityResponse>> {
-    let row = sqlx::query("SELECT verify_key_b64, created_at FROM identities WHERE tenant_id = ?")
+    let row = sqlx::query("SELECT verify_key_b64, created_at FROM identities WHERE tenant_id = $1")
         .bind(&tenant.0)
         .fetch_optional(&state.db)
         .await?;
@@ -51,7 +51,7 @@ pub async fn create_or_get(
 
     sqlx::query(
         "INSERT INTO identities (tenant_id, signing_key_b64, verify_key_b64, created_at)
-         VALUES (?, ?, ?, ?)",
+         VALUES ($1, $2, $3, $4)",
     )
     .bind(&tenant.0)
     .bind(&encrypted_b64)
@@ -81,7 +81,7 @@ pub async fn get(
     State(state): State<AppState>,
     tenant: TenantId,
 ) -> ApiResult<Json<IdentityResponse>> {
-    let row = sqlx::query("SELECT verify_key_b64, created_at FROM identities WHERE tenant_id = ?")
+    let row = sqlx::query("SELECT verify_key_b64, created_at FROM identities WHERE tenant_id = $1")
         .bind(&tenant.0)
         .fetch_optional(&state.db)
         .await?
@@ -109,7 +109,7 @@ pub async fn rotate(
     tenant: TenantId,
 ) -> ApiResult<Json<IdentityResponse>> {
     // Require existing identity before rotation
-    let existing = sqlx::query("SELECT verify_key_b64 FROM identities WHERE tenant_id = ?")
+    let existing = sqlx::query("SELECT verify_key_b64 FROM identities WHERE tenant_id = $1")
         .bind(&tenant.0)
         .fetch_optional(&state.db)
         .await?
@@ -130,7 +130,7 @@ pub async fn rotate(
     let now = now_ms();
 
     sqlx::query(
-        "UPDATE identities SET signing_key_b64 = ?, verify_key_b64 = ? WHERE tenant_id = ?",
+        "UPDATE identities SET signing_key_b64 = $1, verify_key_b64 = $2 WHERE tenant_id = $3",
     )
     .bind(&new_encrypted)
     .bind(&new_verify_b64)
@@ -163,7 +163,7 @@ pub async fn load_signing_key(
     tenant_id: &str,
     master_key: &[u8],
 ) -> ApiResult<SigningKey> {
-    let row = sqlx::query("SELECT signing_key_b64 FROM identities WHERE tenant_id = ?")
+    let row = sqlx::query("SELECT signing_key_b64 FROM identities WHERE tenant_id = $1")
         .bind(tenant_id)
         .fetch_optional(db)
         .await?

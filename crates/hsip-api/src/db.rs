@@ -70,12 +70,31 @@ pub async fn init_with_config(config: &DatabaseConfig) -> anyhow::Result<Db> {
     Ok(pool)
 }
 
-async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
+/// Creates every table/index/column this version of HSIP needs, and applies
+/// non-fatal backfills/widenings for upgraded databases. Idempotent and
+/// backend-agnostic (SQLite or PostgreSQL via `sqlx::Any`) — the single
+/// source of truth for HSIP's schema; there are no separate migration files.
+/// `pub` (not just `pub(crate)`) so `bin/hsip_migrate.rs` can call it
+/// directly to create the target schema before copying data — see
+/// "SQLite → PostgreSQL migration tooling" in CLAUDE.md.
+pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
+    // NOTE on INTEGER vs BIGINT: every "created_at"/"timestamp"/"*_at"/"*_ms"
+    // column below stores a millisecond-epoch value from `now_ms()` (~1.7e12
+    // as of 2026) or a similarly wide value. Plain "INTEGER" is SQLite's only
+    // integer keyword and is dynamically typed up to 8 bytes there, so it was
+    // never a problem on SQLite — but on PostgreSQL "INTEGER" is a real 4-byte
+    // int4 (max ~2.1e9), and every insert of a real epoch-ms timestamp
+    // overflows it. This was never caught because HSIP had never actually
+    // been run against a live Postgres instance. Millisecond-epoch and
+    // similarly-wide columns use BIGINT (int8 on Postgres, identical INTEGER
+    // affinity storage on SQLite — a no-op rename there). Small bounded
+    // values (0/1 flags, in-batch Merkle leaf indices, anchor batch leaf
+    // counts) stay INTEGER.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS tenants (
             id         TEXT PRIMARY KEY,
             name       TEXT NOT NULL,
-            created_at INTEGER NOT NULL
+            created_at BIGINT NOT NULL
         )",
     )
     .execute(pool)
@@ -88,8 +107,8 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             key_hash   TEXT NOT NULL UNIQUE,
             name       TEXT NOT NULL DEFAULT 'default',
             agent_type TEXT NOT NULL DEFAULT 'human',
-            created_at INTEGER NOT NULL,
-            expires_at INTEGER,
+            created_at BIGINT NOT NULL,
+            expires_at BIGINT,
             active     INTEGER NOT NULL DEFAULT 1
         )",
     )
@@ -97,7 +116,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .await?;
 
     // Non-fatal: column may already exist on upgraded databases
-    let _ = sqlx::query("ALTER TABLE api_keys ADD COLUMN expires_at INTEGER")
+    let _ = sqlx::query("ALTER TABLE api_keys ADD COLUMN expires_at BIGINT")
         .execute(pool)
         .await;
 
@@ -159,7 +178,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             tenant_id       TEXT PRIMARY KEY,
             signing_key_b64 TEXT NOT NULL,
             verify_key_b64  TEXT NOT NULL,
-            created_at      INTEGER NOT NULL
+            created_at      BIGINT NOT NULL
         )",
     )
     .execute(pool)
@@ -171,10 +190,10 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             tenant_id        TEXT NOT NULL,
             peer_verify_key  TEXT NOT NULL,
             status           TEXT NOT NULL,
-            granted_at       INTEGER,
-            expires_ms       INTEGER,
-            revoked_at       INTEGER,
-            created_at       INTEGER NOT NULL,
+            granted_at       BIGINT,
+            expires_ms       BIGINT,
+            revoked_at       BIGINT,
+            created_at       BIGINT NOT NULL,
             granted_by_key_type TEXT,
             UNIQUE(tenant_id, peer_verify_key)
         )",
@@ -197,7 +216,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             direction        TEXT NOT NULL,
             content          TEXT NOT NULL,
             signature        TEXT NOT NULL,
-            timestamp        INTEGER NOT NULL,
+            timestamp        BIGINT NOT NULL,
             verified         INTEGER NOT NULL DEFAULT 0
         )",
     )
@@ -211,7 +230,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             action           TEXT NOT NULL,
             peer_verify_key  TEXT,
             details          TEXT,
-            timestamp        INTEGER NOT NULL,
+            timestamp        BIGINT NOT NULL,
             prev_hash        TEXT,
             entry_hash       TEXT
         )",
@@ -258,7 +277,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             tenant_id  TEXT NOT NULL,
             nickname   TEXT NOT NULL,
             verify_key TEXT NOT NULL,
-            added_at   INTEGER NOT NULL,
+            added_at   BIGINT NOT NULL,
             UNIQUE(tenant_id, verify_key)
         )",
     )
@@ -272,8 +291,8 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             claim             TEXT NOT NULL,
             user_token        TEXT NOT NULL,
             issuer_verify_key TEXT NOT NULL,
-            issued_at         INTEGER NOT NULL,
-            expires_at        INTEGER NOT NULL,
+            issued_at         BIGINT NOT NULL,
+            expires_at        BIGINT NOT NULL,
             signature         TEXT NOT NULL,
             revoked           INTEGER NOT NULL DEFAULT 0
         )",
@@ -287,9 +306,9 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             tenant_id    TEXT NOT NULL,
             filename     TEXT NOT NULL,
             content_type TEXT NOT NULL,
-            data         BLOB NOT NULL,
-            size         INTEGER NOT NULL,
-            created_at   INTEGER NOT NULL
+            data         BYTEA NOT NULL,
+            size         BIGINT NOT NULL,
+            created_at   BIGINT NOT NULL
         )",
     )
     .execute(pool)
@@ -309,8 +328,8 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             state_key       TEXT NOT NULL,
             count           INTEGER NOT NULL,
             anomaly_count   INTEGER NOT NULL DEFAULT 0,
-            window_start_ms INTEGER NOT NULL,
-            updated_at      INTEGER NOT NULL,
+            window_start_ms BIGINT NOT NULL,
+            updated_at      BIGINT NOT NULL,
             PRIMARY KEY (kind, state_key)
         )",
     )
@@ -327,7 +346,7 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             id              INTEGER PRIMARY KEY,
             signing_key_b64 TEXT NOT NULL,
             verify_key_b64  TEXT NOT NULL,
-            created_at      INTEGER NOT NULL
+            created_at      BIGINT NOT NULL
         )",
     )
     .execute(pool)
@@ -344,9 +363,9 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             leaf_count       INTEGER NOT NULL,
             anchor_signature TEXT NOT NULL,
             anchor_verify_key TEXT NOT NULL,
-            ots_proof        BLOB,
+            ots_proof        BYTEA,
             ots_status       TEXT NOT NULL DEFAULT 'pending',
-            created_at       INTEGER NOT NULL
+            created_at       BIGINT NOT NULL
         )",
     )
     .execute(pool)
@@ -366,9 +385,9 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             leaf_count       INTEGER NOT NULL,
             anchor_signature TEXT NOT NULL,
             anchor_verify_key TEXT NOT NULL,
-            ots_proof        BLOB,
+            ots_proof        BYTEA,
             ots_status       TEXT NOT NULL DEFAULT 'pending',
-            created_at       INTEGER NOT NULL
+            created_at       BIGINT NOT NULL
         )",
     )
     .execute(pool)
@@ -401,12 +420,50 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
             hsip_gov_ext    TEXT NOT NULL,
             anchor_id       TEXT,
             merkle_index    INTEGER,
-            created_at      INTEGER NOT NULL,
+            created_at      BIGINT NOT NULL,
             UNIQUE(tenant_id, prev_hash)
         )",
     )
     .execute(pool)
     .await?;
+
+    // Non-fatal, repeated every startup: widens every millisecond-epoch (or
+    // similarly wide) column from the old plain INTEGER to BIGINT, in case
+    // this pool is a PostgreSQL database whose tables were created by an
+    // older version of this function (before the INTEGER/int4-overflow bug
+    // above was found) — those installs could CREATE TABLE successfully but
+    // had every write of a real epoch-ms timestamp fail with "integer out of
+    // range", so there is no data-loss risk in widening them in place.
+    // `ALTER COLUMN ... TYPE` is Postgres-only syntax; SQLite has no such
+    // statement and errors on every one of these (harmless — SQLite's
+    // INTEGER/BIGINT column types already store identically, so there was
+    // never anything to widen there in the first place).
+    let bigint_widenings = [
+        "ALTER TABLE tenants ALTER COLUMN created_at TYPE BIGINT",
+        "ALTER TABLE api_keys ALTER COLUMN created_at TYPE BIGINT",
+        "ALTER TABLE api_keys ALTER COLUMN expires_at TYPE BIGINT",
+        "ALTER TABLE identities ALTER COLUMN created_at TYPE BIGINT",
+        "ALTER TABLE consents ALTER COLUMN granted_at TYPE BIGINT",
+        "ALTER TABLE consents ALTER COLUMN expires_ms TYPE BIGINT",
+        "ALTER TABLE consents ALTER COLUMN revoked_at TYPE BIGINT",
+        "ALTER TABLE consents ALTER COLUMN created_at TYPE BIGINT",
+        "ALTER TABLE messages ALTER COLUMN timestamp TYPE BIGINT",
+        "ALTER TABLE audit_entries ALTER COLUMN timestamp TYPE BIGINT",
+        "ALTER TABLE contacts ALTER COLUMN added_at TYPE BIGINT",
+        "ALTER TABLE credentials ALTER COLUMN issued_at TYPE BIGINT",
+        "ALTER TABLE credentials ALTER COLUMN expires_at TYPE BIGINT",
+        "ALTER TABLE uploads ALTER COLUMN size TYPE BIGINT",
+        "ALTER TABLE uploads ALTER COLUMN created_at TYPE BIGINT",
+        "ALTER TABLE rate_limit_state ALTER COLUMN window_start_ms TYPE BIGINT",
+        "ALTER TABLE rate_limit_state ALTER COLUMN updated_at TYPE BIGINT",
+        "ALTER TABLE anchor_identity ALTER COLUMN created_at TYPE BIGINT",
+        "ALTER TABLE decision_anchors ALTER COLUMN created_at TYPE BIGINT",
+        "ALTER TABLE audit_anchors ALTER COLUMN created_at TYPE BIGINT",
+        "ALTER TABLE decisions ALTER COLUMN created_at TYPE BIGINT",
+    ];
+    for stmt in &bigint_widenings {
+        let _ = sqlx::query(stmt).execute(pool).await;
+    }
 
     // Indexes on tenant_id for all high-traffic tables (L4)
     let indexes = [

@@ -58,7 +58,7 @@ pub async fn sign(
     tenant: TenantId,
     Json(req): Json<SignRequest>,
 ) -> ApiResult<Json<SignResponse>> {
-    let row = sqlx::query("SELECT signing_key_b64 FROM identities WHERE tenant_id = ?")
+    let row = sqlx::query("SELECT signing_key_b64 FROM identities WHERE tenant_id = $1")
         .bind(&tenant.0)
         .fetch_optional(&state.db)
         .await?
@@ -82,7 +82,7 @@ pub async fn sign(
 
     sqlx::query(
         "INSERT INTO messages (id, tenant_id, peer_verify_key, direction, content, signature, timestamp, verified)
-         VALUES (?, ?, ?, 'outbound', ?, ?, ?, 1)",
+         VALUES ($1, $2, $3, 'outbound', $4, $5, $6, 1)",
     )
     .bind(&msg_id)
     .bind(&tenant.0)
@@ -145,7 +145,7 @@ pub async fn verify(
 
     sqlx::query(
         "INSERT INTO messages (id, tenant_id, peer_verify_key, direction, content, signature, timestamp, verified)
-         VALUES (?, ?, ?, 'inbound', ?, ?, ?, ?)",
+         VALUES ($1, $2, $3, 'inbound', $4, $5, $6, $7)",
     )
     .bind(&msg_id)
     .bind(&tenant.0)
@@ -185,7 +185,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<MessageRecord>>> {
     let rows = sqlx::query(
         "SELECT id, peer_verify_key, direction, content, signature, timestamp, verified
-         FROM messages WHERE tenant_id=? ORDER BY timestamp DESC LIMIT 100",
+         FROM messages WHERE tenant_id=$1 ORDER BY timestamp DESC LIMIT 100",
     )
     .bind(&tenant.0)
     .fetch_all(&state.db)

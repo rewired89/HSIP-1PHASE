@@ -214,7 +214,7 @@ pub async fn record(
         .map(str::trim)
         .ok_or_else(|| ApiError::Unauthorized("Missing Authorization: Bearer <key>".into()))?;
     let key_hash = hash_key(token);
-    let key_row = sqlx::query("SELECT id FROM api_keys WHERE key_hash = ? AND tenant_id = ?")
+    let key_row = sqlx::query("SELECT id FROM api_keys WHERE key_hash = $1 AND tenant_id = $2")
         .bind(&key_hash)
         .bind(&tenant.0)
         .fetch_optional(&state.db)
@@ -231,7 +231,7 @@ pub async fn record(
     for attempt in 1..=MAX_ATTEMPTS {
         let now = now_ms();
         let prev_row = sqlx::query(
-            "SELECT event_hash FROM decisions WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT event_hash FROM decisions WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1",
         )
         .bind(&tenant.0)
         .fetch_optional(&state.db)
@@ -271,7 +271,7 @@ pub async fn record(
              (id, tenant_id, agent_key_id, accountable_key, model_version, strategy_id, decision_type,
               payload_hash, prev_hash, event_hash, signature, sign_algo, timestamp_iso, timestamp_int,
               hsip_gov_ext, anchor_id, merkle_index, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ED25519', ?, ?, ?, NULL, NULL, ?)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ED25519', $12, $13, $14, NULL, NULL, $15)",
         )
         .bind(&decision_id)
         .bind(&tenant.0)
@@ -343,7 +343,7 @@ pub async fn list(
     let rows = sqlx::query(
         "SELECT id, decision_type, model_version, strategy_id, event_hash, prev_hash,
                 timestamp_iso, anchor_id, merkle_index
-         FROM decisions WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 200",
+         FROM decisions WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 200",
     )
     .bind(&tenant.0)
     .fetch_all(&state.db)
@@ -384,7 +384,7 @@ pub async fn proof(
         "SELECT agent_key_id, accountable_key, model_version, strategy_id, decision_type,
                 payload_hash, prev_hash, event_hash, signature, sign_algo, timestamp_iso,
                 timestamp_int, hsip_gov_ext, anchor_id, merkle_index
-         FROM decisions WHERE id = ? AND tenant_id = ?",
+         FROM decisions WHERE id = $1 AND tenant_id = $2",
     )
     .bind(&id)
     .bind(&tenant.0)
@@ -412,7 +412,7 @@ pub async fn proof(
     let anchor_id: Option<String> = row.try_get(13)?;
     let merkle_index: Option<i64> = row.try_get(14)?;
 
-    let ident_row = sqlx::query("SELECT verify_key_b64 FROM identities WHERE tenant_id = ?")
+    let ident_row = sqlx::query("SELECT verify_key_b64 FROM identities WHERE tenant_id = $1")
         .bind(&tenant.0)
         .fetch_optional(&state.db)
         .await?
@@ -441,7 +441,7 @@ pub async fn proof(
 
     let anchor_row = sqlx::query(
         "SELECT merkle_root, anchor_signature, anchor_verify_key, ots_proof, ots_status
-         FROM decision_anchors WHERE id = ?",
+         FROM decision_anchors WHERE id = $1",
     )
     .bind(&anchor_id)
     .fetch_optional(&state.db)
@@ -454,7 +454,7 @@ pub async fn proof(
     let ots_status: String = anchor_row.try_get(4)?;
 
     let leaf_rows = sqlx::query(
-        "SELECT event_hash FROM decisions WHERE anchor_id = ? ORDER BY merkle_index ASC",
+        "SELECT event_hash FROM decisions WHERE anchor_id = $1 ORDER BY merkle_index ASC",
     )
     .bind(&anchor_id)
     .fetch_all(&state.db)

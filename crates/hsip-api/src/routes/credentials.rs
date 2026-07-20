@@ -138,7 +138,7 @@ pub async fn issue(
     sqlx::query(
         "INSERT INTO credentials
          (id, tenant_id, claim, user_token, issuer_verify_key, issued_at, expires_at, signature, revoked)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0)",
     )
     .bind(&cred_id)
     .bind(&tenant.0)
@@ -182,7 +182,7 @@ pub async fn verify(
     // C3: revocation check uses credential ID only (globally unique UUID).
     // Do NOT filter by tenant_id — the verifying tenant may differ from the issuing tenant.
     // The cryptographic signature already proves authenticity.
-    let revoked_row = sqlx::query("SELECT revoked FROM credentials WHERE id = ?")
+    let revoked_row = sqlx::query("SELECT revoked FROM credentials WHERE id = $1")
         .bind(&req.credential.id)
         .fetch_optional(&state.db)
         .await?;
@@ -249,7 +249,7 @@ pub async fn revoke(
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let now = now_ms();
-    let result = sqlx::query("UPDATE credentials SET revoked = 1 WHERE id = ? AND tenant_id = ?")
+    let result = sqlx::query("UPDATE credentials SET revoked = 1 WHERE id = $1 AND tenant_id = $2")
         .bind(&id)
         .bind(&tenant.0)
         .execute(&state.db)
@@ -278,7 +278,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<CredentialRecord>>> {
     let rows = sqlx::query(
         "SELECT id, claim, user_token, issuer_verify_key, issued_at, expires_at, revoked
-         FROM credentials WHERE tenant_id = ?
+         FROM credentials WHERE tenant_id = $1
          ORDER BY issued_at DESC LIMIT 100",
     )
     .bind(&tenant.0)

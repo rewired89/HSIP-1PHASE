@@ -88,7 +88,8 @@ cargo audit
 ```
 main.rs           Startup: config → master key → DB → bootstrap admin → Axum router → spawns anchor loop
 config.rs         Two modes: Config::load("config.toml") or Config::desktop_defaults()
-db.rs             AnyPool (sqlx). ALL migrations are inline SQL in run_migrations() — no migration files.
+db.rs             AnyPool (sqlx). ALL migrations are inline SQL in run_migrations() (pub — reused by bin/hsip_migrate.rs) — no migration files. Every SQL bind placeholder in this codebase must be $1/$2/... (never ?) and every wide/timestamp column must be BIGINT (never INTEGER) / BYTEA (never BLOB) — see SQLite → PostgreSQL Migration below for why.
+bin/hsip_migrate.rs  hsip-migrate binary: copies an existing SQLite deployment's data into PostgreSQL — see SQLite → PostgreSQL Migration below.
 auth.rs           TenantId extractor: SHA-256(Bearer) → DB lookup → rate limit → AI velocity check
 state.rs          AppState: DB + DashMap rate limiter + agent tracker + DNS handle + proxy ring buffer
 key_encryption.rs ChaCha20-Poly1305 + HKDF-SHA256 encryption for Ed25519 private keys at rest
@@ -410,6 +411,30 @@ HSIP has no dedicated node-to-node network protocol — federated trust above is
 
 ---
 
+## SQLite → PostgreSQL Migration (`hsip-migrate`)
+
+`DATABASE_URL`/`config.toml`'s `[database] url` pointing at PostgreSQL had never actually worked — for a fresh install or a migration — until this. Two independent bugs, both invisible in this project's dev environment because it had only ever run against SQLite, found while building the migration tool and confirmed against a real, locally-installed PostgreSQL 16 instance:
+
+1. **Integer overflow on every timestamp.** `db.rs` declared every millisecond-epoch column (`created_at`, `timestamp`, `expires_at`, etc.) as `INTEGER`. SQLite's only integer keyword is dynamically 8-byte, so this was never a problem there — PostgreSQL's `INTEGER` is a real 4-byte `int4` (max ~2.1e9), and a real epoch-ms timestamp (~1.7e12) overflows it. Confirmed directly: `CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1774038000000);` → `ERROR: integer out of range`. Fixed by widening every ms-epoch/wide column to `BIGINT` (identical storage on SQLite, correct on Postgres); small bounded values (0/1 flags, in-batch Merkle indices) stayed `INTEGER`. Companion bug: `uploads.data`/`*_anchors.ots_proof` used the SQLite/MySQL-only `BLOB` keyword — doesn't exist in Postgres (`ERROR: type "blob" does not exist`) — fixed with `BYTEA`, which both backends accept.
+2. **Every parameterized query was a Postgres syntax error.** HSIP uses `sqlx::Any` specifically so the same SQL runs against either backend, and every one of ~150 parameterized queries used `?` placeholders. `sqlx::Any` does **not** rewrite placeholder syntax per backend — `?` is a syntax error on Postgres outside a string literal. Fixed by rewriting every `?` to PostgreSQL-style numbered placeholders (`$1, $2, ...`) across 19 files / 100 statements (mechanical, scripted rewrite — one instance per query, in `.bind()` call order). Confirmed empirically that SQLite accepts `$N` placeholders identically to `?` (same positional bind semantics), so this single rewrite works unchanged on both backends — no runtime backend detection needed.
+
+**Non-negotiable going forward — see Key Invariants below:** every new `sqlx::query(...)` call must use `$1, $2, ...` placeholders, never `?`; every new `db.rs` column storing a millisecond-epoch or similarly wide value must be `BIGINT`, never `INTEGER`; every new binary/blob column must be `BYTEA`, never `BLOB`.
+
+**`hsip-migrate` (new binary, `crates/hsip-api/src/bin/hsip_migrate.rs`, registered as a second `[[bin]]` in `hsip-api/Cargo.toml`):**
+
+```bash
+cargo build -p hsip-api --bin hsip-migrate
+./target/release/hsip-migrate --from sqlite:hsip.db --to postgresql://user:pass@host/db [--yes] [--force]
+```
+
+Connects to both, creates the target schema by calling the exact same `db::run_migrations` the server itself runs at startup (target schema can never drift from what the server expects), refuses to proceed into a non-empty target without `--force`, copies every table's rows inside one target-side transaction, verifies row counts match on both sides post-copy. Never writes to the source database. `TABLES` (a `Table { name, columns }` list mirroring `db.rs`'s schema) drives the copy — **adding a new table to `db.rs` also requires adding it to this list**, or it silently won't be migrated.
+
+**Verified end-to-end, not just unit-tested:** real `hsip-api` server run against SQLite (identity, messages, consent, contact, decision attestation, second API key — 7 audit entries, valid hash chain) → `hsip-migrate` run against the populated database → fresh `hsip-api` process started against the migrated PostgreSQL database with the *original* master key and admin key files → same tenant ID and verify key returned (encrypted signing key round-trips through migration under the same master key), original admin bearer token still authenticates, `GET /v1/audit/verify` reports all entries as a valid unbroken chain, and the background anchor job successfully wrote to the `anchor_identity` singleton table and a `decision_anchors` row (`BYTEA ots_proof`) against Postgres.
+
+A `#[ignore]`-by-default regression test, `crates/hsip-api/tests/postgres_compat.rs` (run explicitly with `HSIP_TEST_POSTGRES_URL` set), locks in both fixes without adding a live-Postgres dependency to the normal `cargo test --workspace` run — every other test in this repo is SQLite-only.
+
+---
+
 ## Auto-Discovery (`GET /v1/agents/discover`)
 
 Probes 12 well-known localhost ports with `tokio::spawn` + 150ms TCP timeout. Returns `DiscoveredAgent` list with `port`, `url`, `hint`, `description`, `already_registered`, `suggested_name`.
@@ -558,6 +583,10 @@ Go: `sdks/go/hsip/client.go`
 - **In-memory SQLite tests require `max_connections = 1`** — each connection is a separate DB instance.
 - **`crates/hsip-verify` stays excluded from workspace** — do not add to root `Cargo.toml` members.
 - **No migration files** — all schema is inline in `db::run_migrations()`. Add new tables/columns there.
+- **Every SQL bind placeholder must be `$1, $2, ...` (PostgreSQL-numbered), never `?`.** `sqlx::Any` does not rewrite placeholder syntax per backend — `?` is a SQLite/MySQL-only token and is a hard syntax error on PostgreSQL. `$N` works identically on both backends (confirmed empirically — see "SQLite → PostgreSQL Migration" above), so there is never a reason to use `?` in this codebase.
+- **Every `db.rs` column storing a millisecond-epoch timestamp or similarly wide value must be `BIGINT`, never `INTEGER`.** PostgreSQL's `INTEGER` is a real 4-byte `int4` (max ~2.1e9) and overflows on any real epoch-ms value (~1.7e12) — this silently broke every write against Postgres until found and fixed (see "SQLite → PostgreSQL Migration" above). Small bounded values (0/1 flags, in-batch Merkle indices) may stay `INTEGER`.
+- **Every binary/blob column in `db.rs` must be `BYTEA`, never `BLOB`.** `BLOB` is a SQLite/MySQL-only type name and doesn't exist in PostgreSQL at all.
+- **A new table added to `db.rs` must also be added to `bin/hsip_migrate.rs`'s `TABLES` list.** `hsip-migrate` doesn't discover tables dynamically — a table missing from that list silently isn't migrated.
 - **CLI key resolution must use `commands::util::load_admin_key()`** — never write a local `load_admin_key()` in a command file.
 - **`config.toml` must not be committed** — it forces server mode and breaks desktop-mode testing.
 - **Decision payload content must never reach HSIP.** `routes::decisions::record` only ever accepts `payload_hash` (a caller-computed SHA-256 hex string) — never add a field for the actual decision content itself; that defeats the confidentiality design.
@@ -620,6 +649,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | Externally anchor the audit log: `anchor_job::run_audit_anchor_cycle` batches `audit_entries` (by `entry_hash`) into RFC 6962 Merkle trees, signs with the same node-level `anchor_identity` key used for decisions, submits to OpenTimestamps, stores in new `audit_anchors` table — closes THREAT_MODEL.md §4.8's "chain not anchored outside this database" gap the same way decisions were already anchored. `GET /v1/audit/:id/proof` (self-contained bundle) + `POST /v1/audit/verify-proof` (DB-free, third-party verifiable, mirrors `decisions::verify`); `metrics::AUDIT_ANCHORED` | `db.rs`, `anchor_job.rs`, `main.rs`, `routes/audit.rs`, `routes/mod.rs`, `metrics.rs`, `audit_log.rs` |
 | Persist rate limiter across restarts: new `rate_limit_persistence.rs` periodically snapshots `rate_limiter`/`agent_tracker`/`sandbox_rate` (all previously in-memory-only) into a new `rate_limit_state` table every 30s, restores live windows at startup — closes the "restart silently resets every abuse-detection counter" gap without adding a DB write to the hot auth path | `rate_limit_persistence.rs`, `db.rs`, `state.rs`, `main.rs`, `lib.rs` |
 | Mutual TLS: new `mtls.rs` + `[server.tls] client_ca_path` config option — server requires and verifies a client certificate signed by a configured CA before completing the TLS handshake, closing THREAT_MODEL.md's "no peer auth at transport layer" gap. Fully opt-in (`None` = byte-for-byte unchanged behavior). Also fixed a pre-existing latent panic: `reqwest`/`axum-server` enable different rustls crypto-provider features, so the first TLS operation in the process would have panicked the moment `[server.tls]` was ever actually enabled — now a default provider is installed explicitly at startup | `mtls.rs`, `config.rs`, `main.rs`, `config.example.toml` |
+| SQLite → PostgreSQL migration tooling: new `hsip-migrate` binary copies an existing SQLite deployment into PostgreSQL, reusing `db::run_migrations` for the target schema. Found and fixed **two bugs that meant PostgreSQL had never actually worked at all**, fresh install or migration: every ms-epoch column was `INTEGER` (4-byte `int4` on Postgres, overflows on real timestamps — widened to `BIGINT`), `uploads.data`/`ots_proof` used the SQLite-only `BLOB` type (doesn't exist on Postgres — changed to `BYTEA`), and every one of ~150 parameterized queries used `?` placeholders (`sqlx::Any` doesn't rewrite these per backend — Postgres syntax-errors on `?` — rewritten to `$1, $2, ...`, which SQLite also accepts identically). Verified end-to-end against a real PostgreSQL 16 instance: populated a SQLite deployment via a real running server, migrated it, and confirmed the migrated server preserved identity/keys/audit-chain-validity and its anchor job ran successfully against Postgres | `db.rs`, `bin/hsip_migrate.rs`, `Cargo.toml`, `tests/postgres_compat.rs`, and every route/module file containing a `sqlx::query` call |
 
 ---
 
@@ -648,6 +678,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - Externally anchor the audit log hash chain — same RFC 6962 Merkle + OpenTimestamps shape as decision attestations, applied to `audit_entries`; closes THREAT_MODEL.md §4.8's remaining "chain isn't anchored outside this database" gap
 - Persist rate limiter across restarts — `rate_limit_persistence.rs` periodically snapshots the rate-limit/AI-agent-velocity/sandbox-provisioning DashMaps to a `rate_limit_state` table and restores live windows at startup; periodic snapshot (30s), not a write-through on every request, so the hot auth path still never touches the database
 - Mutual TLS — opt-in `[server.tls] client_ca_path`, closes the "no peer auth at transport layer" gap for HSIP's HTTPS server; also fixed a pre-existing latent crypto-provider panic that would have hit the very first production use of `[server.tls]`
+- SQLite → PostgreSQL migration tooling: `hsip-migrate` binary, plus the two underlying bugs (`INTEGER`/`BLOB` schema types, `?` vs `$N` bind placeholders) that meant PostgreSQL had never actually worked for any HSIP deployment — see "SQLite → PostgreSQL Migration" above. Verified end-to-end against a real PostgreSQL 16 instance, not just unit tests.
 
 ### Remaining
 
@@ -660,7 +691,6 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - **Node/Go SDK parity for decision attestation** — `record_decision`/`save_receipt`/`get_decision_proof`/`verify_decision` exist only in the Python SDK; port once a Node/Go caller needs them.
 - **Dashboard decisions page** — show `GET /v1/decisions` with anchor/proof status, similar to the trust/discover pages above.
 - **Dashboard audit verify indicator** — surface `GET /v1/audit/verify`'s `valid`/`unchained` fields somewhere in the Audit tab so a broken chain is visible without calling the API directly.
-- **Document and test a real SQLite → PostgreSQL migration path** — `DATABASE_URL` pointing at Postgres works for a fresh install (`db::run_migrations()` is backend-agnostic SQL), but there's no tested procedure for moving an existing SQLite deployment's data over. Treat it as a fresh install until this exists.
 - **Dashboard: surface master key rotation + its audit trail** — no UI for `POST /v1/admin/master-key/rotate` yet; an admin has to call it directly.
 - **SDK/CLI adoption of `x-hsip-timestamp`/`x-hsip-nonce`** — the server-side replay-protection check exists, but no HSIP-authored client sends these headers yet. Port once a caller (SDK or CLI) actually needs replay protection, same pattern as decision-attestation SDK parity above — don't add it speculatively to every SDK before there's a caller who needs it.
 - **Real scoped-permission RBAC beyond flat `role`/`is_root_admin`** — the current model is deliberately two flat capabilities (tenant owner/member, node root-admin/not), not per-action scoped grants ("can rotate the master key but not grant root-admin to others," "can create ai_agent keys but not human keys," etc.). Fits everything HSIP needs today cleanly; revisit only when an operation shows up that the flat model genuinely can't express, same reasoning as before this round of work — don't bolt on a scoped-permissions engine speculatively.
@@ -671,6 +701,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 2. Register it in `crates/hsip-api/src/routes/mod.rs` — **and verify with `grep` that it's actually there**, not just that `cargo build` succeeds. An unregistered `pub async fn` handler compiles fine and silently 404s.
 3. Add an audit entry write for any state-changing operation, via `audit_log::record()` — never a raw `INSERT INTO audit_entries`
 4. Add an integration test in `crates/hsip-api/tests/integration.rs` using `test_app()`
+5. Any `sqlx::query(...)` you write must use `$1, $2, ...` placeholders (never `?`) — see Key Invariants above
 
 ### Before adding new CLI commands
 1. Add the variant to `Commands` enum in `crates/hsip-cli/src/main.rs`

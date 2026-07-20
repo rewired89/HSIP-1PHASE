@@ -163,7 +163,7 @@ async fn upsert(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO rate_limit_state (kind, state_key, count, anomaly_count, window_start_ms, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (kind, state_key) DO UPDATE SET
            count = excluded.count,
            anomaly_count = excluded.anomaly_count,

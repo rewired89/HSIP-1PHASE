@@ -785,7 +785,7 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
     let tenant_id = Uuid::new_v4().to_string();
     let now = now_ms();
 
-    sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES (?, 'default', ?)")
+    sqlx::query("INSERT INTO tenants (id, name, created_at) VALUES ($1, 'default', $2)")
         .bind(&tenant_id)
         .bind(now)
         .execute(db)
@@ -815,7 +815,7 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
     // doesn't exist yet when migrations run.
     sqlx::query(
         "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, role, is_root_admin, created_at, active)
-         VALUES (?, ?, ?, 'admin', 'human', 'owner', 1, ?, 1)",
+         VALUES ($1, $2, $3, 'admin', 'human', 'owner', 1, $4, 1)",
     )
     .bind(&key_id)
     .bind(&tenant_id)

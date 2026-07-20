@@ -47,7 +47,7 @@ async fn resolve_caller_role(
         .map(str::trim)
         .ok_or_else(|| ApiError::Unauthorized("Missing Authorization: Bearer <key>".into()))?;
     let key_hash = hash_key(token);
-    let row = sqlx::query("SELECT role FROM api_keys WHERE key_hash = ? AND tenant_id = ?")
+    let row = sqlx::query("SELECT role FROM api_keys WHERE key_hash = $1 AND tenant_id = $2")
         .bind(&key_hash)
         .bind(tenant_id)
         .fetch_optional(db)
@@ -115,7 +115,7 @@ pub async fn create(
 
     sqlx::query(
         "INSERT INTO api_keys (id, tenant_id, key_hash, name, agent_type, role, created_at, expires_at, active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1)",
     )
     .bind(&id)
     .bind(&tenant.0)
@@ -157,7 +157,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<KeyRecord>>> {
     let rows = sqlx::query(
         "SELECT id, name, agent_type, role, created_at, expires_at, active
-         FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC",
+         FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
     .bind(&tenant.0)
     .fetch_all(&state.db)
@@ -198,7 +198,7 @@ pub async fn revoke(
         ));
     }
 
-    let target = sqlx::query("SELECT role, active FROM api_keys WHERE id=? AND tenant_id=?")
+    let target = sqlx::query("SELECT role, active FROM api_keys WHERE id=$1 AND tenant_id=$2")
         .bind(&key_id)
         .bind(&tenant.0)
         .fetch_optional(&state.db)
@@ -213,7 +213,7 @@ pub async fn revoke(
     // this mistake).
     if target_active != 0 && target_role.as_deref() == Some("owner") {
         let owner_count: i64 = sqlx::query(
-            "SELECT COUNT(*) FROM api_keys WHERE tenant_id=? AND role='owner' AND active=1",
+            "SELECT COUNT(*) FROM api_keys WHERE tenant_id=$1 AND role='owner' AND active=1",
         )
         .bind(&tenant.0)
         .fetch_one(&state.db)
@@ -228,7 +228,7 @@ pub async fn revoke(
         }
     }
 
-    let result = sqlx::query("UPDATE api_keys SET active=0 WHERE id=? AND tenant_id=?")
+    let result = sqlx::query("UPDATE api_keys SET active=0 WHERE id=$1 AND tenant_id=$2")
         .bind(&key_id)
         .bind(&tenant.0)
         .execute(&state.db)
