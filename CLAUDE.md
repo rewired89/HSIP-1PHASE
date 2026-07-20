@@ -95,6 +95,7 @@ key_encryption.rs ChaCha20-Poly1305 + HKDF-SHA256 encryption for Ed25519 private
 anchor.rs         OpenTimestamps calendar HTTP client (network I/O only, no DB) — see Decision Attestations below
 anchor_job.rs     Batches unanchored decisions into a Merkle tree on a timer, submits root to OpenTimestamps
 audit_log.rs      BLAKE3 hash-chained writes to audit_entries — see Audit Log Hash Chain below
+rate_limit_persistence.rs  Periodic snapshot/restore of rate-limit + AI-agent-velocity DashMaps — see Rate Limiter Persistence below
 routes/           One file per domain (see route table below)
 static_files.rs   Serves dashboard/dist/ via rust-embed (only active with embed-dashboard feature)
 ```
@@ -160,6 +161,16 @@ A bearer token proves *who* sent a request; it doesn't prove a captured copy of 
 - `metrics::REPLAY_REJECTED` (labels: `malformed_headers`, `timestamp_out_of_window`, `duplicate_nonce`) — near-zero unless something is actually opted in and being replayed or misconfigured.
 - **Not yet sent by any of HSIP's own SDKs, CLI, or dashboard** — this pass is the server-side check only. A caller who wants replay protection today constructs the headers itself.
 
+### Rate Limiter Persistence (`rate_limit_persistence.rs`)
+
+`AppState.rate_limiter`, `.agent_tracker`, and `.sandbox_rate` are in-memory `DashMap`s (atomics inside, for hot-path speed — no DB round-trip on every authenticated request). Previously that meant a restart (crash, deploy, container reschedule) silently reset every key's rate-limit count and every `ai_agent` key's velocity/anomaly counters back to zero — a key mid-way toward the 1000 req/min auto-revoke threshold got a clean slate for free.
+
+- `rate_limit_persistence::snapshot()` upserts the current contents of all three trackers into a `rate_limit_state` table (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`; `PRIMARY KEY (kind, state_key)`) every `SNAPSHOT_INTERVAL_SECS` (30s) — spawned in `main.rs` on its own timer, alongside the anchor and replay-nonce-sweep loops.
+- `rate_limit_persistence::load()` runs once at startup, before the server accepts traffic, restoring only *live* windows (`now - window_start_ms < WINDOW_MS`) — an expired window is skipped, since it would reset to fresh on first use anyway regardless of whether it's restored.
+- Deliberately a periodic snapshot, not a write-through on every request — that would add a synchronous DB write to the hot auth path on every single authenticated call, exactly what these DashMaps exist to avoid.
+- **Residual risk, by design**: up to `SNAPSHOT_INTERVAL_SECS` of state is still lost on a crash or unclean restart. Bounded, not eliminated — same tradeoff already accepted for the master-key-rotation staging-file window and the decision-attestation signing-to-anchoring gap.
+- Verified end-to-end against a real running server (not just the unit tests in `rate_limit_persistence.rs`): sent a burst of requests, waited for a snapshot tick, restarted the process, confirmed the startup log (`restored rate-limit/velocity state from last snapshot`) picked the live window back up instead of resetting to zero.
+
 ### Database Schema
 
 All tables created at startup in `db::run_migrations()` — **no separate migration files**.
@@ -178,6 +189,7 @@ All tables created at startup in `db::run_migrations()` — **no separate migrat
 | `decisions` | id, tenant_id, agent_key_id, accountable_key, model_version, strategy_id, decision_type, payload_hash, prev_hash, event_hash, signature, anchor_id, merkle_index | UNIQUE(tenant_id, prev_hash) — hash-chains each tenant's decisions, prevents forks under concurrent inserts. `payload_hash` only — actual decision content never stored. |
 | `decision_anchors` | id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status | One row per RFC 6962 Merkle batch. `ots_status`: `pending` \| `calendar_unreachable`. |
 | `audit_anchors` | id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status | Same shape as `decision_anchors`, one row per RFC 6962 Merkle batch of `audit_entries` — see External Anchoring below. |
+| `rate_limit_state` | kind, state_key, count, anomaly_count, window_start_ms, updated_at | `PRIMARY KEY (kind, state_key)`. Periodic snapshot of the in-memory rate-limit/velocity DashMaps — see Rate Limiter Persistence below. `kind` is `rate_limit`\|`agent_velocity`\|`sandbox_rate`. |
 | `anchor_identity` | id (singleton, always 1), signing_key_b64, verify_key_b64 | Node-level Ed25519 key that signs anchor roots — distinct from any tenant identity. Created on first anchor cycle. |
 
 ### Master Key Sources (in priority order)
@@ -538,6 +550,7 @@ Go: `sdks/go/hsip/client.go`
 - **Never `INSERT INTO audit_entries` directly.** Always call `audit_log::record()` — it's what computes and links `prev_hash`/`entry_hash`. A raw insert produces an unchained (though still functionally fine) row that `GET /v1/audit/verify` will count as `unchained` rather than verify.
 - **`POST /v1/audit/verify-proof` must stay DB-free and auth-free**, same reasoning and same invariant as `POST /v1/decisions/verify` above — it's the function a third party runs independently of this server. Don't add a database lookup to it.
 - **`audit_log::compute_entry_hash` must stay the single source of truth for the entry-hash formula.** `audit_log::record()`, `audit_log::verify_chain()`, and `routes::audit::verify_proof` all call it — don't let `verify_proof` (or anything else) reimplement the BLAKE3 formula separately, or a formula change in one place silently breaks verification in the other.
+- **`rate_limit_persistence::snapshot`/`load` must stay a periodic background job, not a write-through on every request.** The whole point of `rate_limiter`/`agent_tracker`/`sandbox_rate` being in-memory `DashMap`s is that the hot auth path never blocks on the database. Don't add a DB write inside `auth.rs::check_rate_limit`/`check_agent_velocity` themselves to "make persistence more accurate" — that defeats the reason they're in-memory at all.
 - **Every new API route must actually be registered in `routes/mod.rs`.** A fully implemented handler with no `.route(...)` line compiles clean (Rust doesn't error on an unused `pub` function in a binary crate) and silently 404s — this has happened before (`agents::discover` shipped unwired for at least one prior revision of this file). If you add a handler, grep `routes/mod.rs` afterward to confirm it's there, not just that the crate builds.
 - **CLI subcommands documented in this file must actually exist in the `Subcommand` enum.** `hsip agent discover` was documented here before the `AgentCmd::Discover` variant existed. Cross-check `crates/hsip-cli/src/commands/*.rs` against this file's command tables when either changes.
 - **`state.master_key` is `Arc<RwLock<Vec<u8>>>`, not a plain `Arc<Vec<u8>>`.** Every read site must take a short-lived `.read().await` guard (don't hold it across unrelated `.await` points, especially network I/O — see the anchor loop in `main.rs` for the pattern of snapshotting instead). `routes::admin::rotate_master_key` is the only writer and holds `.write().await` for its whole operation, not just the final swap — see Master Key Rotation above for why.
@@ -586,6 +599,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 | HTTP replay protection: opt-in `x-hsip-timestamp`/`x-hsip-nonce` headers checked in the `TenantId` extractor, per-key nonce dedup in a swept `DashMap`, `metrics::REPLAY_REJECTED` — previously the HTTP API had no defense against a captured request being resent verbatim (THREAT_MODEL.md §4.3's documented gap), only rate limiting and key expiry | `auth.rs`, `state.rs`, `main.rs`, `metrics.rs` |
 | RBAC beyond the bootstrap admin key: tenant-scoped `role` ('owner'\|'member') gating key create/revoke (previously any active key, including an `ai_agent` key, could mint or revoke any key in its tenant with no check) + node-level `is_root_admin` flag replacing the single hardcoded "`name==admin` in the first tenant" credential, with grant/revoke/list endpoints and CLI so more than one root admin can exist. Last-owner and last-root-admin lockout guards; `key.created`/`key.revoked`/`admin.root_admin_granted`/`admin.root_admin_revoked` audit entries (key create/revoke had none before); `metrics::ROOT_ADMIN_CHANGES` | `db.rs`, `main.rs`, `routes/keys.rs`, `routes/admin.rs`, `routes/sandbox.rs`, `routes/mod.rs`, `metrics.rs`, `commands/keys.rs` |
 | Externally anchor the audit log: `anchor_job::run_audit_anchor_cycle` batches `audit_entries` (by `entry_hash`) into RFC 6962 Merkle trees, signs with the same node-level `anchor_identity` key used for decisions, submits to OpenTimestamps, stores in new `audit_anchors` table — closes THREAT_MODEL.md §4.8's "chain not anchored outside this database" gap the same way decisions were already anchored. `GET /v1/audit/:id/proof` (self-contained bundle) + `POST /v1/audit/verify-proof` (DB-free, third-party verifiable, mirrors `decisions::verify`); `metrics::AUDIT_ANCHORED` | `db.rs`, `anchor_job.rs`, `main.rs`, `routes/audit.rs`, `routes/mod.rs`, `metrics.rs`, `audit_log.rs` |
+| Persist rate limiter across restarts: new `rate_limit_persistence.rs` periodically snapshots `rate_limiter`/`agent_tracker`/`sandbox_rate` (all previously in-memory-only) into a new `rate_limit_state` table every 30s, restores live windows at startup — closes the "restart silently resets every abuse-detection counter" gap without adding a DB write to the hot auth path | `rate_limit_persistence.rs`, `db.rs`, `state.rs`, `main.rs`, `lib.rs` |
 
 ---
 
@@ -612,6 +626,7 @@ All commits on branch `claude/create-claude-md-pBtap`:
 - HTTP replay protection — opt-in `x-hsip-timestamp`/`x-hsip-nonce` headers, closes THREAT_MODEL.md §4.3's previously-open "HTTP API has no per-request replay defense" gap without breaking any existing caller
 - RBAC beyond the bootstrap admin key — tenant-scoped owner/member roles for key management, node-level `is_root_admin` flag + grant/revoke/list endpoints replacing the single-hardcoded-credential root-admin model. Still a flat capability (not scoped grants) and a two-tier role split (not fine-grained permissions) by design — see the RBAC section above for why that's the right amount for what HSIP needs today
 - Externally anchor the audit log hash chain — same RFC 6962 Merkle + OpenTimestamps shape as decision attestations, applied to `audit_entries`; closes THREAT_MODEL.md §4.8's remaining "chain isn't anchored outside this database" gap
+- Persist rate limiter across restarts — `rate_limit_persistence.rs` periodically snapshots the rate-limit/AI-agent-velocity/sandbox-provisioning DashMaps to a `rate_limit_state` table and restores live windows at startup; periodic snapshot (30s), not a write-through on every request, so the hot auth path still never touches the database
 
 ### Remaining
 

@@ -7,5 +7,6 @@ pub mod db;
 pub mod errors;
 pub mod key_encryption;
 pub mod metrics;
+pub mod rate_limit_persistence;
 pub mod routes;
 pub mod state;

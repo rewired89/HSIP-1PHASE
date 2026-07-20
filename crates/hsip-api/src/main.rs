@@ -28,6 +28,7 @@ mod db;
 mod errors;
 mod key_encryption;
 mod metrics;
+mod rate_limit_persistence;
 mod routes;
 mod state;
 mod static_files;
@@ -185,6 +186,36 @@ async fn run() -> Result<()> {
     bootstrap_admin(&db, &config.security.admin_key_path).await?;
 
     let state = AppState::new_with_master_key_path(db, master_key, master_key_path);
+
+    // Restore rate-limit/AI-agent-velocity counters saved by the last
+    // snapshot before serving any traffic — best-effort, a failure here
+    // must not block startup (worst case: counters start fresh, same as
+    // before this feature existed).
+    if let Err(e) = rate_limit_persistence::load(&state.db, &state).await {
+        tracing::warn!(error = %e, "failed to restore rate-limit state from last snapshot");
+    }
+
+    // Periodic snapshot of the in-memory rate-limit / AI-agent-velocity
+    // DashMaps so a restart doesn't silently reset abuse-detection
+    // counters. See rate_limit_persistence.rs for why this is a periodic
+    // snapshot rather than a write-through on every request.
+    {
+        let snapshot_db = state.db.clone();
+        let snapshot_state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                rate_limit_persistence::SNAPSHOT_INTERVAL_SECS,
+            ));
+            loop {
+                interval.tick().await;
+                if let Err(e) =
+                    rate_limit_persistence::snapshot(&snapshot_db, &snapshot_state).await
+                {
+                    tracing::warn!(error = %e, "rate-limit state snapshot failed");
+                }
+            }
+        });
+    }
 
     // Periodic anchoring cycle: batches unanchored decisions, and
     // separately unanchored audit-log entries, into RFC 6962 Merkle trees

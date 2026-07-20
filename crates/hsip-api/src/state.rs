@@ -58,6 +58,16 @@ impl VelocityRecord {
             window_start_ms: AtomicI64::new(now_ms),
         }
     }
+
+    /// Reconstructs a record from persisted values — see
+    /// `rate_limit_persistence::load`.
+    pub fn from_parts(request_count: u64, anomaly_count: u64, window_start_ms: i64) -> Self {
+        Self {
+            request_count: AtomicU64::new(request_count),
+            anomaly_count: AtomicU64::new(anomaly_count),
+            window_start_ms: AtomicI64::new(window_start_ms),
+        }
+    }
 }
 
 /// Per-key rate limit window for all key types
@@ -73,9 +83,24 @@ impl RateWindow {
             window_start_ms: AtomicI64::new(now_ms),
         }
     }
+
+    /// Reconstructs a window from persisted values — see
+    /// `rate_limit_persistence::load`.
+    pub fn from_parts(count: u64, window_start_ms: i64) -> Self {
+        Self {
+            count: AtomicU64::new(count),
+            window_start_ms: AtomicI64::new(window_start_ms),
+        }
+    }
 }
 
+/// Velocity/anomaly tracking for `ai_agent` keys. In-memory for hot-path
+/// speed; periodically snapshotted to the `rate_limit_state` table and
+/// restored at startup by `rate_limit_persistence`, so a restart doesn't
+/// silently reset how close a key is to auto-revocation.
 pub type AgentTracker = Arc<DashMap<String, VelocityRecord>>;
+/// Per-key rate limit windows for all key types. Same persistence story as
+/// `AgentTracker` — see `rate_limit_persistence`.
 pub type RateLimiter = Arc<DashMap<String, RateWindow>>;
 /// Keys that have been flagged for revocation but DB write may be in-flight.
 /// Requests are rejected immediately once a key_id appears here.
@@ -85,6 +110,7 @@ pub type PendingRevocation = Arc<DashSet<String>>;
 pub type DnsState = Arc<Mutex<Option<hsip_dns::DnsHandle>>>;
 
 /// IP-keyed provision rate limiter for the sandbox endpoint (5/hour per IP).
+/// Same persistence story as `RateLimiter` — see `rate_limit_persistence`.
 pub type SandboxRate = Arc<DashMap<String, RateWindow>>;
 
 /// Replay-protection nonce tracker, keyed by `"{key_id}:{nonce}"`, value is

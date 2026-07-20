@@ -39,12 +39,12 @@
 ### `run`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Also spawns two background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick) and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded.
+- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns three background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded.
 - **inputs**: none
 - **outputs**: `Result<()>`
-- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `db::now_ms`
+- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`
 - **called_by**: `main`
-- **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows), `state.replay_nonces` DashMap (sweep removes expired entries)
+- **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows, `rate_limit_state` snapshots), `state.replay_nonces` DashMap (sweep removes expired entries), `state.rate_limiter`/`agent_tracker`/`sandbox_rate` (populated from persisted state at startup)
 
 ### `init_logging`
 - **type**: function
@@ -536,7 +536,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors) and adds missing columns idempotently. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -617,6 +617,16 @@
 - **called_by**: `check_agent_velocity`
 - **mutates**: nothing
 
+### `VelocityRecord::from_parts`
+- **type**: function
+- **file**: `crates/hsip-api/src/state.rs`
+- **purpose**: Reconstructs a velocity record from persisted values (request_count, anomaly_count, window_start_ms) — used when restoring state from the last `rate_limit_persistence` snapshot at startup.
+- **inputs**: `request_count: u64`, `anomaly_count: u64`, `window_start_ms: i64`
+- **outputs**: `Self`
+- **calls**: none
+- **called_by**: `rate_limit_persistence::load`
+- **mutates**: nothing
+
 ### `RateWindow`
 - **type**: struct
 - **file**: `crates/hsip-api/src/state.rs`
@@ -637,24 +647,34 @@
 - **called_by**: `check_rate_limit`
 - **mutates**: nothing
 
+### `RateWindow::from_parts`
+- **type**: function
+- **file**: `crates/hsip-api/src/state.rs`
+- **purpose**: Reconstructs a rate window from persisted values (count, window_start_ms) — used when restoring `rate_limiter`/`sandbox_rate` state from the last `rate_limit_persistence` snapshot at startup.
+- **inputs**: `count: u64`, `window_start_ms: i64`
+- **outputs**: `Self`
+- **calls**: none
+- **called_by**: `rate_limit_persistence::load`
+- **mutates**: nothing
+
 ### `AgentTracker`
 - **type**: variable (type alias)
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: `DashMap<String, VelocityRecord>` keyed by key_hash for AI agent velocity tracking.
+- **purpose**: `DashMap<String, VelocityRecord>` keyed by key_hash for AI agent velocity tracking. Periodically snapshotted to the `rate_limit_state` table and restored at startup — see `rate_limit_persistence.rs`.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
-- **called_by**: `AppState`, `check_agent_velocity`
+- **called_by**: `AppState`, `check_agent_velocity`, `rate_limit_persistence::{snapshot, load}`
 - **mutates**: nothing
 
 ### `RateLimiter`
 - **type**: variable (type alias)
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: `DashMap<String, RateWindow>` keyed by key_hash for per-key rate limiting.
+- **purpose**: `DashMap<String, RateWindow>` keyed by key_hash for per-key rate limiting. Periodically snapshotted to the `rate_limit_state` table and restored at startup — see `rate_limit_persistence.rs`.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
-- **called_by**: `AppState`, `check_rate_limit`
+- **called_by**: `AppState`, `check_rate_limit`, `rate_limit_persistence::{snapshot, load}`
 - **mutates**: nothing
 
 ### `PendingRevocation`
@@ -700,11 +720,11 @@
 ### `AppState::new`
 - **type**: function
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: Constructs `AppState` with `master_key_path: None` (rotation-via-API disabled). Kept for the two test-harness call sites that don't need a file-backed key; production startup uses `new_with_master_key_path`.
+- **purpose**: Constructs `AppState` with `master_key_path: None` (rotation-via-API disabled). Kept for test-harness call sites that don't need a file-backed key; production startup uses `new_with_master_key_path`.
 - **inputs**: `db: Db`, `master_key: Vec<u8>`
 - **outputs**: `Self`
 - **calls**: `Self::new_with_master_key_path`
-- **called_by**: `tests/integration.rs` test helpers
+- **called_by**: `tests/integration.rs` test helpers, `rate_limit_persistence.rs`'s own `#[cfg(test)]` tests
 - **mutates**: nothing
 
 ### `AppState::new_with_master_key_path`
@@ -720,8 +740,8 @@
 ### `SandboxRate`
 - **type**: type alias
 - **file**: `crates/hsip-api/src/state.rs`
-- **purpose**: `Arc<DashMap<String, RateWindow>>` — IP-keyed rate limiter for `POST /v1/sandbox/provision`. Limits to 5 provisions per IP per hour.
-- **called_by**: `sandbox::check_provision_rate`
+- **purpose**: `Arc<DashMap<String, RateWindow>>` — IP-keyed rate limiter for `POST /v1/sandbox/provision`. Limits to 5 provisions per IP per hour. Periodically snapshotted to the `rate_limit_state` table and restored at startup — see `rate_limit_persistence.rs`.
+- **called_by**: `sandbox::check_provision_rate`, `rate_limit_persistence::{snapshot, load}`
 
 
 ---
@@ -1012,6 +1032,51 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **called_by**: `metrics_handler`
 - **mutates**: nothing
 
+---
+
+## `crates/hsip-api/src/rate_limit_persistence.rs`
+
+Periodic persistence of the in-memory rate-limit / AI-agent-velocity
+DashMaps (`AppState.rate_limiter`, `.agent_tracker`, `.sandbox_rate`) so a
+restart doesn't silently reset abuse-detection counters. Deliberately a
+periodic snapshot, not a write-through on every request — see the
+module-level doc comment for why.
+
+### `SNAPSHOT_INTERVAL_SECS`
+- **type**: variable (constant)
+- **file**: `crates/hsip-api/src/rate_limit_persistence.rs`
+- **purpose**: How often (30s) the snapshot loop in `main.rs` flushes in-memory state to `rate_limit_state`. Also the upper bound on how much state a crash or unclean restart can lose.
+- **called_by**: `main.rs`'s spawned snapshot loop
+
+### `load`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/rate_limit_persistence.rs`
+- **purpose**: Restores persisted rate-limit/velocity state into the in-memory DashMaps. Called once at startup, before the server accepts traffic. Skips rows whose window has already expired (`now - window_start_ms >= RATE_WINDOW_MS`/`SANDBOX_WINDOW_MS`) — nothing meaningful to restore, they'd reset to fresh on first use anyway.
+- **inputs**: `db: &Db`, `state: &AppState`
+- **outputs**: `anyhow::Result<()>`
+- **calls**: `sqlx::query`, `RateWindow::from_parts`, `VelocityRecord::from_parts`
+- **called_by**: `main.rs`'s `run` (production startup, best-effort — logs a warning rather than failing startup on error)
+- **mutates**: `state.rate_limiter`/`agent_tracker`/`sandbox_rate` DashMaps
+
+### `snapshot`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/rate_limit_persistence.rs`
+- **purpose**: Upserts the current contents of all three trackers into `rate_limit_state` — one row per live key/IP per `kind`. A tracker entry that's since been evicted from memory (key revoked, etc.) simply leaves its last-known row in place rather than deleting it; not worth an extra query to prune a handful of harmless stale rows.
+- **inputs**: `db: &Db`, `state: &AppState`
+- **outputs**: `anyhow::Result<()>`
+- **calls**: `upsert`
+- **called_by**: `main.rs`'s spawned snapshot loop (every `SNAPSHOT_INTERVAL_SECS`)
+- **mutates**: `rate_limit_state` table
+
+### `upsert` (rate_limit_persistence)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/rate_limit_persistence.rs`
+- **purpose**: `INSERT ... ON CONFLICT (kind, state_key) DO UPDATE` for one tracker row. Standard upsert syntax supported identically by SQLite and PostgreSQL via `sqlx::AnyPool`.
+- **inputs**: `db: &Db`, `kind: &str`, `key: &str`, `count: u64`, `anomaly_count: u64`, `window_start_ms: i64`, `now: i64`
+- **outputs**: `anyhow::Result<()>`
+- **calls**: `sqlx::query`
+- **called_by**: `snapshot`
+- **mutates**: `rate_limit_state` table
 
 ---
 

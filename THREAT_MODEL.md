@@ -1,6 +1,6 @@
 # HSIP Threat Model
 
-**Version:** 0.10-draft  
+**Version:** 0.11-draft  
 **Date:** 2026-07-20  
 **Author:** Dayana Sanchez (rewired89)  
 **Review status:** Self-reviewed draft. This document was written from code inspection and requires the author's line-by-line verification before being treated as a published attack surface claim. Third-party audit planned before v1.0 commercial release. Codebase is fully open source for independent review.
@@ -133,13 +133,17 @@ Keys with `agent_type = 'ai_agent'` are subject to two automatic thresholds enfo
 
 **The `pending_revocation` DashSet is checked on every incoming request before the DB lookup.** This means a runaway agent's key is blocked within the same request cycle that triggers the hard limit — there is no window where subsequent requests slip through while the async database write is in flight.
 
+**Velocity counters survive a restart.** `AppState.agent_tracker` is in-memory (atomics in a `DashMap`, for hot-path speed), but is periodically snapshotted to the `rate_limit_state` table and restored at startup — see §4.6's persistence note below, which applies identically here since both trackers share the same mechanism.
+
 *Source: `crates/hsip-api/src/auth.rs` — `check_agent_velocity()`*
 
 ### 4.6 Per-Key Rate Limiting
 
 Every API key (not only agent keys) is subject to a sliding-window rate limit of 300 requests/minute by default (configurable via `RATE_LIMIT_RPM` environment variable). Enforcement uses an in-memory `DashMap<key_id, RateWindow>` — the limit is on the key identity, not the client IP, so it cannot be bypassed by IP rotation or multiplexed connections.
 
-*Source: `crates/hsip-api/src/auth.rs` — `check_rate_limit()`*
+**Persisted across restarts.** Previously entirely in-memory: a restart (crash, deploy, container reschedule) silently reset every key's count to zero, and the same was true of `agent_tracker`'s velocity/anomaly counters (§4.5) and the sandbox provisioning IP limiter (§4.2-adjacent, `routes::sandbox`). `rate_limit_persistence::snapshot` now upserts the current contents of all three trackers to a `rate_limit_state` table every 30s; `rate_limit_persistence::load` restores live (non-expired) windows at startup, before the server accepts traffic. This is a periodic snapshot, not a write-through on every request — adding a DB write to the hot auth path on every single request was rejected as a disproportionate cost for what this closes. **Residual risk:** state since the last snapshot (up to 30s) is still lost on a crash or unclean restart; bounded, not eliminated, the same tradeoff already accepted elsewhere in this document (master-key rotation's staging-file window, decision attestations' signing-to-anchoring gap).
+
+*Source: `crates/hsip-api/src/auth.rs` — `check_rate_limit()`; `crates/hsip-api/src/rate_limit_persistence.rs`*
 
 ### 4.7 Consent Expiry Enforced Server-Side on Every Check
 
@@ -304,7 +308,7 @@ Documented openly. Tracked for the v1.0 audit milestone.
 | **Flat RBAC model, not scoped permissions** | Low | §4.14 closed the "single hardcoded root-admin credential" gap (multiple root admins can now exist via grant/revoke) and the "any key can manage any other key in its tenant" gap (now `role='owner'`-gated). What remains by design: `is_root_admin` is one flat capability covering every node-level operation (no "can rotate but not grant"), and `role` is a two-tier split, not per-action scoped permissions. Revisit only when an operation shows up that genuinely needs finer scoping than that. |
 | **SQLite → PostgreSQL migration path is undocumented and untested** | Medium | `DATABASE_URL` pointing at PostgreSQL is supported by `db.rs`'s `AnyPool`, but no migration tooling or tested procedure exists for moving an existing SQLite deployment's data over. Treat a PostgreSQL deployment as a fresh install, not an upgrade, until this is tested. |
 | **OpenTimestamps calendar submission unverified end-to-end** | Medium | `anchor.rs`'s HTTP client logic is unit-tested against a mock server only. Outbound HTTPS to `*.calendar.opentimestamps.org` has been confirmed blocked in every sandboxed environment this project has been developed in to date (including this session's, via a 403 on the CONNECT tunnel) — real-network submission has never been observed to complete. Verify from an unrestricted network before relying on it for compliance purposes. |
-| In-memory rate limiter resets on restart | Low | A burst attack timed around a restart or deploy can temporarily exceed rate limits |
+| Rate-limit/velocity snapshot interval (was: full reset on restart) | Low | §4.6 closed the "in-memory only, full reset on every restart" gap — `rate_limit_state` now persists rate-limit, AI-agent-velocity, and sandbox-provisioning counters across restarts. Residual window: up to `SNAPSHOT_INTERVAL_SECS` (30s) of state can still be lost on a crash or unclean restart, since this is a periodic snapshot rather than a write-through on every request. |
 | SQLite without WAL under write contention | Low | Low risk for single-tenant deployments; use `DATABASE_URL` pointing at PostgreSQL for high-concurrency |
 | No mutual TLS between federated HSIP nodes | Low | Federated trust uses explicit Ed25519 verify key registration; no automatic peer auth at the transport layer |
 | Audit log anchor cadence window | Low | §4.8.1 closed the "chain not anchored outside this database" gap — an attacker who deletes the whole chain *after* its last anchor is now detectable by comparing the anchored root against what remains. The residual window is the same shape as decisions' own: a chain deleted *before* its next anchor cycle runs (bounded by `INTERVAL_TRIGGER_MS` = 5 min) is still undetectable by this mechanism alone. |

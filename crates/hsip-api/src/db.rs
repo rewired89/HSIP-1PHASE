@@ -295,6 +295,28 @@ async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Periodic snapshot of the in-memory rate-limit / AI-agent-velocity
+    // DashMaps (see `state.rs`'s `RateLimiter`/`AgentTracker`/`SandboxRate`
+    // and `rate_limit_persistence.rs`), so a restart doesn't silently reset
+    // abuse-detection counters — a key mid-way toward the 1000 req/min
+    // auto-revoke threshold (see auth.rs) would otherwise get a clean slate
+    // on every restart. `kind` distinguishes which of the three trackers a
+    // row belongs to; `(kind, key)` is one row per live key/IP, upserted on
+    // every snapshot rather than accumulating a history.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS rate_limit_state (
+            kind            TEXT NOT NULL,
+            state_key       TEXT NOT NULL,
+            count           INTEGER NOT NULL,
+            anomaly_count   INTEGER NOT NULL DEFAULT 0,
+            window_start_ms INTEGER NOT NULL,
+            updated_at      INTEGER NOT NULL,
+            PRIMARY KEY (kind, state_key)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Node-level Ed25519 identity used to sign anchored Merkle roots. This
     // is deliberately separate from any tenant's identity: an anchor batch
     // spans decisions from every tenant, so "who vouches for this batch"
