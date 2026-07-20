@@ -48,9 +48,17 @@ pub async fn upload(
         .unwrap_or("application/octet-stream")
         .to_string();
 
-    if !content_type.starts_with("image/") {
+    // `image/svg+xml` is deliberately excluded even though it starts with
+    // "image/": SVG is XML and can carry a <script> or event-handler
+    // attribute that a browser executes if this upload's URL (see `serve`
+    // below — it's designed to be opened directly) is ever navigated to
+    // directly rather than embedded via <img>. Every other accepted image
+    // format is not script-capable, so this one exclusion closes the whole
+    // class of stored-XSS risk here without otherwise restricting what
+    // "image" means.
+    if !content_type.starts_with("image/") || content_type.eq_ignore_ascii_case("image/svg+xml") {
         return Err(bad(
-            "only image files are accepted (jpeg, png, gif, webp, …)",
+            "only image files are accepted (jpeg, png, gif, webp, …) — SVG is not accepted",
         ));
     }
 
@@ -114,6 +122,12 @@ pub async fn serve(State(state): State<AppState>, Path(id): Path<String>) -> imp
                 .status(StatusCode::OK)
                 .header("content-type", content_type)
                 .header("cache-control", "public, max-age=31536000, immutable")
+                // Defense in depth alongside the SVG rejection in `upload`
+                // above: even if a stored file's declared content_type
+                // doesn't match its actual bytes, this stops a browser
+                // from sniffing it into something script-capable (e.g.
+                // HTML) despite the declared image/* type.
+                .header("x-content-type-options", "nosniff")
                 .body(Body::from(data))
                 .unwrap_or_else(|_| {
                     Response::builder()

@@ -2092,8 +2092,8 @@ module-level doc comment for why.
 ### `status` (proxy)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/proxy.rs`
-- **purpose**: `GET /v1/proxy/status` — returns proxy running state and stats.
-- **inputs**: `State(state)`, `tenant`
+- **purpose**: `GET /v1/proxy/status` — returns proxy running state and stats. Previously shipped with no `TenantId` parameter at all (reachable with zero credentials); fixed by prepending `_tenant: TenantId` — see security-review §4.19 in `CLAUDE.md`/`THREAT_MODEL.md`.
+- **inputs**: `_tenant: TenantId`, `State(state)`
 - **outputs**: `ApiResult<Json<ProxyStatus>>`
 - **calls**: `compute_stats`
 - **called_by**: Axum router
@@ -2102,8 +2102,8 @@ module-level doc comment for why.
 ### `enable` (proxy)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/proxy.rs`
-- **purpose**: `POST /v1/proxy/enable` — starts the MITM proxy thread on specified port.
-- **inputs**: `State(state)`, `tenant`, `Json(req)`
+- **purpose**: `POST /v1/proxy/enable` — starts the MITM proxy thread on specified port. Previously shipped with no `TenantId` parameter at all (reachable with zero credentials); fixed by prepending `_tenant: TenantId`.
+- **inputs**: `_tenant: TenantId`, `State(state)`
 - **outputs**: `ApiResult<Json<ProxyStatus>>`
 - **calls**: `run_proxy_thread`, `std::thread::spawn`
 - **called_by**: Axum router
@@ -2112,8 +2112,8 @@ module-level doc comment for why.
 ### `disable` (proxy)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/proxy.rs`
-- **purpose**: `POST /v1/proxy/disable` — signals the proxy thread to stop.
-- **inputs**: `State(state)`, `tenant`
+- **purpose**: `POST /v1/proxy/disable` — signals the proxy thread to stop. Previously shipped with no `TenantId` parameter at all (reachable with zero credentials); fixed by prepending `_tenant: TenantId`.
+- **inputs**: `_tenant: TenantId`, `State(state)`
 - **outputs**: `ApiResult<Json<ProxyStatus>>`
 - **calls**: `state.proxy.write()` (sets running false)
 - **called_by**: Axum router
@@ -2122,8 +2122,8 @@ module-level doc comment for why.
 ### `log` (proxy)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/proxy.rs`
-- **purpose**: `GET /v1/proxy/log` — returns recent proxy event ring buffer contents.
-- **inputs**: `State(state)`, `tenant`
+- **purpose**: `GET /v1/proxy/log` — returns recent proxy event ring buffer contents. Previously shipped with no `TenantId` parameter at all (reachable with zero credentials — anyone could read the full traffic log); fixed by prepending `_tenant: TenantId`.
+- **inputs**: `_tenant: TenantId`, `State(state)`
 - **outputs**: `ApiResult<Json<Vec<ProxyEvent>>>`
 - **calls**: `state.proxy.read()`
 - **called_by**: Axum router
@@ -2142,8 +2142,8 @@ module-level doc comment for why.
 ### `setup`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/proxy.rs`
-- **purpose**: `GET /v1/proxy/setup` — returns OS-specific proxy configuration instructions.
-- **inputs**: `State(state)`, `tenant`
+- **purpose**: `GET /v1/proxy/setup` — returns OS-specific proxy configuration instructions. Previously shipped with no `TenantId` parameter at all (reachable with zero credentials); fixed by prepending `_tenant: TenantId`.
+- **inputs**: `_tenant: TenantId`, `State(state)`
 - **outputs**: `ApiResult<Json<SetupInstructions>>`
 - **calls**: none
 - **called_by**: Axum router
@@ -2482,20 +2482,20 @@ module-level doc comment for why.
 ### `upload`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/uploads.rs`
-- **purpose**: `POST /v1/uploads` — saves a multipart image upload to the data directory, returns its URL path.
-- **inputs**: `State(state)`, `tenant`, `Multipart`
-- **outputs**: `ApiResult<Json<UploadResponse>>`
-- **calls**: `fs::write`, `axum::extract::Multipart`
+- **purpose**: `POST /v1/uploads` — authenticated, multipart/form-data, images only (max 8MB), stores bytes in the `uploads` DB table (not the filesystem), returns a public URL. Rejects `image/svg+xml` even though it matches the `image/*` prefix check — SVG is XML and can carry a `<script>`/event-handler payload that executes if `serve` below is navigated to directly, so it was closed as a stored-XSS vector (security-review §4.19).
+- **inputs**: `State(state)`, `TenantId(tenant_id)`, `Multipart`
+- **outputs**: `Result<Json<UploadResponse>, (StatusCode, Json<Value>)>`
+- **calls**: `sqlx::query` (INSERT into `uploads`), `axum::extract::Multipart`
 - **called_by**: Axum router
-- **mutates**: filesystem (uploads directory)
+- **mutates**: DB (`uploads` table)
 
 ### `serve` (uploads)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/uploads.rs`
-- **purpose**: `GET /v1/uploads/:filename` — serves a previously uploaded file from disk.
-- **inputs**: `State(state)`, `Path(filename)`
-- **outputs**: `ApiResult<impl IntoResponse>`
-- **calls**: `fs::read`, `mime_guess`
+- **purpose**: `GET /v1/uploads/:id` — public (no auth), serves the raw stored bytes with their stored `content_type`. Now also sends `x-content-type-options: nosniff` as defense-in-depth alongside the SVG rejection in `upload` — stops a browser from sniffing a mismatched-declared-type file into something script-capable (security-review §4.19).
+- **inputs**: `State(state)`, `Path(id)`
+- **outputs**: `impl IntoResponse`
+- **calls**: `sqlx::query` (SELECT from `uploads`)
 - **called_by**: Axum router
 - **mutates**: nothing
 
@@ -3499,29 +3499,29 @@ decision-specific.
 ## `crates/hsip-cli/src/identity.rs`
 
 ### `HSIP_KEY`
-- **type**: variable (constant)
+- **type**: variable (`Lazy<Vec<u8>>`)
 - **file**: `crates/hsip-cli/src/identity.rs`
-- **purpose**: Environment variable name for the HSIP API key: `"HSIP_API_KEY"`.
+- **purpose**: HMAC-SHA256 key used to sign the local `/token` broker's JWTs. Reads `HSIP_LOCAL_JWT_KEY_HEX` if set (stable key across restarts); previously fell back to a fixed, publicly-known hex string checked into this open-source repo when unset — since `/token` requires no auth and accepts any caller-supplied `aud`, that let anyone who'd read this source forge a valid token for any relying party trusting an unconfigured broker. Fixed (security-review §4.19) to fall back to a fresh 32-byte `OsRng`-generated key per process instead — an unconfigured broker is now unpredictable key material, not a publicly known secret.
 - **inputs**: none
 - **outputs**: none
-- **calls**: none
-- **called_by**: `run_identity_broker`
-- **mutates**: nothing
+- **calls**: `std::env::var`, `hex::decode`, `rand::rngs::OsRng::fill_bytes`
+- **called_by**: `token`
+- **mutates**: nothing (initialized once, `Lazy`)
 
 ### `Status`
 - **type**: struct
 - **file**: `crates/hsip-cli/src/identity.rs`
-- **purpose**: Identity broker status response: connected bool, verify_key, server_url.
+- **purpose**: `/status` response: `ok: bool`, `version: &'static str`.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
-- **called_by**: `run_identity_broker`
+- **called_by**: `run_identity_broker` (inline handler)
 - **mutates**: nothing
 
 ### `TokenReq`
 - **type**: struct
 - **file**: `crates/hsip-cli/src/identity.rs`
-- **purpose**: Token request payload from a relying party: scope, audience, nonce.
+- **purpose**: `/token` request body: `aud: Option<String>`.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -3531,7 +3531,7 @@ decision-specific.
 ### `TokenResp`
 - **type**: struct
 - **file**: `crates/hsip-cli/src/identity.rs`
-- **purpose**: Token response: signed JWT-like token string.
+- **purpose**: `/token` response: signed JWT string.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -3541,27 +3541,27 @@ decision-specific.
 ### `run_identity_broker`
 - **type**: function (async)
 - **file**: `crates/hsip-cli/src/identity.rs`
-- **purpose**: Starts a local HTTP broker that lets web pages request signed identity tokens from the HSIP server.
-- **inputs**: `args: BrokerArgs`
-- **outputs**: `Result<()>`
+- **purpose**: Starts a local HTTP broker (`HSIP_IDENTITY_ADDR`, default `127.0.0.1:9100`) serving `/status`, `/token`, `/demo` — lets a local web page request a short-lived signed identity token without a username/password.
+- **inputs**: none
+- **outputs**: `anyhow::Result<()>`
 - **calls**: `axum::serve`, `token`, `demo`
-- **called_by**: `main`
+- **called_by**: `main` (`hsip identity-serve`)
 - **mutates**: network (binds port)
 
 ### `token`
 - **type**: function (async)
 - **file**: `crates/hsip-cli/src/identity.rs`
-- **purpose**: Broker handler: receives `TokenReq`, forwards signing request to HSIP API, returns `TokenResp`.
-- **inputs**: `State`, `Json(req): Json<TokenReq>`
+- **purpose**: `POST /token` handler: builds `iss`/`sub`/`iat`/`exp`/`aud` claims, signs them with `HSIP_KEY` via HMAC-SHA256, returns the JWT. No authentication on the caller — anyone reaching the broker's port can request a token, by design (local demo login flow); the signing key itself is what changed in the security fix, not this handler's auth model.
+- **inputs**: `Json(req): Json<TokenReq>`
 - **outputs**: `impl IntoResponse`
-- **calls**: `reqwest::Client::post` (to `/v1/messages/sign`)
+- **calls**: `HmacSha256::new_from_slice`, `Token::sign_with_key`
 - **called_by**: `run_identity_broker` (Axum route)
-- **mutates**: DB via API
+- **mutates**: nothing
 
 ### `demo`
 - **type**: function (async)
 - **file**: `crates/hsip-cli/src/identity.rs`
-- **purpose**: Serves a simple HTML demo page showing identity broker integration.
+- **purpose**: Serves a static HTML/JS demo page that calls `/token` on button click and displays a truncated token.
 - **inputs**: none
 - **outputs**: `impl IntoResponse`
 - **calls**: `Html`

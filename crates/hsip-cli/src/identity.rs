@@ -17,11 +17,25 @@ use tokio::net::TcpListener;
 
 type HmacSha256 = Hmac<Sha256>;
 
+// This key signs the `/token` JWTs `run_identity_broker` hands out below.
+// It used to fall back to a fixed, publicly-known hex string (checked into
+// this open-source repo) whenever HSIP_LOCAL_JWT_KEY_HEX wasn't set — since
+// `/token` itself requires no authentication and accepts any `aud` the
+// caller supplies, anyone who'd ever read this source could forge a valid
+// token for any relying party still trusting an unconfigured broker,
+// without ever calling it. Falling back to a fresh random key per process
+// instead closes that: an unconfigured broker is now merely unpredictable
+// key material (fine for the local single-user demo use case this file's
+// own /demo page describes), not a publicly known secret. Set
+// HSIP_LOCAL_JWT_KEY_HEX explicitly for a key stable across restarts.
 static HSIP_KEY: Lazy<Vec<u8>> = Lazy::new(|| {
-    let k = std::env::var("HSIP_LOCAL_JWT_KEY_HEX").unwrap_or_else(|_| {
-        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_string()
-    });
-    hex::decode(k).expect("bad HSIP_LOCAL_JWT_KEY_HEX")
+    if let Ok(k) = std::env::var("HSIP_LOCAL_JWT_KEY_HEX") {
+        return hex::decode(k).expect("bad HSIP_LOCAL_JWT_KEY_HEX");
+    }
+    use rand::RngCore;
+    let mut key = vec![0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut key);
+    key
 });
 
 #[derive(Serialize)]

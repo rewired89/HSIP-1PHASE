@@ -4,6 +4,14 @@
 //! 127.0.0.1:8877 (default).  Traffic events are pushed into the shared ring
 //! buffer in `AppState.proxy` and served to the dashboard via `GET /v1/proxy/log`.
 //!
+//! All five handlers require a valid API key (`TenantId`), same as every
+//! other route — this module briefly shipped without that check at all, so
+//! anyone who could reach the HSIP port could enable/disable the proxy and
+//! read its full traffic log with zero credentials. Not tenant-scoped
+//! beyond authentication (the proxy itself, like the DNS blocker in
+//! `dns.rs`, is a single node-level resource, not per-tenant data), so any
+//! valid key — not just an owner-role one — is sufficient, matching `dns.rs`.
+//!
 //! Endpoints
 //! ---------
 //! GET  /v1/proxy/status  → ProxyStatus
@@ -13,6 +21,7 @@
 //! GET  /v1/proxy/setup   → SetupInstructions  (platform-specific)
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
@@ -20,6 +29,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+use crate::auth::TenantId;
 use crate::state::{AppState, ProxyEvent};
 
 // ── Embedded tracker database ────────────────────────────────────────────────
@@ -158,7 +168,7 @@ pub struct ProxyStats {
     pub allowed: usize,
 }
 
-pub async fn status(State(s): State<AppState>) -> impl IntoResponse {
+pub async fn status(_tenant: TenantId, State(s): State<AppState>) -> impl IntoResponse {
     let enabled = s.proxy.enabled.load(Ordering::Relaxed);
     let port = s.proxy.port.load(Ordering::Relaxed) as u16;
     let stats = compute_stats(&s);
@@ -169,7 +179,7 @@ pub async fn status(State(s): State<AppState>) -> impl IntoResponse {
     })
 }
 
-pub async fn enable(State(s): State<AppState>) -> impl IntoResponse {
+pub async fn enable(_tenant: TenantId, State(s): State<AppState>) -> impl IntoResponse {
     if s.proxy.enabled.load(Ordering::Relaxed) {
         let port = s.proxy.port.load(Ordering::Relaxed) as u16;
         let stats = compute_stats(&s);
@@ -206,7 +216,7 @@ pub async fn enable(State(s): State<AppState>) -> impl IntoResponse {
     )
 }
 
-pub async fn disable(State(s): State<AppState>) -> impl IntoResponse {
+pub async fn disable(_tenant: TenantId, State(s): State<AppState>) -> impl IntoResponse {
     // Send shutdown signal (non-blocking; thread reads it next accept cycle)
     if let Ok(mut guard) = s.proxy.shutdown.lock() {
         drop(guard.take());
@@ -215,7 +225,7 @@ pub async fn disable(State(s): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!({ "ok": true }))
 }
 
-pub async fn log(State(s): State<AppState>) -> impl IntoResponse {
+pub async fn log(_tenant: TenantId, State(s): State<AppState>) -> impl IntoResponse {
     let events: Vec<ProxyEvent> = s.proxy.events.lock().unwrap().iter().cloned().collect();
     Json(events)
 }
@@ -230,7 +240,7 @@ pub struct SetupInstructions {
     pub pac_url: String,
 }
 
-pub async fn setup(State(s): State<AppState>) -> impl IntoResponse {
+pub async fn setup(_tenant: TenantId, State(s): State<AppState>) -> impl IntoResponse {
     let port = s.proxy.port.load(Ordering::Relaxed) as u16;
     Json(SetupInstructions {
         proxy_host: "127.0.0.1".into(),
