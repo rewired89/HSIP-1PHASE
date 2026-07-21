@@ -33,6 +33,7 @@ mod rate_limit_persistence;
 mod routes;
 mod state;
 mod static_files;
+mod system_health;
 
 use config::Config;
 use state::AppState;
@@ -290,6 +291,30 @@ async fn run() -> Result<()> {
             loop {
                 interval.tick().await;
                 anchor_job::run_upgrade_cycle(&upgrade_db).await;
+            }
+        });
+    }
+
+    // Periodically refresh metrics::SYSTEM_HEALTH_ISSUES (see
+    // system_health.rs) so conditions needing operator attention — an
+    // incomplete master key rotation, zero root-admin keys, abandoned OTS
+    // anchors — show up on /metrics even if nobody's polling
+    // GET /v1/admin/system-health themselves. This is the actual answer to
+    // "how would an operator find out something needs manual intervention":
+    // a business running real Prometheus alerting can fire on
+    // hsip_system_health_issues{severity="critical"} > 0 without ever
+    // touching HSIP's own API. Cheap (a filesystem stat plus a couple of
+    // COUNT(*) queries), so a 5-minute interval is plenty responsive without
+    // being wasteful.
+    {
+        let health_db = state.db.clone();
+        let health_master_key_path = state.master_key_path.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+            loop {
+                interval.tick().await;
+                let path = health_master_key_path.as_deref().map(|p| p.as_str());
+                system_health::check_and_update_metrics(&health_db, path).await;
             }
         });
     }

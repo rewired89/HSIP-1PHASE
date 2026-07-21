@@ -269,14 +269,33 @@ async fn retry_pending_ots_submissions(db: &Db, calendars: &[&str]) {
 
         match anchor::submit_digest_to(calendars, &root).await {
             Ok(receipt) => {
-                let _ = sqlx::query(
+                match sqlx::query(
                     "UPDATE decision_anchors SET ots_proof = $1, ots_status = 'pending' WHERE id = $2",
                 )
                 .bind(&receipt.response_bytes)
                 .bind(&anchor_id)
                 .execute(db)
-                .await;
-                tracing::info!(anchor_id = %anchor_id, "OpenTimestamps retry succeeded");
+                .await
+                {
+                    Ok(result) if result.rows_affected() > 0 => {
+                        tracing::info!(anchor_id = %anchor_id, "OpenTimestamps retry succeeded");
+                    }
+                    Ok(_) => {
+                        tracing::warn!(
+                            anchor_id = %anchor_id,
+                            "OpenTimestamps retry got a calendar response but the DB update \
+                             affected zero rows (row deleted concurrently?) — not counted as success"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            anchor_id = %anchor_id,
+                            error = %e,
+                            "OpenTimestamps retry got a calendar response but failed to persist \
+                             it — will retry again next cycle, row is still 'calendar_unreachable'"
+                        );
+                    }
+                }
             }
             Err(e) => {
                 tracing::debug!(anchor_id = %anchor_id, error = %e, "OpenTimestamps retry still failing");
@@ -485,14 +504,33 @@ async fn retry_pending_audit_ots_submissions(db: &Db, calendars: &[&str]) {
 
         match anchor::submit_digest_to(calendars, &root).await {
             Ok(receipt) => {
-                let _ = sqlx::query(
+                match sqlx::query(
                     "UPDATE audit_anchors SET ots_proof = $1, ots_status = 'pending' WHERE id = $2",
                 )
                 .bind(&receipt.response_bytes)
                 .bind(&anchor_id)
                 .execute(db)
-                .await;
-                tracing::info!(anchor_id = %anchor_id, "OpenTimestamps retry succeeded (audit-log batch)");
+                .await
+                {
+                    Ok(result) if result.rows_affected() > 0 => {
+                        tracing::info!(anchor_id = %anchor_id, "OpenTimestamps retry succeeded (audit-log batch)");
+                    }
+                    Ok(_) => {
+                        tracing::warn!(
+                            anchor_id = %anchor_id,
+                            "OpenTimestamps retry (audit-log batch) got a calendar response but \
+                             the DB update affected zero rows — not counted as success"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            anchor_id = %anchor_id,
+                            error = %e,
+                            "OpenTimestamps retry (audit-log batch) got a calendar response but \
+                             failed to persist it — will retry again next cycle"
+                        );
+                    }
+                }
             }
             Err(e) => {
                 tracing::debug!(anchor_id = %anchor_id, error = %e, "OpenTimestamps retry still failing (audit-log batch)");
@@ -520,7 +558,7 @@ const MAX_UPGRADE_CHECKS_PER_CYCLE: i64 = 25;
 /// signature and Merkle proof still verify — it simply stops being
 /// auto-upgraded; an operator can still check it against the calendar
 /// directly if needed.
-const MAX_PENDING_UPGRADE_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000; // 7 days
+pub(crate) const MAX_PENDING_UPGRADE_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /// Poll calendars for anchor batches (both decisions and the audit log)
 /// still sitting at `ots_status = 'pending'`, and upgrade any that have
@@ -639,17 +677,39 @@ async fn upgrade_one_anchor(db: &Db, table: &'static str, row: &AnyRow) {
             let update_sql = format!(
                 "UPDATE {table} SET ots_proof = $1, ots_status = 'confirmed' WHERE id = $2"
             );
-            let _ = sqlx::query(&update_sql)
+            match sqlx::query(&update_sql)
                 .bind(&proof_bytes)
                 .bind(&anchor_id)
                 .execute(db)
-                .await;
-            tracing::info!(
-                anchor_id = %anchor_id,
-                table,
-                "OpenTimestamps proof upgraded to Bitcoin-confirmed"
-            );
-            metrics::ANCHOR_UPGRADED_TO_CONFIRMED.inc();
+                .await
+            {
+                Ok(result) if result.rows_affected() > 0 => {
+                    tracing::info!(
+                        anchor_id = %anchor_id,
+                        table,
+                        "OpenTimestamps proof upgraded to Bitcoin-confirmed"
+                    );
+                    metrics::ANCHOR_UPGRADED_TO_CONFIRMED.inc();
+                }
+                Ok(_) => {
+                    tracing::warn!(
+                        anchor_id = %anchor_id,
+                        table,
+                        "calendar confirmed Bitcoin attestation but the DB update affected zero \
+                         rows (row deleted concurrently?) — not counted as upgraded; will be \
+                         re-checked next cycle if the row still exists and is still pending"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        anchor_id = %anchor_id,
+                        table,
+                        error = %e,
+                        "calendar confirmed Bitcoin attestation but the DB update failed — not \
+                         counted as upgraded, row is still 'pending' and will be re-checked next cycle"
+                    );
+                }
+            }
         }
         Ok(Some(_)) => {
             tracing::debug!(
@@ -689,4 +749,94 @@ pub fn verify_anchor_signature(
     };
     let sig = Signature::from_bytes(signature);
     vk.verify(root, &sig).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_db() -> Db {
+        let db_url = format!(
+            "sqlite:file:{}?mode=memory&cache=shared",
+            uuid::Uuid::new_v4()
+        );
+        sqlx::any::install_default_drivers();
+        crate::db::init(&db_url).await.expect("db init")
+    }
+
+    fn build_pending_proof(calendar_uri: &str) -> Vec<u8> {
+        let uri_bytes = calendar_uri.as_bytes();
+        let mut proof = vec![0xAA, 0xBB, 0xCC];
+        proof.extend_from_slice(&[0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e]); // PendingAttestation tag
+        proof.push((uri_bytes.len() + 1) as u8);
+        proof.push(uri_bytes.len() as u8);
+        proof.extend_from_slice(uri_bytes);
+        proof
+    }
+
+    /// A row that gets deleted out from under `upgrade_one_anchor` between
+    /// being fetched and the `UPDATE` (simulating a concurrent delete, or
+    /// standing in for any reason the `UPDATE` might legitimately affect
+    /// zero rows) must NOT be counted as a successful upgrade — this is the
+    /// exact bug found during a QA review: the original code discarded the
+    /// `UPDATE`'s result with `let _ =` and logged/counted success
+    /// unconditionally.
+    #[tokio::test]
+    async fn zero_rows_affected_is_not_counted_as_a_successful_upgrade() {
+        let db = test_db().await;
+
+        let mock_calendar = wiremock::MockServer::start().await;
+        let calendar_uri = mock_calendar.uri();
+        let pending_proof = build_pending_proof(&calendar_uri);
+
+        let mut confirmed_proof = vec![0xAA, 0xBB, 0xCC];
+        confirmed_proof.extend_from_slice(&[0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01]); // BitcoinBlockHeaderAttestation tag
+        confirmed_proof.extend_from_slice(b"...stand-in for real block header bytes...");
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path_regex(r"^/timestamp/.*"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(confirmed_proof))
+            .mount(&mock_calendar)
+            .await;
+
+        let anchor_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO decision_anchors
+             (id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status, created_at)
+             VALUES ($1, $2, 1, 'sig', 'verify_key', $3, 'pending', $4)",
+        )
+        .bind(&anchor_id)
+        .bind(hex::encode([0x22u8; 32]))
+        .bind(&pending_proof)
+        .bind(now_ms())
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // Fetch the row exactly like upgrade_pending_decision_anchors does,
+        // then delete it — the in-memory `row` stays valid, but the later
+        // UPDATE inside upgrade_one_anchor will now match zero rows.
+        let row = sqlx::query(
+            "SELECT id, merkle_root, ots_proof, created_at FROM decision_anchors WHERE id = $1",
+        )
+        .bind(&anchor_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+
+        sqlx::query("DELETE FROM decision_anchors WHERE id = $1")
+            .bind(&anchor_id)
+            .execute(&db)
+            .await
+            .unwrap();
+
+        let before = metrics::ANCHOR_UPGRADED_TO_CONFIRMED.get();
+        upgrade_one_anchor(&db, "decision_anchors", &row).await;
+        let after = metrics::ANCHOR_UPGRADED_TO_CONFIRMED.get();
+
+        assert_eq!(
+            before, after,
+            "a 0-rows-affected UPDATE must not increment the upgraded-to-confirmed metric"
+        );
+    }
 }

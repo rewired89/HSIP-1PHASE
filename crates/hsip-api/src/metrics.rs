@@ -1,7 +1,7 @@
 use once_cell::sync::Lazy;
 use prometheus::{
-    register_counter, register_counter_vec, register_gauge, Counter, CounterVec, Encoder, Gauge,
-    TextEncoder,
+    register_counter, register_counter_vec, register_gauge, register_gauge_vec, Counter,
+    CounterVec, Encoder, Gauge, GaugeVec, TextEncoder,
 };
 
 pub static REQUESTS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
@@ -195,6 +195,24 @@ pub static ANCHOR_UPGRADE_STALE: Lazy<Counter> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Current count of unresolved `system_health::check` issues, by severity
+/// (`critical`|`warning`). A gauge, not a counter — it reflects the state
+/// as of the last check, so it correctly drops back to zero once an issue
+/// resolves, unlike a monotonic counter which would stay "triggered"
+/// forever. Refreshed on every `GET /v1/admin/system-health` call and by a
+/// periodic background task (see `main.rs`) so this stays current even if
+/// nobody's polling that endpoint — the whole point is that a business
+/// running real Prometheus alerting can fire on `hsip_system_health_issues{severity="critical"} > 0`
+/// without needing to poll HSIP's own API themselves.
+pub static SYSTEM_HEALTH_ISSUES: Lazy<GaugeVec> = Lazy::new(|| {
+    register_gauge_vec!(
+        "hsip_system_health_issues",
+        "Current count of unresolved system-health issues needing operator attention, by severity",
+        &["severity"]
+    )
+    .unwrap()
+});
+
 /// Force initialization of all metrics at startup
 pub fn init() {
     Lazy::force(&REQUESTS_TOTAL);
@@ -216,6 +234,7 @@ pub fn init() {
     Lazy::force(&AUDIT_ANCHORED);
     Lazy::force(&ANCHOR_UPGRADED_TO_CONFIRMED);
     Lazy::force(&ANCHOR_UPGRADE_STALE);
+    Lazy::force(&SYSTEM_HEALTH_ISSUES);
 }
 
 /// Render all metrics as Prometheus text format

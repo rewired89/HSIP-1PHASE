@@ -11,3 +11,4 @@ pub mod mtls;
 pub mod rate_limit_persistence;
 pub mod routes;
 pub mod state;
+pub mod system_health;

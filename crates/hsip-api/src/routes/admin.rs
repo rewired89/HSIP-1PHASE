@@ -163,6 +163,26 @@ pub struct MasterKeyFingerprintResponse {
     pub rotation_available: bool,
 }
 
+/// `GET /v1/admin/system-health` — read-only, root-admin gated. Aggregates
+/// conditions the rest of this codebase can detect but cannot fix itself —
+/// see `system_health.rs` for what's checked and why. Exists because "can
+/// this recover automatically?" has real "no" answers in this codebase (an
+/// incomplete master key rotation, a permanently root-admin-less node), and
+/// HSIP has no push-based alerting of its own — an operator, whether that's
+/// one person on a desktop or a business running real monitoring, would
+/// otherwise only discover these states by reading the database directly.
+pub async fn system_health(
+    State(state): State<AppState>,
+    _tenant: TenantId,
+    headers: HeaderMap,
+) -> ApiResult<Json<crate::system_health::SystemHealth>> {
+    require_root_admin(&state.db, &headers).await?;
+    let master_key_path = state.master_key_path.as_ref().map(|p| p.as_str());
+    Ok(Json(
+        crate::system_health::check_and_update_metrics(&state.db, master_key_path).await,
+    ))
+}
+
 /// `GET /v1/admin/master-key/fingerprint` — read-only. Returns the SHA-256
 /// fingerprint of the master key currently in use, without touching or
 /// rotating anything. Closes a real gap: before this existed, the *only*

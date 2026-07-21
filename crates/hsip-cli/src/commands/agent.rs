@@ -98,6 +98,19 @@ struct AuditEntry {
 }
 
 #[derive(Deserialize, Debug)]
+struct SystemHealthResponse {
+    healthy: bool,
+    issues: Vec<HealthIssue>,
+}
+
+#[derive(Deserialize, Debug)]
+struct HealthIssue {
+    severity: String,
+    summary: String,
+    detail: String,
+}
+
+#[derive(Deserialize, Debug)]
 struct DiscoveredAgent {
     url: String,
     hint: String,
@@ -395,10 +408,42 @@ pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
     let agents: Result<Vec<AgentStats>> = client.get("/v1/agents");
     // Recent audit
     let audit: Result<Vec<AuditEntry>> = client.get("/v1/audit?limit=5");
+    // System health — root-admin gated, same as master-key-fingerprint/rotate.
+    // A non-root-admin key (the common case for a service/agent key used
+    // day-to-day) will get a 403 here; that's not an error worth failing
+    // `hsip status` over, just a section we can't show for this key.
+    let health: Result<SystemHealthResponse> = client.get("/v1/admin/system-health");
 
     println!();
     println!("HSIP Status");
     println!("{}", "═".repeat(60));
+
+    // System health section — printed first and loudly, since this is the
+    // one thing an operator (a single desktop user or a business running
+    // HSIP for real) most needs to not miss. See system_health.rs: these
+    // are conditions HSIP detected but cannot fix on its own.
+    match health {
+        Ok(h) if h.healthy => {
+            println!("  System health: ✓ OK");
+        }
+        Ok(h) => {
+            println!(
+                "  ⚠ SYSTEM HEALTH: {} issue(s) need attention",
+                h.issues.len()
+            );
+            for issue in &h.issues {
+                println!("    [{}] {}", issue.severity.to_uppercase(), issue.summary);
+                println!("      → {}", issue.detail);
+            }
+        }
+        Err(_) => {
+            println!(
+                "  System health: (unavailable — requires a root-admin key; see `hsip keys list-root-admins`)"
+            );
+        }
+    }
+
+    println!();
 
     // Identity section
     match identity {

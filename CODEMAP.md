@@ -39,12 +39,12 @@
 ### `run`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns four background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), the OpenTimestamps upgrade-poll cycle (15-minute interval — deliberately much slower than the 10s anchor loop, since Bitcoin blocks land roughly every 10 minutes on average — calls `anchor_job::run_upgrade_cycle` to flip confirmed `ots_status = 'pending'` batches to `'confirmed'`; see THREAT_MODEL.md §4.21), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded. When `[server.tls]` is configured, delegates cert/key (and optional mutual-TLS client-CA) loading to `mtls::build_rustls_config` instead of calling `RustlsConfig::from_pem_file` directly — logs "Mutual TLS enabled" when `tls_config.client_ca_path` is set.
+- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns five background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), the OpenTimestamps upgrade-poll cycle (15-minute interval — deliberately much slower than the 10s anchor loop, since Bitcoin blocks land roughly every 10 minutes on average — calls `anchor_job::run_upgrade_cycle` to flip confirmed `ots_status = 'pending'` batches to `'confirmed'`; see THREAT_MODEL.md §4.21), a system-health metrics refresh (5-minute interval, calls `system_health::check_and_update_metrics` so `metrics::SYSTEM_HEALTH_ISSUES` stays current even if nobody polls `GET /v1/admin/system-health`; see THREAT_MODEL.md §4.22), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded. When `[server.tls]` is configured, delegates cert/key (and optional mutual-TLS client-CA) loading to `mtls::build_rustls_config` instead of calling `RustlsConfig::from_pem_file` directly — logs "Mutual TLS enabled" when `tls_config.client_ca_path` is set.
 - **inputs**: none
 - **outputs**: `Result<()>`
-- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `anchor_job::run_upgrade_cycle`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`, `mtls::build_rustls_config`
+- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `anchor_job::run_upgrade_cycle`, `system_health::check_and_update_metrics`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`, `mtls::build_rustls_config`
 - **called_by**: `main`
-- **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows, `rate_limit_state` snapshots, `decision_anchors`/`audit_anchors` `ots_status` via the upgrade cycle), `state.replay_nonces` DashMap (sweep removes expired entries), `state.rate_limiter`/`agent_tracker`/`sandbox_rate` (populated from persisted state at startup)
+- **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows, `rate_limit_state` snapshots, `decision_anchors`/`audit_anchors` `ots_status` via the upgrade cycle), `state.replay_nonces` DashMap (sweep removes expired entries), `state.rate_limiter`/`agent_tracker`/`sandbox_rate` (populated from persisted state at startup), `metrics::SYSTEM_HEALTH_ISSUES` gauge values
 
 ### `init_logging`
 - **type**: function
@@ -1103,6 +1103,16 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **called_by**: `anchor_job::upgrade_one_anchor`
 - **mutates**: counter value
 
+### `SYSTEM_HEALTH_ISSUES`
+- **type**: variable (static `GaugeVec`, label `severity`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Current count of unresolved `system_health::check` issues, by `severity` (`critical`\|`warning`). A gauge, not a counter — reflects state as of the last check, so it correctly drops back to zero once an issue resolves. The mechanism a business running real Prometheus alerting fires on (`hsip_system_health_issues{severity="critical"} > 0`) without needing to poll HSIP's own API.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `system_health::check_and_update_metrics`
+- **mutates**: gauge values
+
 ### `init` (metrics)
 - **type**: function
 - **file**: `crates/hsip-api/src/metrics.rs`
@@ -1712,6 +1722,16 @@ module-level doc comment for why.
 - **calls**: `require_root_admin`, `fingerprint`, `resolve_persistence`
 - **called_by**: Axum router
 - **mutates**: nothing
+
+### `system_health` (route)
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/admin.rs`
+- **purpose**: `GET /v1/admin/system-health` — read-only, root-admin gated like every other node-level admin route. Aggregates conditions needing operator attention that HSIP can detect but not fix by itself (incomplete master key rotation, zero root admins, abandoned OTS anchors) — see THREAT_MODEL.md §4.22.
+- **inputs**: `State(state)`, `_tenant: TenantId`, `headers: HeaderMap`
+- **outputs**: `ApiResult<Json<system_health::SystemHealth>>`
+- **calls**: `require_root_admin`, `system_health::check_and_update_metrics`
+- **called_by**: Axum router
+- **mutates**: `metrics::SYSTEM_HEALTH_ISSUES` gauge values (via `check_and_update_metrics`), nothing else
 
 ### `KeyPersistence`
 - **type**: enum
@@ -2727,22 +2747,22 @@ decision-specific.
 ### `retry_pending_ots_submissions`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Re-attempts OpenTimestamps submission for anchors stuck at `ots_status = 'calendar_unreachable'`. Best-effort — logs and moves on if a retry fails again, incrementing `metrics::ANCHOR_CALENDAR_UNREACHABLE` so the dependency's degraded state is visible over time, not just per-anchor.
+- **purpose**: Re-attempts OpenTimestamps submission for anchors stuck at `ots_status = 'calendar_unreachable'`. Best-effort — logs and moves on if a retry fails again, incrementing `metrics::ANCHOR_CALENDAR_UNREACHABLE` so the dependency's degraded state is visible over time, not just per-anchor. Fixed (THREAT_MODEL.md §4.22): previously discarded the corrective `UPDATE`'s result via `let _ = ...` and logged "succeeded" unconditionally; now checks `rows_affected() > 0` and logs a warning instead if the write didn't actually land.
 - **inputs**: `db: &Db`, `calendars: &[&str]`
 - **outputs**: none
 - **calls**: `anchor::submit_digest_to`, `metrics::ANCHOR_CALENDAR_UNREACHABLE`
 - **called_by**: `run_anchor_cycle_with_calendars`
-- **mutates**: DB (`decision_anchors.ots_proof`/`ots_status` on success)
+- **mutates**: DB (`decision_anchors.ots_proof`/`ots_status` on genuine success)
 
 ### `retry_pending_audit_ots_submissions`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Twin of `retry_pending_ots_submissions` against `audit_anchors` instead of `decision_anchors`.
+- **purpose**: Twin of `retry_pending_ots_submissions` against `audit_anchors` instead of `decision_anchors`. Same silent-failure fix applied.
 - **inputs**: `db: &Db`, `calendars: &[&str]`
 - **outputs**: none
 - **calls**: `anchor::submit_digest_to`, `metrics::ANCHOR_CALENDAR_UNREACHABLE`
 - **called_by**: `run_audit_anchor_cycle_with_calendars`
-- **mutates**: DB (`audit_anchors.ots_proof`/`ots_status` on success)
+- **mutates**: DB (`audit_anchors.ots_proof`/`ots_status` on genuine success)
 
 ### `verify_anchor_signature`
 - **type**: function
@@ -2785,12 +2805,77 @@ decision-specific.
 ### `upgrade_one_anchor`
 - **type**: function (async, private)
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Shared upgrade-check logic for one anchor row (decision or audit). First checks the row's age against `MAX_PENDING_UPGRADE_AGE_MS`, skipping (and incrementing `metrics::ANCHOR_UPGRADE_STALE`) without any network call if it's past that bound. Otherwise reads the originating calendar's URL back out of the row's stored `ots_proof` (`anchor::extract_pending_calendar_uri` — no dedicated calendar-URL column), calls `anchor::check_for_upgrade` against it, and on a detected `BitcoinBlockHeaderAttestation` (`anchor::contains_bitcoin_attestation`) updates that row's `ots_proof`/`ots_status = 'confirmed'`. `table` is always a hardcoded literal from this module (never external input) — same no-injection-risk reasoning already applied to `bin/hsip_migrate.rs`'s table-driven copy.
+- **purpose**: Shared upgrade-check logic for one anchor row (decision or audit). First checks the row's age against `MAX_PENDING_UPGRADE_AGE_MS`, skipping (and incrementing `metrics::ANCHOR_UPGRADE_STALE`) without any network call if it's past that bound. Otherwise reads the originating calendar's URL back out of the row's stored `ots_proof` (`anchor::extract_pending_calendar_uri` — no dedicated calendar-URL column), calls `anchor::check_for_upgrade` against it, and on a detected `BitcoinBlockHeaderAttestation` (`anchor::contains_bitcoin_attestation`) updates that row's `ots_proof`/`ots_status = 'confirmed'`. `table` is always a hardcoded literal from this module (never external input) — same no-injection-risk reasoning already applied to `bin/hsip_migrate.rs`'s table-driven copy. Fixed (THREAT_MODEL.md §4.22): previously discarded the `UPDATE`'s result via `let _ = ...` and logged/counted success unconditionally; now checks `rows_affected() > 0` before declaring success, logging a warning instead on a zero-rows or failed update. Verified by `zero_rows_affected_is_not_counted_as_a_successful_upgrade` — fetches a row, deletes it, then calls this function with the already-fetched row to force a genuine zero-rows-affected `UPDATE`.
 - **inputs**: `db: &Db`, `table: &'static str`, `row: &AnyRow`
 - **outputs**: none
 - **calls**: `anchor::extract_pending_calendar_uri`, `anchor::check_for_upgrade`, `anchor::contains_bitcoin_attestation`, `metrics::ANCHOR_UPGRADED_TO_CONFIRMED`, `metrics::ANCHOR_UPGRADE_STALE`
 - **called_by**: `upgrade_pending_decision_anchors`, `upgrade_pending_audit_anchors`
-- **mutates**: DB (`decision_anchors`/`audit_anchors` `ots_proof`/`ots_status` on a confirmed upgrade)
+- **mutates**: DB (`decision_anchors`/`audit_anchors` `ots_proof`/`ots_status` on a genuinely confirmed upgrade)
+
+---
+
+## `crates/hsip-api/src/system_health.rs`
+
+Aggregates conditions needing a human operator's attention that the rest of
+this codebase can detect but cannot fix by itself — see THREAT_MODEL.md
+§4.22. Backs `GET /v1/admin/system-health`, `metrics::SYSTEM_HEALTH_ISSUES`,
+and `hsip status`'s health section.
+
+### `HealthIssue`
+- **type**: struct
+- **file**: `crates/hsip-api/src/system_health.rs`
+- **purpose**: One detected issue: `code`, `severity` (`"critical"`\|`"warning"`), `summary`, `detail`.
+- **called_by**: `check`, `SystemHealth`
+
+### `SystemHealth`
+- **type**: struct
+- **file**: `crates/hsip-api/src/system_health.rs`
+- **purpose**: `check`'s result: `healthy` (`true` iff `issues` is empty), `checked_at_ms`, `issues: Vec<HealthIssue>`. Serialized directly as `GET /v1/admin/system-health`'s response body.
+- **called_by**: `routes::admin::system_health`
+
+### `check`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/system_health.rs`
+- **purpose**: Runs all three checks and returns the aggregated `SystemHealth`. Deliberately pure — no metric or logging side effects — so it's directly unit-testable without resetting global metric state between tests.
+- **inputs**: `db: &Db`, `master_key_path: Option<&str>`
+- **outputs**: `SystemHealth`
+- **calls**: `check_master_key_rotation_incomplete`, `check_zero_root_admins`, `check_abandoned_ots_anchors`
+- **called_by**: `check_and_update_metrics`
+
+### `check_and_update_metrics`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/system_health.rs`
+- **purpose**: Calls `check`, then refreshes `metrics::SYSTEM_HEALTH_ISSUES` (by severity) so `/metrics` reflects the current state.
+- **inputs**: `db: &Db`, `master_key_path: Option<&str>`
+- **outputs**: `SystemHealth`
+- **calls**: `check`, `metrics::SYSTEM_HEALTH_ISSUES`
+- **called_by**: `routes::admin::system_health`, `main.rs`'s spawned 5-minute health-refresh loop
+- **mutates**: `metrics::SYSTEM_HEALTH_ISSUES` gauge values
+
+### `check_master_key_rotation_incomplete`
+- **type**: function
+- **file**: `crates/hsip-api/src/system_health.rs`
+- **purpose**: Critical issue if `{master_key_path}.rotating` still exists on disk — the staging file `routes::admin::rotate_master_key` deliberately leaves behind if it crashes between committing the DB under a new key and renaming the staging file onto the real path.
+- **inputs**: `master_key_path: Option<&str>`
+- **outputs**: `Option<HealthIssue>`
+- **called_by**: `check`
+
+### `check_zero_root_admins`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/system_health.rs`
+- **purpose**: Critical issue if `COUNT(*) FROM api_keys WHERE is_root_admin = 1 AND active = 1` is zero — a state the grant/revoke API already refuses to allow, but direct database tampering could still cause, with no recovery path except editing `api_keys` directly.
+- **inputs**: `db: &Db`
+- **outputs**: `Option<HealthIssue>`
+- **called_by**: `check`
+
+### `check_abandoned_ots_anchors` / `count_stale_pending`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/system_health.rs`
+- **purpose**: Warning issue if any `decision_anchors`/`audit_anchors` rows have exceeded `anchor_job::MAX_PENDING_UPGRADE_AGE_MS` still `ots_status = 'pending'` — mirrors what makes `metrics::ANCHOR_UPGRADE_STALE` increment in `anchor_job.rs`, surfaced here as a queryable issue instead of only a counter.
+- **inputs**: `db: &Db`
+- **outputs**: `Option<HealthIssue>` (`check_abandoned_ots_anchors`), `i64` (`count_stale_pending`)
+- **calls**: `count_stale_pending` (called twice, once per table)
+- **called_by**: `check`
 
 ---
 
@@ -3081,13 +3166,19 @@ decision-specific.
 - **called_by**: `run` (agent)
 - **mutates**: DB via API
 
-### `status` (agent cli)
-- **type**: function (async)
+### `SystemHealthResponse` / `HealthIssue` (cli)
+- **type**: struct
 - **file**: `crates/hsip-cli/src/commands/agent.rs`
-- **purpose**: `hsip status` — prints a summary table of server health, identity, and active agents.
-- **inputs**: `client: &ApiClient`
+- **purpose**: Deserializes `GET /v1/admin/system-health`'s JSON response (`{healthy, issues: [{severity, summary, detail}]}`) for `status` to print.
+- **called_by**: `status` (agent cli)
+
+### `status` (agent cli)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/agent.rs`
+- **purpose**: `hsip status` — prints identity, active agents, and recent audit activity. Now also calls `GET /v1/admin/system-health` first and prints any issues loudly at the very top, before every other section — the individual-desktop-user answer to "how would I know something needs manual intervention" (THREAT_MODEL.md §4.22). A non-root-admin key gets a clear "unavailable, requires a root-admin key" line instead of the whole command failing.
+- **inputs**: `api_url: Option<String>`, `key: Option<String>`
 - **outputs**: `Result<()>`
-- **calls**: `client.get` (health, identity, agents), `println!`
+- **calls**: `ApiClient::new`, `client.get` (`/v1/admin/system-health`, `/v1/identity`, `/v1/agents`, `/v1/audit`), `println!`
 - **called_by**: `run` (agent)
 - **mutates**: nothing
 

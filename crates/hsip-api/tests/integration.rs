@@ -973,6 +973,74 @@ async fn test_upgrade_cycle_caps_checks_per_run() {
     );
 }
 
+/// `GET /v1/admin/system-health` — root-admin gated like every other
+/// `/v1/admin/*` route, reports `healthy: true` with no issues on a fresh
+/// node, rejects a non-root-admin caller, and actually detects a real
+/// triggered issue (an abandoned OTS anchor) rather than just returning a
+/// hardcoded shape.
+#[tokio::test]
+async fn test_system_health_route() {
+    let (app, admin_key, db, _key_path) = test_app_with_admin_and_key_file().await;
+
+    // No credentials at all.
+    let unauth_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/admin/system-health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauth_res.status(), StatusCode::UNAUTHORIZED);
+
+    // Healthy on a fresh node.
+    let healthy_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/admin/system-health")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(healthy_res.status(), StatusCode::OK);
+    let healthy_json = body_json(healthy_res.into_body()).await;
+    assert_eq!(healthy_json["healthy"], true);
+    assert_eq!(healthy_json["issues"].as_array().unwrap().len(), 0);
+
+    // Trigger a real issue: an anchor stuck pending past the max age.
+    use sqlx::Executor;
+    let eight_days_ago = hsip_api::db::now_ms() - 8 * 24 * 60 * 60 * 1000;
+    db.execute(
+        sqlx::query(
+            "INSERT INTO decision_anchors
+             (id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_status, created_at)
+             VALUES (?, 'root', 1, 'sig', 'verify_key', 'pending', ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(eight_days_ago),
+    )
+    .await
+    .unwrap();
+
+    let unhealthy_res = app
+        .oneshot(
+            Request::get("/v1/admin/system-health")
+                .header(header::AUTHORIZATION, bearer(&admin_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unhealthy_res.status(), StatusCode::OK);
+    let unhealthy_json = body_json(unhealthy_res.into_body()).await;
+    assert_eq!(unhealthy_json["healthy"], false);
+    let issues = unhealthy_json["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|i| i["code"] == "ots_anchors_abandoned"));
+}
+
 /// `GET /v1/agents/discover` must actually be reachable — it was fully
 /// implemented in routes/agents.rs but never registered in the router, so
 /// the documented `hsip agent discover` / CLAUDE.md route never worked.
