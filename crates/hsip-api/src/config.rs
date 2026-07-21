@@ -247,7 +247,7 @@ impl Config {
         if !master_key_path.exists() {
             let mut raw = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut raw);
-            fs::write(&master_key_path, hex::encode(raw)).context("Cannot write master key")?;
+            write_master_key_with_owner_only_permissions(&master_key_path, &raw)?;
             tracing::info!("Generated new master key at {}", master_key_path.display());
         }
 
@@ -306,6 +306,61 @@ impl Config {
                 format: LogFormat::Pretty,
             },
         })
+    }
+}
+
+/// Writes a freshly generated master key to `path` (hex-encoded) and
+/// restricts it to owner-only permissions on Unix. Written with no explicit
+/// mode, `fs::write` leaves the file at whatever the process umask allows —
+/// 0644 (world-readable) on any default Unix umask, confirmed empirically —
+/// which directly undermines the "compromise = all signing keys exposed"
+/// criticality this file is documented as having everywhere else in this
+/// codebase: any other local user account, or any other process running as
+/// a different UID on a shared host, could read the master key in
+/// plaintext with zero HSIP-level compromise at all. Mirrors
+/// `main.rs::bootstrap_admin`'s identical `0o600` treatment of
+/// `admin.key`. Extracted as its own function (rather than inlined in
+/// `desktop_defaults`) so it's directly unit-testable against a tempdir
+/// path without needing to mutate the process-global `HOME`/`APPDATA` env
+/// vars `hsip_data_dir()` reads.
+fn write_master_key_with_owner_only_permissions(path: &Path, raw: &[u8; 32]) -> Result<()> {
+    fs::write(path, hex::encode(raw)).context("Cannot write master key")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .context("Cannot restrict master key file permissions")?;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod master_key_permission_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn master_key_file_is_owner_only_on_write() {
+        let dir = std::env::temp_dir().join(format!(
+            "hsip-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("master.key");
+
+        write_master_key_with_owner_only_permissions(&path, &[7u8; 32]).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "master key file must be owner-read/write only, got mode {mode:o}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

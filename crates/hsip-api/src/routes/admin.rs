@@ -344,6 +344,25 @@ pub async fn rotate_master_key(
                 .map_err(|e| {
                     ApiError::Internal(format!("failed to write staging key file: {e}"))
                 })?;
+            // `File::create` leaves the staging file at whatever the
+            // process umask allows (0644 — world-readable — on any
+            // default Unix umask), and `rename()` below preserves the
+            // *source* file's mode bits, not the destination's. Without
+            // this, rotating the master key would silently downgrade its
+            // on-disk permissions back to world-readable even if an
+            // operator had correctly `chmod 600`'d the original file
+            // themselves — see `config.rs::desktop_defaults`'s identical
+            // fix for the initial-generation case.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                f.set_permissions(std::fs::Permissions::from_mode(0o600))
+                    .map_err(|e| {
+                        ApiError::Internal(format!(
+                            "failed to restrict staging key file permissions: {e}"
+                        ))
+                    })?;
+            }
             Some(staging_path)
         }
         KeyPersistence::Hook(hook_path) => {

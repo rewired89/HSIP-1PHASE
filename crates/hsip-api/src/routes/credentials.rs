@@ -164,9 +164,7 @@ pub async fn issue(
     )
     .await?;
 
-    metrics::CREDENTIALS_ISSUED
-        .with_label_values(&[&req.claim])
-        .inc();
+    metrics::CREDENTIALS_ISSUED.inc();
 
     Ok(Json(IssueResponse {
         credential: payload,

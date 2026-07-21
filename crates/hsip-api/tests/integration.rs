@@ -1481,6 +1481,22 @@ async fn test_master_key_rotation_reencrypts_and_swaps_live_key() {
         "master key file was not actually rewritten"
     );
 
+    // The rotated file must stay owner-only — the staging file `rename()`
+    // promotes to the real path preserves the *staging file's* mode bits,
+    // so if the staging file were ever created without an explicit
+    // permission fix, rotation would silently downgrade the master key
+    // back to world-readable even on a host where the original file had
+    // correctly been `chmod 600`'d.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "rotated master key file must be owner-read/write only, got mode {mode:o}"
+        );
+    }
+
     // The stored ciphertext must have changed, and must now be undecryptable
     // under the *old* key but decryptable under the key now on disk — proof
     // this was a real re-encryption, not a no-op.

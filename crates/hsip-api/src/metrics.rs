@@ -22,11 +22,24 @@ pub static AUTH_FAILURES: Lazy<CounterVec> = Lazy::new(|| {
     .unwrap()
 });
 
-pub static CREDENTIALS_ISSUED: Lazy<CounterVec> = Lazy::new(|| {
-    register_counter_vec!(
+/// Deliberately *not* a `CounterVec` labeled by claim text, even though
+/// that would read naturally at the call site. `claim` is arbitrary
+/// caller-supplied free text (up to 64 chars, no other bound) — using it
+/// as a Prometheus label value would (a) create one permanent time series
+/// per unique claim string ever issued, an unbounded-cardinality leak that
+/// only grows for the life of the process, and (b) publish the actual
+/// claim content — potentially sensitive, e.g. a caller embedding a user
+/// identifier — to `/metrics`, which has no authentication at all unless
+/// an operator sets `METRICS_TOKEN`. Found during a QA pass asking "which
+/// secret eventually becomes public" and "what is exposed during
+/// debugging." A plain unlabeled counter still answers "how many
+/// credentials have been issued," the only aggregate this metric is
+/// actually used for.
+pub static CREDENTIALS_ISSUED: Lazy<Counter> = Lazy::new(|| {
+    register_counter!(
         "hsip_credentials_issued_total",
-        "Credentials issued by claim type",
-        &["claim"]
+        "Credentials issued (total count — not broken out by claim, which is arbitrary \
+         caller-supplied free text unsafe to use as a metric label)"
     )
     .unwrap()
 });
@@ -52,15 +65,27 @@ pub static AGENT_ANOMALIES: Lazy<CounterVec> = Lazy::new(|| {
 pub static ACTIVE_TENANTS: Lazy<Gauge> =
     Lazy::new(|| register_gauge!("hsip_active_tenants", "Number of active tenants").unwrap());
 
-pub static MESSAGES_SIGNED: Lazy<CounterVec> = Lazy::new(|| {
-    register_counter_vec!("hsip_messages_signed_total", "Messages signed", &["tenant"]).unwrap()
-});
+/// Deliberately *not* labeled by `tenant_id`. A per-tenant label would
+/// create one permanent Prometheus time series per tenant that has ever
+/// signed a message — on a multi-tenant deployment (or with
+/// `HSIP_SANDBOX=true`'s self-service trial provisioning) that's unbounded
+/// growth for the life of the process, and it would enumerate every
+/// tenant's UUID and message-signing activity to anyone reaching the
+/// unauthenticated-by-default `/metrics` endpoint. Same class of bug as
+/// `CREDENTIALS_ISSUED` above — found during the same QA pass.
+pub static MESSAGES_SIGNED: Lazy<Counter> =
+    Lazy::new(|| register_counter!("hsip_messages_signed_total", "Messages signed").unwrap());
 
-pub static DECISIONS_RECORDED: Lazy<CounterVec> = Lazy::new(|| {
-    register_counter_vec!(
+/// Deliberately *not* labeled by `decision_type` — same reasoning as
+/// `CREDENTIALS_ISSUED` above. `decision_type` is caller-supplied free
+/// text (up to 64 chars) with no enum constraint anywhere in this
+/// codebase, so nothing stops unbounded-cardinality growth here either.
+pub static DECISIONS_RECORDED: Lazy<Counter> = Lazy::new(|| {
+    register_counter!(
         "hsip_decisions_recorded_total",
-        "AI-agent decision attestations recorded by decision_type",
-        &["decision_type"]
+        "AI-agent decision attestations recorded (total count — not broken out by \
+         decision_type, which is unconstrained caller-supplied text unsafe to use as a \
+         metric label)"
     )
     .unwrap()
 });

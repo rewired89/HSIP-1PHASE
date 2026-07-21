@@ -333,12 +333,22 @@
 ### `Config::desktop_defaults`
 - **type**: function
 - **file**: `crates/hsip-api/src/config.rs`
-- **purpose**: Zero-config startup: creates data dir, generates master key on first run, creates empty admin key placeholder, returns full Config.
+- **purpose**: Zero-config startup: creates data dir, generates master key on first run (owner-only permissions — see `write_master_key_with_owner_only_permissions`), creates empty admin key placeholder, returns full Config.
 - **inputs**: none
 - **outputs**: `Result<Self>`
-- **calls**: `hsip_data_dir`, `fs::create_dir_all`, `OsRng.fill_bytes`, `hex::encode`, `fs::write`, `std::env::var`
+- **calls**: `hsip_data_dir`, `fs::create_dir_all`, `OsRng.fill_bytes`, `write_master_key_with_owner_only_permissions`, `fs::write`, `std::env::var`
 - **called_by**: `run`
 - **mutates**: filesystem (data dir, master.key, admin.key)
+
+### `write_master_key_with_owner_only_permissions`
+- **type**: function
+- **file**: `crates/hsip-api/src/config.rs`
+- **purpose**: Writes a freshly generated master key (hex-encoded) to `path` and restricts it to `0o600` on Unix immediately after writing. Found during a QA pass ("which secret eventually becomes public") that plain `fs::write` leaves a file at whatever the process umask allows — `0644`/world-readable on any default Unix umask, confirmed empirically — which meant `master.key` was readable by any other local user account or process on a shared host with zero HSIP-level compromise, unlike `admin.key`, which `main.rs::bootstrap_admin` already correctly restricts to `0o600`. Extracted as its own function specifically so it's directly unit-testable against a tempdir path without needing to mutate the process-global `HOME`/`APPDATA` env vars `hsip_data_dir()` reads.
+- **inputs**: `path: &Path`, `raw: &[u8; 32]`
+- **outputs**: `Result<()>`
+- **calls**: `fs::write`, `fs::set_permissions` (Unix only)
+- **called_by**: `Config::desktop_defaults`
+- **mutates**: filesystem
 
 ### `Config::default`
 - **type**: function
@@ -954,9 +964,9 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **mutates**: counter value
 
 ### `CREDENTIALS_ISSUED`
-- **type**: variable (static `Counter`)
+- **type**: variable (static `Counter`, unlabeled)
 - **file**: `crates/hsip-api/src/metrics.rs`
-- **purpose**: Prometheus counter for verifiable credentials issued.
+- **purpose**: Prometheus counter for verifiable credentials issued. Deliberately *not* labeled by `claim` — found during a QA pass that it previously was, which meant one permanent Prometheus time series per unique claim string ever issued (unbounded cardinality) and the claim's actual free-text content published to the unauthenticated-by-default `/metrics` endpoint. Fixed by dropping the label; the metric now answers only "how many total," which is the only aggregate it was ever actually used for.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -984,9 +994,9 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **mutates**: counter value
 
 ### `MESSAGES_SIGNED`
-- **type**: variable (static `Counter`)
+- **type**: variable (static `Counter`, unlabeled)
 - **file**: `crates/hsip-api/src/metrics.rs`
-- **purpose**: Prometheus counter for messages signed via Ed25519.
+- **purpose**: Prometheus counter for messages signed via Ed25519. Deliberately *not* labeled by `tenant_id` — same fix and reasoning as `CREDENTIALS_ISSUED` above: a per-tenant label meant one permanent time series per tenant that ever signed a message (unbounded growth, worse with `HSIP_SANDBOX=true`'s free self-service tenant provisioning) and enumerated every tenant's UUID to anyone reaching the unauthenticated-by-default `/metrics` endpoint.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1004,9 +1014,9 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **mutates**: gauge value
 
 ### `DECISIONS_RECORDED`
-- **type**: variable (static `CounterVec`, label `decision_type`)
+- **type**: variable (static `Counter`, unlabeled)
 - **file**: `crates/hsip-api/src/metrics.rs`
-- **purpose**: Prometheus counter for decision attestations recorded, by `decision_type`.
+- **purpose**: Prometheus counter for decision attestations recorded. Previously labeled by `decision_type` — dropped for the same reason as `CREDENTIALS_ISSUED`/`MESSAGES_SIGNED` above: `decision_type` is caller-supplied free text (up to 64 chars) with no enum constraint anywhere in this codebase, so it was equally unbounded-cardinality-unsafe as a label.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -1846,7 +1856,7 @@ module-level doc comment for why.
 ### `rotate_master_key`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/admin.rs`
-- **purpose**: `POST /v1/admin/master-key/rotate` — generates a new 32-byte master key, re-encrypts every `identities.signing_key_b64` row and the singleton `anchor_identity` row under it inside one DB transaction, then persists the new key via whichever `KeyPersistence` mode `resolve_persistence` returns (file: staging file write + `fsync` + atomic rename; hook: `run_rotation_hook`) *before* committing the transaction, then swaps the in-memory key. Holds `state.master_key.write().await` for the *entire* operation (not just the final swap) — see the function's doc comment for the concurrency race this closes. Refuses with `ApiError::BadRequest` if `resolve_persistence` returns `None` (env-var-sourced key, no hook configured). Writes one `master_key.rotated` audit entry per tenant touched and increments `metrics::MASTER_KEY_ROTATIONS`.
+- **purpose**: `POST /v1/admin/master-key/rotate` — generates a new 32-byte master key, re-encrypts every `identities.signing_key_b64` row and the singleton `anchor_identity` row under it inside one DB transaction, then persists the new key via whichever `KeyPersistence` mode `resolve_persistence` returns (file: staging file write + `0o600` permission fix (Unix) + `fsync` + atomic rename; hook: `run_rotation_hook`) *before* committing the transaction, then swaps the in-memory key. Holds `state.master_key.write().await` for the *entire* operation (not just the final swap) — see the function's doc comment for the concurrency race this closes. Refuses with `ApiError::BadRequest` if `resolve_persistence` returns `None` (env-var-sourced key, no hook configured). Writes one `master_key.rotated` audit entry per tenant touched and increments `metrics::MASTER_KEY_ROTATIONS`. The staging file's permissions are fixed explicitly (rather than relying on the umask) because `rename()` on Unix preserves the *source* file's mode bits, not the destination's — without this, rotation would silently downgrade the master key file back to world-readable even on a host where the original file had correctly been `chmod 600`'d (found during the same QA pass as `config.rs::write_master_key_with_owner_only_permissions`).
 - **inputs**: `State(state)`, `_tenant: TenantId`, `headers: HeaderMap`
 - **outputs**: `ApiResult<Json<RotateMasterKeyResponse>>`
 - **calls**: `require_root_admin`, `resolve_persistence`, `state.db.begin`, `key_encryption::{decrypt_signing_key, encrypt_signing_key}`, `std::fs::{File::create, rename}`, `run_rotation_hook`, `audit_log::record`, `fingerprint`

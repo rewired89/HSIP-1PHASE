@@ -414,9 +414,7 @@ pub async fn record(
                 )
                 .await?;
 
-                metrics::DECISIONS_RECORDED
-                    .with_label_values(&[&req.decision_type])
-                    .inc();
+                metrics::DECISIONS_RECORDED.inc();
 
                 return Ok(Json(RecordDecisionResponse {
                     decision_id,

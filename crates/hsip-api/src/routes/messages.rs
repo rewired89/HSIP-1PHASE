@@ -106,9 +106,7 @@ pub async fn sign(
     )
     .await?;
 
-    metrics::MESSAGES_SIGNED
-        .with_label_values(&[&tenant.0])
-        .inc();
+    metrics::MESSAGES_SIGNED.inc();
 
     Ok(Json(SignResponse {
         id: msg_id,
