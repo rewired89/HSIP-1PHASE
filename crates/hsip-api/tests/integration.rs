@@ -850,6 +850,129 @@ async fn test_decision_anchor_upgrades_to_bitcoin_confirmed() {
     assert_eq!(proof_json["ots_status"], "confirmed");
 }
 
+/// A `decision_anchors` row still `pending` well past
+/// `anchor_job::MAX_PENDING_UPGRADE_AGE_MS` (7 days) must stop being
+/// auto-polled — proven by asserting the calendar receives *zero* requests
+/// during the upgrade cycle, not just that `ots_status` happens to stay
+/// unchanged (which could be true even with a bug, if the check ran but the
+/// calendar's response were misread). The calendar in this test would
+/// confirm the batch immediately if it were ever actually asked.
+#[tokio::test]
+async fn test_stale_pending_anchor_is_not_auto_polled() {
+    let (_app, _key, db, _master_key) = test_app_with_db().await;
+
+    let mock_calendar = wiremock::MockServer::start().await;
+    let calendar_uri = mock_calendar.uri();
+    let uri_bytes = calendar_uri.as_bytes();
+    let mut pending_proof = vec![0xAA, 0xBB, 0xCC];
+    pending_proof.extend_from_slice(&[0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e]); // PendingAttestation tag
+    pending_proof.push((uri_bytes.len() + 1) as u8);
+    pending_proof.push(uri_bytes.len() as u8);
+    pending_proof.extend_from_slice(uri_bytes);
+
+    // Would confirm the batch immediately if ever actually queried.
+    let mut confirmed_proof = vec![0xAA, 0xBB, 0xCC];
+    confirmed_proof.extend_from_slice(&[0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01]); // BitcoinBlockHeaderAttestation tag
+    confirmed_proof.extend_from_slice(b"...stand-in for real block header / merkle path bytes...");
+
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path_regex(r"^/timestamp/.*"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(confirmed_proof))
+        .mount(&mock_calendar)
+        .await;
+
+    // Insert a decision_anchors row directly, 8 days old — past the 7-day
+    // cutoff — without going through a real anchor cycle, so `created_at`
+    // can be controlled precisely.
+    use sqlx::Executor;
+    let eight_days_ago = hsip_api::db::now_ms() - 8 * 24 * 60 * 60 * 1000;
+    let anchor_id = uuid::Uuid::new_v4().to_string();
+    db.execute(
+        sqlx::query(
+            "INSERT INTO decision_anchors
+             (id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status, created_at)
+             VALUES (?, ?, 1, 'sig', 'verify_key', ?, 'pending', ?)",
+        )
+        .bind(&anchor_id)
+        .bind(hex::encode([0x11u8; 32]))
+        .bind(&pending_proof)
+        .bind(eight_days_ago),
+    )
+    .await
+    .unwrap();
+
+    hsip_api::anchor_job::run_upgrade_cycle(&db).await;
+
+    let requests = mock_calendar.received_requests().await.unwrap();
+    assert!(
+        requests.is_empty(),
+        "a stale pending anchor must not trigger any calendar request at all"
+    );
+
+    use sqlx::Row;
+    let row = sqlx::query("SELECT ots_status FROM decision_anchors WHERE id = ?")
+        .bind(&anchor_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let ots_status: String = row.try_get(0).unwrap();
+    assert_eq!(ots_status, "pending");
+}
+
+/// A backlog of more `pending` anchors than
+/// `anchor_job::MAX_UPGRADE_CHECKS_PER_CYCLE` (25) must only have that many
+/// checked in a single `run_upgrade_cycle` call — proven by counting actual
+/// requests the calendar received, not just inferring it from timing.
+#[tokio::test]
+async fn test_upgrade_cycle_caps_checks_per_run() {
+    let (_app, _key, db, _master_key) = test_app_with_db().await;
+
+    let mock_calendar = wiremock::MockServer::start().await;
+    let calendar_uri = mock_calendar.uri();
+    let uri_bytes = calendar_uri.as_bytes();
+    let mut pending_proof = vec![0xAA, 0xBB, 0xCC];
+    pending_proof.extend_from_slice(&[0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e]); // PendingAttestation tag
+    pending_proof.push((uri_bytes.len() + 1) as u8);
+    pending_proof.push(uri_bytes.len() as u8);
+    pending_proof.extend_from_slice(uri_bytes);
+
+    // Still pending — the point of this test is the request *count*, not
+    // whether any of them get upgraded.
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path_regex(r"^/timestamp/.*"))
+        .respond_with(wiremock::ResponseTemplate::new(404))
+        .mount(&mock_calendar)
+        .await;
+
+    use sqlx::Executor;
+    let base_time = hsip_api::db::now_ms();
+    for i in 0..30i64 {
+        let anchor_id = uuid::Uuid::new_v4().to_string();
+        db.execute(
+            sqlx::query(
+                "INSERT INTO decision_anchors
+                 (id, merkle_root, leaf_count, anchor_signature, anchor_verify_key, ots_proof, ots_status, created_at)
+                 VALUES (?, ?, 1, 'sig', 'verify_key', ?, 'pending', ?)",
+            )
+            .bind(&anchor_id)
+            .bind(hex::encode([i as u8; 32]))
+            .bind(&pending_proof)
+            .bind(base_time + i), // strictly increasing, deterministic ORDER BY created_at ASC
+        )
+        .await
+        .unwrap();
+    }
+
+    hsip_api::anchor_job::run_upgrade_cycle(&db).await;
+
+    let requests = mock_calendar.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        25,
+        "one upgrade cycle must check at most MAX_UPGRADE_CHECKS_PER_CYCLE rows, not all 30"
+    );
+}
+
 /// `GET /v1/agents/discover` must actually be reachable — it was fully
 /// implemented in routes/agents.rs but never registered in the router, so
 /// the documented `hsip agent discover` / CLAUDE.md route never worked.

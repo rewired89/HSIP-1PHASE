@@ -502,6 +502,26 @@ async fn retry_pending_audit_ots_submissions(db: &Db, calendars: &[&str]) {
     }
 }
 
+/// Per-cycle cap on how many still-pending anchor rows to check for an
+/// upgrade. Bounds one cycle's worst-case total network time (each check
+/// has its own 15s timeout, so an unlucky cycle where every check times out
+/// would otherwise scale with however many pending rows exist) safely under
+/// the 15-minute gap between cycles, and lets a large backlog work through
+/// gradually across multiple cycles (oldest first) rather than one cycle
+/// trying to check everything at once.
+const MAX_UPGRADE_CHECKS_PER_CYCLE: i64 = 25;
+
+/// How long to keep actively polling a still-pending anchor before giving
+/// up automatic upgrade checks for it. Real OpenTimestamps confirmations
+/// normally land within hours under normal calendar operation; this is a
+/// generous outer bound so a batch isn't checked, every 15 minutes, for the
+/// rest of this server's operational lifetime if a calendar goes
+/// permanently dark. A batch past this age is still fully intact — its
+/// signature and Merkle proof still verify — it simply stops being
+/// auto-upgraded; an operator can still check it against the calendar
+/// directly if needed.
+const MAX_PENDING_UPGRADE_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 /// Poll calendars for anchor batches (both decisions and the audit log)
 /// still sitting at `ots_status = 'pending'`, and upgrade any that have
 /// since been confirmed by a mined Bitcoin block to `ots_status =
@@ -515,18 +535,21 @@ pub async fn run_upgrade_cycle(db: &Db) {
     upgrade_pending_audit_anchors(db).await;
 }
 
-/// Check every `decision_anchors` row still at `ots_status = 'pending'`
-/// against the calendar that originally accepted it (read back out of the
-/// stored `ots_proof` via `anchor::extract_pending_calendar_uri` — there's
-/// no separate calendar-URL column, and that calendar is the only one with
-/// any record of this submission to check). Best-effort, same shape as
+/// Check up to [`MAX_UPGRADE_CHECKS_PER_CYCLE`] `decision_anchors` rows
+/// still at `ots_status = 'pending'` (oldest first) against the calendar
+/// that originally accepted each one (read back out of the stored
+/// `ots_proof` via `anchor::extract_pending_calendar_uri` — there's no
+/// separate calendar-URL column, and that calendar is the only one with any
+/// record of this submission to check). Best-effort, same shape as
 /// `retry_pending_ots_submissions` above — a batch that's still pending, an
 /// unparseable stored proof, or a calendar that's temporarily unreachable
 /// all just mean "try again next cycle," not an error.
 async fn upgrade_pending_decision_anchors(db: &Db) {
     let rows = match sqlx::query(
-        "SELECT id, merkle_root, ots_proof FROM decision_anchors WHERE ots_status = 'pending'",
+        "SELECT id, merkle_root, ots_proof, created_at FROM decision_anchors
+         WHERE ots_status = 'pending' ORDER BY created_at ASC LIMIT $1",
     )
+    .bind(MAX_UPGRADE_CHECKS_PER_CYCLE)
     .fetch_all(db)
     .await
     {
@@ -546,8 +569,10 @@ async fn upgrade_pending_decision_anchors(db: &Db) {
 /// instead of `decision_anchors`.
 async fn upgrade_pending_audit_anchors(db: &Db) {
     let rows = match sqlx::query(
-        "SELECT id, merkle_root, ots_proof FROM audit_anchors WHERE ots_status = 'pending'",
+        "SELECT id, merkle_root, ots_proof, created_at FROM audit_anchors
+         WHERE ots_status = 'pending' ORDER BY created_at ASC LIMIT $1",
     )
+    .bind(MAX_UPGRADE_CHECKS_PER_CYCLE)
     .fetch_all(db)
     .await
     {
@@ -574,6 +599,20 @@ async fn upgrade_one_anchor(db: &Db, table: &'static str, row: &AnyRow) {
     let Ok(anchor_id) = row.try_get::<String, _>(0) else {
         return;
     };
+    let Ok(created_at) = row.try_get::<i64, _>(3) else {
+        return;
+    };
+    if now_ms() - created_at > MAX_PENDING_UPGRADE_AGE_MS {
+        tracing::debug!(
+            anchor_id = %anchor_id,
+            table,
+            "anchor has been pending upgrade longer than MAX_PENDING_UPGRADE_AGE_MS; \
+             no longer auto-checking it (still fully valid, just not auto-upgraded further)"
+        );
+        metrics::ANCHOR_UPGRADE_STALE.inc();
+        return;
+    }
+
     let Ok(root_hex) = row.try_get::<String, _>(1) else {
         return;
     };

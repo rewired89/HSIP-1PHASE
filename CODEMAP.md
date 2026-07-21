@@ -1093,6 +1093,16 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **called_by**: `anchor_job::upgrade_one_anchor`
 - **mutates**: counter value
 
+### `ANCHOR_UPGRADE_STALE`
+- **type**: variable (static `Counter`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Count of anchor batches that exceeded `anchor_job::MAX_PENDING_UPGRADE_AGE_MS` (7 days) still `pending` and stopped being auto-polled. Should stay zero in normal operation; a rising count means calendars are failing to confirm submissions long-term. The underlying anchor data stays intact either way — this only tracks loss of *automatic* re-checking, not data loss.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `anchor_job::upgrade_one_anchor`
+- **mutates**: counter value
+
 ### `init` (metrics)
 - **type**: function
 - **file**: `crates/hsip-api/src/metrics.rs`
@@ -2751,10 +2761,22 @@ decision-specific.
 - **calls**: `upgrade_pending_decision_anchors`, `upgrade_pending_audit_anchors`
 - **called_by**: `main.rs`'s spawned 15-minute upgrade-poll loop; integration tests call this directly against a mock calendar
 
+### `MAX_UPGRADE_CHECKS_PER_CYCLE`
+- **type**: variable (const `i64`, value `25`)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Per-cycle cap on how many `pending` anchor rows `upgrade_pending_decision_anchors`/`upgrade_pending_audit_anchors` check. Added after a QA edge-case pass found the original unbounded query could, under a large backlog, make one 15-minute cycle's sequential calendar checks (each with a 15s timeout) take longer than the gap before the next cycle. Verified by `tests/integration.rs::test_upgrade_cycle_caps_checks_per_run` (30 pending rows seeded, asserts exactly 25 calendar requests).
+- **called_by**: `upgrade_pending_decision_anchors`, `upgrade_pending_audit_anchors`
+
+### `MAX_PENDING_UPGRADE_AGE_MS`
+- **type**: variable (const `i64`, value `7 * 24 * 60 * 60 * 1000` — 7 days)
+- **file**: `crates/hsip-api/src/anchor_job.rs`
+- **purpose**: Outer bound on how long a still-`pending` anchor row keeps being auto-checked. Added after a QA edge-case pass found that, without it, a batch whose calendar never confirms would be re-checked every 15 minutes for the server's entire operational lifetime. Rows older than this stop being auto-polled (the anchor data itself stays fully valid — signature and Merkle proof still verify — it just isn't auto-upgraded further); `metrics::ANCHOR_UPGRADE_STALE` tracks how many have crossed it. Verified by `tests/integration.rs::test_stale_pending_anchor_is_not_auto_polled` (an 8-day-old row against a calendar that would confirm immediately if asked — asserts zero requests were made).
+- **called_by**: `upgrade_one_anchor`
+
 ### `upgrade_pending_decision_anchors` / `upgrade_pending_audit_anchors`
 - **type**: function (async, private)
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Queries `decision_anchors`/`audit_anchors` for rows at `ots_status = 'pending'` and delegates each to `upgrade_one_anchor`. Twins, same shape as `retry_pending_ots_submissions`/`retry_pending_audit_ots_submissions`.
+- **purpose**: Queries `decision_anchors`/`audit_anchors` for up to `MAX_UPGRADE_CHECKS_PER_CYCLE` rows at `ots_status = 'pending'`, oldest (`created_at ASC`) first, and delegates each to `upgrade_one_anchor`. Twins, same shape as `retry_pending_ots_submissions`/`retry_pending_audit_ots_submissions`.
 - **inputs**: `db: &Db`
 - **outputs**: none
 - **calls**: `upgrade_one_anchor`
@@ -2763,10 +2785,10 @@ decision-specific.
 ### `upgrade_one_anchor`
 - **type**: function (async, private)
 - **file**: `crates/hsip-api/src/anchor_job.rs`
-- **purpose**: Shared upgrade-check logic for one anchor row (decision or audit). Reads the originating calendar's URL back out of the row's stored `ots_proof` (`anchor::extract_pending_calendar_uri` — no dedicated calendar-URL column), calls `anchor::check_for_upgrade` against it, and on a detected `BitcoinBlockHeaderAttestation` (`anchor::contains_bitcoin_attestation`) updates that row's `ots_proof`/`ots_status = 'confirmed'`. `table` is always a hardcoded literal from this module (never external input) — same no-injection-risk reasoning already applied to `bin/hsip_migrate.rs`'s table-driven copy.
+- **purpose**: Shared upgrade-check logic for one anchor row (decision or audit). First checks the row's age against `MAX_PENDING_UPGRADE_AGE_MS`, skipping (and incrementing `metrics::ANCHOR_UPGRADE_STALE`) without any network call if it's past that bound. Otherwise reads the originating calendar's URL back out of the row's stored `ots_proof` (`anchor::extract_pending_calendar_uri` — no dedicated calendar-URL column), calls `anchor::check_for_upgrade` against it, and on a detected `BitcoinBlockHeaderAttestation` (`anchor::contains_bitcoin_attestation`) updates that row's `ots_proof`/`ots_status = 'confirmed'`. `table` is always a hardcoded literal from this module (never external input) — same no-injection-risk reasoning already applied to `bin/hsip_migrate.rs`'s table-driven copy.
 - **inputs**: `db: &Db`, `table: &'static str`, `row: &AnyRow`
 - **outputs**: none
-- **calls**: `anchor::extract_pending_calendar_uri`, `anchor::check_for_upgrade`, `anchor::contains_bitcoin_attestation`, `metrics::ANCHOR_UPGRADED_TO_CONFIRMED`
+- **calls**: `anchor::extract_pending_calendar_uri`, `anchor::check_for_upgrade`, `anchor::contains_bitcoin_attestation`, `metrics::ANCHOR_UPGRADED_TO_CONFIRMED`, `metrics::ANCHOR_UPGRADE_STALE`
 - **called_by**: `upgrade_pending_decision_anchors`, `upgrade_pending_audit_anchors`
 - **mutates**: DB (`decision_anchors`/`audit_anchors` `ots_proof`/`ots_status` on a confirmed upgrade)
 

@@ -180,6 +180,21 @@ pub static ANCHOR_UPGRADED_TO_CONFIRMED: Lazy<Counter> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Anchor batches that stopped being auto-polled for upgrade because they
+/// exceeded `anchor_job::MAX_PENDING_UPGRADE_AGE_MS` (7 days) still at
+/// `ots_status = 'pending'`. Should stay at zero in normal operation — real
+/// confirmations land within hours. A rising count means calendars are
+/// failing to confirm submissions long-term and is worth investigating; the
+/// underlying anchor data is still intact either way, just no longer
+/// auto-upgraded.
+pub static ANCHOR_UPGRADE_STALE: Lazy<Counter> = Lazy::new(|| {
+    register_counter!(
+        "hsip_anchor_upgrade_stale_total",
+        "Anchor batches that exceeded the max pending-upgrade age and stopped being auto-polled"
+    )
+    .unwrap()
+});
+
 /// Force initialization of all metrics at startup
 pub fn init() {
     Lazy::force(&REQUESTS_TOTAL);
@@ -200,6 +215,7 @@ pub fn init() {
     Lazy::force(&ROOT_ADMIN_CHANGES);
     Lazy::force(&AUDIT_ANCHORED);
     Lazy::force(&ANCHOR_UPGRADED_TO_CONFIRMED);
+    Lazy::force(&ANCHOR_UPGRADE_STALE);
 }
 
 /// Render all metrics as Prometheus text format
