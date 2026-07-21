@@ -301,7 +301,7 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
         let kid = key_id.to_string();
         let tid = tenant_id.to_string();
         tokio::task::spawn(async move {
-            let _ = crate::audit_log::record(
+            crate::audit_log::record_best_effort(
                 &db,
                 &tid,
                 "agent.anomaly_detected",
@@ -364,7 +364,7 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
             }
 
             if revoked {
-                let _ = crate::audit_log::record(
+                crate::audit_log::record_best_effort(
                     &db,
                     &tid,
                     "agent.auto_revoked",
@@ -386,7 +386,7 @@ async fn check_agent_velocity(key_id: &str, tenant_id: &str, state: &AppState) {
                 );
                 // Best-effort: still try to leave a trace even though the
                 // revocation itself didn't land.
-                let _ = crate::audit_log::record(
+                crate::audit_log::record_best_effort(
                     &db,
                     &tid,
                     "agent.auto_revoke_failed",

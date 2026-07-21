@@ -412,7 +412,7 @@ pub async fn rotate_master_key(
     let now = now_ms();
     for row in &identity_rows {
         let row_tenant_id: String = row.try_get(0)?;
-        let _ = crate::audit_log::record(
+        crate::audit_log::record_best_effort(
             &state.db,
             &row_tenant_id,
             "master_key.rotated",
@@ -561,7 +561,7 @@ pub async fn grant_root_admin(
         .await?;
 
     let now = now_ms();
-    let _ = crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &target_tenant,
         "admin.root_admin_granted",
@@ -617,7 +617,7 @@ pub async fn revoke_root_admin(
         .await?;
 
     let now = now_ms();
-    let _ = crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &target_tenant,
         "admin.root_admin_revoked",

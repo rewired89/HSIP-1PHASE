@@ -117,6 +117,48 @@ pub async fn record(
     unreachable!("loop always returns or errors within MAX_ATTEMPTS")
 }
 
+/// Best-effort audit write, for the (roughly half of) call sites in this
+/// codebase where the state-changing operation an audit entry describes has
+/// already committed by the time this is called — `key.created`,
+/// `key.revoked`, `master_key.rotated`, `admin.root_admin_granted`, and
+/// similar. Failing the whole request over an audit-trail write that
+/// happens strictly after the real work is already done would be actively
+/// wrong (a caller whose key genuinely *was* created would get a 500 and
+/// have no idea whether it worked), so these sites can't just propagate the
+/// error with `?` the way `record()`'s other callers do.
+///
+/// What every one of those sites used to do instead was
+/// `let _ = record(...).await;` — discarding the `Result` entirely, with no
+/// logging and no metric. If the write ever actually failed (DB momentarily
+/// locked, disk full, connection pool exhausted), the underlying operation
+/// still succeeded but its audit-trail entry silently never existed, and
+/// nothing anywhere would ever surface that gap — not `GET
+/// /v1/audit/verify` (a missing row isn't a broken hash chain, there's just
+/// nothing there to check), not `/metrics`, not the logs. Found during a
+/// QA pass asking "what cannot currently be observed" and "what would I
+/// wish I had during an outage." This function is the fix: log loudly via
+/// `tracing::error!` and increment `metrics::AUDIT_WRITE_FAILURES` instead
+/// of dropping the `Result` on the floor.
+pub async fn record_best_effort(
+    db: &Db,
+    tenant_id: &str,
+    action: &'static str,
+    peer_verify_key: Option<&str>,
+    details: Option<&str>,
+    timestamp: i64,
+) {
+    if let Err(e) = record(db, tenant_id, action, peer_verify_key, details, timestamp).await {
+        crate::metrics::AUDIT_WRITE_FAILURES
+            .with_label_values(&[action])
+            .inc();
+        tracing::error!(
+            tenant_id = %tenant_id, action = %action, error = %e,
+            "audit log write failed — the operation this entry describes already succeeded, \
+             but its audit-trail record is missing. Check database connectivity."
+        );
+    }
+}
+
 /// Exposed `pub(crate)` (not private) so `routes::audit::verify_proof` can
 /// recompute an entry's hash from caller-supplied fields without a DB call
 /// — the same "pure function, no trust in this server's database" pattern
@@ -220,5 +262,105 @@ pub fn verify_chain(rows: &[ChainRow]) -> VerifyResult {
         checked,
         unchained,
         first_break_id: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::now_ms;
+
+    async fn test_db() -> Db {
+        let db_url = format!(
+            "sqlite:file:{}?mode=memory&cache=shared",
+            uuid::Uuid::new_v4()
+        );
+        sqlx::any::install_default_drivers();
+        crate::db::init(&db_url).await.expect("db init")
+    }
+
+    #[tokio::test]
+    async fn record_best_effort_does_not_panic_on_failure() {
+        let db = test_db().await;
+        // Drop the table out from under it — the INSERT inside record()
+        // will fail deterministically with "no such table", the same shape
+        // of failure a momentarily-locked or unreachable database would
+        // produce in production.
+        sqlx::query("DROP TABLE audit_entries")
+            .execute(&db)
+            .await
+            .unwrap();
+
+        // Must not panic — this is called from route handlers after their
+        // real work already succeeded, so a panic here would take down an
+        // otherwise-successful request.
+        record_best_effort(
+            &db,
+            "tenant1",
+            "key.created",
+            None,
+            Some("id=abc"),
+            now_ms(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn record_best_effort_increments_failure_metric_on_failure() {
+        let db = test_db().await;
+        sqlx::query("DROP TABLE audit_entries")
+            .execute(&db)
+            .await
+            .unwrap();
+
+        let before = crate::metrics::AUDIT_WRITE_FAILURES
+            .with_label_values(&["key.created"])
+            .get();
+
+        record_best_effort(
+            &db,
+            "tenant1",
+            "key.created",
+            None,
+            Some("id=abc"),
+            now_ms(),
+        )
+        .await;
+
+        let after = crate::metrics::AUDIT_WRITE_FAILURES
+            .with_label_values(&["key.created"])
+            .get();
+        assert_eq!(
+            after,
+            before + 1.0,
+            "a failed best-effort audit write must increment the failure metric exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_best_effort_does_not_increment_failure_metric_on_success() {
+        let db = test_db().await;
+
+        let before = crate::metrics::AUDIT_WRITE_FAILURES
+            .with_label_values(&["key.revoked"])
+            .get();
+
+        record_best_effort(
+            &db,
+            "tenant1",
+            "key.revoked",
+            None,
+            Some("id=abc"),
+            now_ms(),
+        )
+        .await;
+
+        let after = crate::metrics::AUDIT_WRITE_FAILURES
+            .with_label_values(&["key.revoked"])
+            .get();
+        assert_eq!(
+            after, before,
+            "a successful best-effort audit write must not touch the failure metric"
+        );
     }
 }

@@ -128,7 +128,7 @@ pub async fn create(
     .execute(&state.db)
     .await?;
 
-    let _ = crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "key.created",
@@ -243,7 +243,7 @@ pub async fn revoke(
     // Also clear from pending_revocation if present
     state.pending_revocation.remove(&key_id);
 
-    let _ = crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "key.revoked",
@@ -334,7 +334,7 @@ pub async fn bind_client_cert(
         return Err(ApiError::NotFound(format!("Key {key_id} not found")));
     }
 
-    let _ = crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         if clear {

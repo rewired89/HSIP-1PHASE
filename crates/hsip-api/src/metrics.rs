@@ -220,6 +220,25 @@ pub static ANCHOR_UPGRADE_STALE: Lazy<Counter> = Lazy::new(|| {
     .unwrap()
 });
 
+/// Failed writes to `audit_entries` at "best-effort" call sites — see
+/// `audit_log::record_best_effort`. `action` is always one of a small,
+/// fixed set of hardcoded string literals passed by this codebase's own
+/// call sites (`key.created`, `master_key.rotated`, etc.), never
+/// caller-supplied free text, so it's safe as a label — unlike
+/// `CREDENTIALS_ISSUED`'s `claim` or `MESSAGES_SIGNED`'s `tenant`, which
+/// were not (see those metrics' doc comments). Should be zero in normal
+/// operation; any nonzero value means an audit-trail entry is missing for
+/// an operation that otherwise succeeded, worth investigating immediately.
+pub static AUDIT_WRITE_FAILURES: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "hsip_audit_write_failures_total",
+        "Best-effort audit log writes that failed after their underlying operation already \
+         succeeded, by action",
+        &["action"]
+    )
+    .unwrap()
+});
+
 /// Current count of unresolved `system_health::check` issues, by severity
 /// (`critical`|`warning`). A gauge, not a counter — it reflects the state
 /// as of the last check, so it correctly drops back to zero once an issue
@@ -260,6 +279,7 @@ pub fn init() {
     Lazy::force(&ANCHOR_UPGRADED_TO_CONFIRMED);
     Lazy::force(&ANCHOR_UPGRADE_STALE);
     Lazy::force(&SYSTEM_HEALTH_ISSUES);
+    Lazy::force(&AUDIT_WRITE_FAILURES);
 }
 
 /// Render all metrics as Prometheus text format

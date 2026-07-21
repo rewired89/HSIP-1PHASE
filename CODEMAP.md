@@ -372,8 +372,18 @@
 - **inputs**: `db: &Db`, `tenant_id: &str`, `action: &str`, `peer_verify_key: Option<&str>`, `details: Option<&str>`, `timestamp: i64`
 - **outputs**: `Result<String, sqlx::Error>` (the new entry's id)
 - **calls**: `sqlx::query`, `compute_entry_hash`, `chain_retry_backoff`, `metrics::CHAIN_WRITE_RETRIES`
-- **called_by**: every route handler and background task that writes an audit entry (`consent`, `credentials`, `identity`, `messages`, `trust`, `decisions`, `sandbox`, `auth::check_agent_velocity`, `anchor_job::run_anchor_cycle_with_calendars`, `anchor_job::run_audit_anchor_cycle_with_calendars`)
+- **called_by**: every route handler and background task that writes an audit entry directly with `?`/propagated error (`consent`, `credentials`, `identity`, `messages`, `trust`, `decisions`, `sandbox`, `anchor_job::run_anchor_cycle_with_calendars`, `anchor_job::run_audit_anchor_cycle_with_calendars`), plus `record_best_effort` below (the call sites where the operation being audited has already committed, so a write failure can't propagate as a request failure)
 - **mutates**: `audit_entries` table
+
+### `record_best_effort`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/audit_log.rs`
+- **purpose**: Wraps `record` for the ~9 call sites where the state-changing operation an audit entry describes has already committed by the time this runs (`key.created`, `key.revoked`, `master_key.rotated`, `admin.root_admin_granted`/`revoked`, `key.cert_bound`/`unbound`, `agent.anomaly_detected`, `agent.auto_revoked`, `agent.auto_revoke_failed`) — failing the whole request over a downstream audit-write hiccup would be wrong (the real action already succeeded), so these sites can't propagate the error with `?` the way `record`'s other callers do. Previously every one of them was `let _ = record(...).await;`, discarding the `Result` with no logging and no metric — found during a QA pass asking "what cannot currently be observed." Logs via `tracing::error!` (tenant_id, action, underlying error) and increments `metrics::AUDIT_WRITE_FAILURES{action}` on failure instead.
+- **inputs**: same as `record`, except `action: &'static str` (always one of a small hardcoded set — safe as a metric label, unlike caller-supplied free text)
+- **outputs**: `()`
+- **calls**: `record`, `metrics::AUDIT_WRITE_FAILURES`, `tracing::error!`
+- **called_by**: `routes::admin::{rotate_master_key, grant_root_admin, revoke_root_admin}`, `routes::keys::{create, revoke, bind_client_cert}`, `auth::check_agent_velocity`
+- **mutates**: `audit_entries` table (via `record`); `metrics::AUDIT_WRITE_FAILURES` on failure
 
 ### `chain_retry_backoff`
 - **type**: function (async)
@@ -1142,6 +1152,16 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **calls**: none
 - **called_by**: `system_health::check_and_update_metrics`
 - **mutates**: gauge values
+
+### `AUDIT_WRITE_FAILURES`
+- **type**: variable (static `CounterVec`, label `action`)
+- **file**: `crates/hsip-api/src/metrics.rs`
+- **purpose**: Failed writes to `audit_entries` at `audit_log::record_best_effort` call sites — see that function's doc comment. `action` is always one of a small, fixed set of hardcoded string literals from this codebase's own call sites (`key.created`, `master_key.rotated`, etc.), never caller-supplied free text, so it's safe as a label unlike `CREDENTIALS_ISSUED`'s former `claim` label or `MESSAGES_SIGNED`'s former `tenant` label (see those metrics' doc comments). Should be zero in normal operation; any nonzero value means an audit-trail entry is missing for an operation that otherwise succeeded.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `audit_log::record_best_effort`
+- **mutates**: counter value
 
 ### `init` (metrics)
 - **type**: function
