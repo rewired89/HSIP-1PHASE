@@ -52,6 +52,80 @@ pub struct DecisionEnvelope {
     /// IEEE-754-double precision loss on large timestamps.
     pub timestamp_int: String,
     pub hsip_gov_ext: String,
+    /// Base64 Ed25519 signature by `accountable_key`'s own private key over
+    /// `accountable_proof_preimage_hash(...)`, proving whoever submitted
+    /// this decision actually holds `accountable_key`'s private key rather
+    /// than merely asserting the field. Empty string when no proof was
+    /// supplied — `accountable_key` remains caller-asserted metadata in
+    /// that case, same as before this field existed. `#[serde(default)]`
+    /// so an envelope JSON from before this field existed (an older SDK, an
+    /// external verifier that hasn't updated) still deserializes cleanly
+    /// into `verify()`, treated as "no proof supplied."
+    #[serde(default)]
+    pub accountable_key_signature: String,
+}
+
+/// The fields `accountable_key`'s own signature attests to: "I hold this
+/// key, and I take accountability for a decision with exactly this
+/// content." Deliberately narrower than the full `DecisionEnvelope` —
+/// everything here is knowable by the caller *before* submitting
+/// `POST /v1/decisions` (unlike `decision_id`/`prev_hash`/`timestamp_*`,
+/// which the server assigns and which can change across a hash-chain
+/// retry attempt), so a caller can compute this preimage and produce
+/// `accountable_key_signature` in one client-side step ahead of the
+/// request.
+///
+/// `tenant_id` is included specifically to bind the proof to one tenant on
+/// one HSIP deployment: without it, a signature obtained from a real
+/// `accountable_key` for one decision could be replayed verbatim by a
+/// completely different tenant (or a different HSIP deployment entirely)
+/// reusing the same `{model_version, strategy_id, decision_type,
+/// payload_hash}` values, since none of those are secret — `payload_hash`
+/// itself is returned in every proof bundle and decision listing. Binding
+/// to `tenant_id` closes that cross-tenant replay. A residual, lower-severity
+/// replay remains *within* the same tenant (an already-credentialed agent in
+/// that tenant reusing another agent's exact decision content to
+/// misattribute a decision to the same `accountable_key`) — documented in
+/// THREAT_MODEL.md rather than closed here, since eliminating it needs a
+/// per-decision server-issued nonce (a two-phase challenge/response
+/// protocol), a materially bigger change than this proof-of-possession step
+/// warrants on its own.
+#[derive(Debug, Clone, Serialize)]
+struct AccountableProofPreimage<'a> {
+    accountable_key: &'a str,
+    tenant_id: &'a str,
+    model_version: &'a str,
+    strategy_id: &'a str,
+    decision_type: &'a str,
+    payload_hash: &'a str,
+}
+
+/// `SHA256(JCS(AccountableProofPreimage))` — the exact bytes `accountable_key`
+/// must Ed25519-sign to produce `DecisionEnvelope::accountable_key_signature`.
+/// The single source of truth for this formula: `routes::decisions::record`
+/// (verifying at write time) and `routes::decisions::verify` (independently
+/// re-checking a bundle, DB-free) both call this rather than each
+/// reimplementing the JCS+SHA256 steps separately — same reasoning as
+/// `audit_log::compute_entry_hash` being the one place the audit hash-chain
+/// formula lives.
+pub fn accountable_proof_preimage_hash(
+    accountable_key: &str,
+    tenant_id: &str,
+    model_version: &str,
+    strategy_id: &str,
+    decision_type: &str,
+    payload_hash: &str,
+) -> Result<[u8; 32], serde_json::Error> {
+    let preimage = AccountableProofPreimage {
+        accountable_key,
+        tenant_id,
+        model_version,
+        strategy_id,
+        decision_type,
+        payload_hash,
+    };
+    let bytes = serde_jcs::to_vec(&preimage)?;
+    Ok(Sha256::digest(bytes).into())
 }
 
 /// Serialize `envelope` per RFC 8785 JCS. Deterministic across
@@ -85,6 +159,7 @@ mod tests {
             timestamp_iso: "2026-07-09T00:00:00Z".into(),
             timestamp_int: "1770595200000000000".into(),
             hsip_gov_ext: HSIP_GOV_EXT_VERSION.into(),
+            accountable_key_signature: String::new(),
         }
     }
 
@@ -121,5 +196,62 @@ mod tests {
         let bytes = canonical_bytes(&e).unwrap();
         let s = String::from_utf8(bytes).unwrap();
         assert!(s.contains("9223372036854775807"));
+    }
+
+    #[test]
+    fn envelope_json_without_accountable_key_signature_still_deserializes() {
+        // Backward compatibility for any pre-existing SDK/verifier that
+        // doesn't know this field exists yet: `#[serde(default)]` means an
+        // envelope JSON omitting it entirely parses as "no proof supplied",
+        // not a hard error.
+        let json = r#"{
+            "decision_id": "d1", "tenant_id": "t1", "agent_key_id": "k1",
+            "accountable_key": "abc", "model_version": "v1", "strategy_id": "s1",
+            "decision_type": "trade.order", "payload_hash": "deadbeef",
+            "prev_hash": "", "timestamp_iso": "2026-07-09T00:00:00Z",
+            "timestamp_int": "1770595200000000000", "hsip_gov_ext": "0.1"
+        }"#;
+        let envelope: DecisionEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(envelope.accountable_key_signature, "");
+    }
+
+    #[test]
+    fn accountable_proof_preimage_hash_is_deterministic_and_order_independent() {
+        let h1 =
+            accountable_proof_preimage_hash("key1", "tenant1", "v1", "s1", "trade.order", "hash1")
+                .unwrap();
+        let h2 =
+            accountable_proof_preimage_hash("key1", "tenant1", "v1", "s1", "trade.order", "hash1")
+                .unwrap();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn accountable_proof_preimage_hash_changes_when_tenant_id_changes() {
+        // The whole point of including tenant_id: a proof for one tenant
+        // must not verify for another tenant reusing the same decision
+        // content fields.
+        let h1 =
+            accountable_proof_preimage_hash("key1", "tenant1", "v1", "s1", "trade.order", "hash1")
+                .unwrap();
+        let h2 =
+            accountable_proof_preimage_hash("key1", "tenant2", "v1", "s1", "trade.order", "hash1")
+                .unwrap();
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn accountable_proof_preimage_hash_changes_when_any_content_field_changes() {
+        let base =
+            accountable_proof_preimage_hash("key1", "tenant1", "v1", "s1", "trade.order", "hash1")
+                .unwrap();
+        let diff_payload =
+            accountable_proof_preimage_hash("key1", "tenant1", "v1", "s1", "trade.order", "hash2")
+                .unwrap();
+        let diff_decision_type =
+            accountable_proof_preimage_hash("key1", "tenant1", "v1", "s1", "trade.close", "hash1")
+                .unwrap();
+        assert_ne!(base, diff_payload);
+        assert_ne!(base, diff_decision_type);
     }
 }

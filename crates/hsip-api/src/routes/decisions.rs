@@ -29,7 +29,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
-use hsip_core::canonical::{event_hash, DecisionEnvelope, HSIP_GOV_EXT_VERSION};
+use hsip_core::canonical::{
+    accountable_proof_preimage_hash, event_hash, DecisionEnvelope, HSIP_GOV_EXT_VERSION,
+};
 use hsip_core::merkle::{self, MerkleTree, ProofStep, Side};
 
 use super::identity::load_signing_key;
@@ -57,6 +59,18 @@ pub struct RecordDecisionRequest {
     pub decision_type: String,
     /// Hex-encoded SHA-256 of the caller's actual (undisclosed) decision payload.
     pub payload_hash: String,
+    /// Optional base64 Ed25519 signature by `accountable_key`'s own private
+    /// key, proving whoever is submitting this decision actually holds that
+    /// key rather than merely naming it. Signs
+    /// `hsip_core::canonical::accountable_proof_preimage_hash(accountable_key,
+    /// tenant_id, model_version, strategy_id, decision_type, payload_hash)`
+    /// — the caller can compute this and sign it entirely client-side
+    /// before submitting, since none of those fields are server-assigned.
+    /// Omitting this field keeps `accountable_key` exactly as
+    /// caller-asserted metadata as it always was — this is additive, not a
+    /// breaking requirement on existing callers.
+    #[serde(default)]
+    pub accountable_key_signature: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -67,6 +81,10 @@ pub struct RecordDecisionResponse {
     pub signature: String,
     pub sign_algo: String,
     pub issuer_verify_key: String,
+    /// Whether `accountable_key_signature` was supplied and verified. When
+    /// `false`, `accountable_key` remains purely caller-asserted — same
+    /// trust level as before this feature existed.
+    pub accountable_key_verified: bool,
 }
 
 #[derive(Serialize)]
@@ -81,6 +99,7 @@ pub struct DecisionSummary {
     pub anchored: bool,
     pub anchor_id: Option<String>,
     pub merkle_index: Option<i64>,
+    pub accountable_key_verified: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -132,6 +151,11 @@ pub struct DecisionProofBundle {
     pub anchor_verify_key: Option<String>,
     pub ots_status: Option<String>,
     pub ots_proof: Option<String>,
+    /// Whether `envelope.accountable_key_signature` verifies against
+    /// `envelope.accountable_key` over `accountable_proof_preimage_hash`.
+    /// `false` when no proof was ever supplied for this decision — same as
+    /// `envelope.accountable_key_signature` being empty.
+    pub accountable_key_verified: bool,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +181,13 @@ pub struct VerifyDecisionResponse {
     pub signature_valid: bool,
     pub merkle_inclusion_valid: Option<bool>,
     pub anchor_signature_valid: Option<bool>,
+    /// `None` when `envelope.accountable_key_signature` is empty — no
+    /// proof-of-possession was ever claimed for this decision, so there is
+    /// nothing to check (this does not invalidate the bundle). `Some(false)`
+    /// means a proof *was* claimed but does not verify — that does
+    /// invalidate the bundle, same as a failed Merkle-inclusion or
+    /// anchor-signature check.
+    pub accountable_key_verified: Option<bool>,
     pub reason: Option<String>,
 }
 
@@ -167,6 +198,53 @@ fn check_len(name: &str, value: &str, max: usize) -> ApiResult<()> {
         )));
     }
     Ok(())
+}
+
+/// Checks `accountable_key_signature` against `accountable_key` over
+/// `accountable_proof_preimage_hash`. Returns `None` when no signature was
+/// supplied at all (empty string — nothing claimed, nothing to check) and
+/// `Some(bool)` otherwise, including `Some(false)` for a malformed
+/// (non-base64, wrong length) signature or key — a claimed-but-garbage
+/// proof is a real verification failure, not "nothing to check." Shared by
+/// `record` (verifying before persisting), `proof` (re-deriving for the
+/// bundle), and `verify` (the independent, DB-free re-check) — a single
+/// source of truth for this formula, same reasoning as
+/// `audit_log::compute_entry_hash`.
+fn verify_accountable_proof(
+    accountable_key_b64: &str,
+    accountable_key_signature: &str,
+    tenant_id: &str,
+    model_version: &str,
+    strategy_id: &str,
+    decision_type: &str,
+    payload_hash: &str,
+) -> Option<bool> {
+    if accountable_key_signature.is_empty() {
+        return None;
+    }
+    Some(
+        (|| -> Option<bool> {
+            let vk_bytes: [u8; 32] = BASE64.decode(accountable_key_b64).ok()?.try_into().ok()?;
+            let vk = VerifyingKey::from_bytes(&vk_bytes).ok()?;
+            let sig_bytes: [u8; 64] = BASE64
+                .decode(accountable_key_signature)
+                .ok()?
+                .try_into()
+                .ok()?;
+            let sig = Signature::from_bytes(&sig_bytes);
+            let digest = accountable_proof_preimage_hash(
+                accountable_key_b64,
+                tenant_id,
+                model_version,
+                strategy_id,
+                decision_type,
+                payload_hash,
+            )
+            .ok()?;
+            Some(vk.verify(&digest, &sig).is_ok())
+        })()
+        .unwrap_or(false),
+    )
 }
 
 fn validate_verify_key(name: &str, b64: &str) -> ApiResult<()> {
@@ -203,6 +281,35 @@ pub async fn record(
             "payload_hash must be a 64-character hex-encoded SHA-256 digest".into(),
         ));
     }
+
+    // Optional proof-of-possession: if the caller claims a signature,
+    // reject up front (before touching the DB) rather than silently
+    // recording accountable_key as verified when it isn't.
+    let accountable_key_signature = req
+        .accountable_key_signature
+        .clone()
+        .filter(|s| !s.is_empty());
+    if let Some(sig_b64) = &accountable_key_signature {
+        match verify_accountable_proof(
+            &req.accountable_key,
+            sig_b64,
+            &tenant.0,
+            &req.model_version,
+            &req.strategy_id,
+            &req.decision_type,
+            &req.payload_hash,
+        ) {
+            Some(true) => {}
+            _ => {
+                return Err(ApiError::BadRequest(
+                    "accountable_key_signature does not verify against accountable_key over \
+                     this decision's content — proof-of-possession failed"
+                        .into(),
+                ));
+            }
+        }
+    }
+    let accountable_key_verified = accountable_key_signature.is_some();
 
     // Resolve which api_keys row actually authenticated this request — the
     // caller cannot claim to be a different agent than the one whose
@@ -258,6 +365,7 @@ pub async fn record(
             // nanosecond-precision measurement.
             timestamp_int: (now as i128 * 1_000_000).to_string(),
             hsip_gov_ext: HSIP_GOV_EXT_VERSION.to_string(),
+            accountable_key_signature: accountable_key_signature.clone().unwrap_or_default(),
         };
 
         let event_hash_bytes = event_hash(&envelope).map_err(|e| {
@@ -272,8 +380,8 @@ pub async fn record(
             "INSERT INTO decisions
              (id, tenant_id, agent_key_id, accountable_key, model_version, strategy_id, decision_type,
               payload_hash, prev_hash, event_hash, signature, sign_algo, timestamp_iso, timestamp_int,
-              hsip_gov_ext, anchor_id, merkle_index, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ED25519', $12, $13, $14, NULL, NULL, $15)",
+              hsip_gov_ext, anchor_id, merkle_index, created_at, accountable_key_signature)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ED25519', $12, $13, $14, NULL, NULL, $15, $16)",
         )
         .bind(&decision_id)
         .bind(&tenant.0)
@@ -290,6 +398,7 @@ pub async fn record(
         .bind(&envelope.timestamp_int)
         .bind(&envelope.hsip_gov_ext)
         .bind(now)
+        .bind(&envelope.accountable_key_signature)
         .execute(&state.db)
         .await;
 
@@ -316,6 +425,7 @@ pub async fn record(
                     signature: sig_b64,
                     sign_algo: "ED25519".to_string(),
                     issuer_verify_key: issuer_verify_b64,
+                    accountable_key_verified,
                 }));
             }
             Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
@@ -344,7 +454,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<DecisionSummary>>> {
     let rows = sqlx::query(
         "SELECT id, decision_type, model_version, strategy_id, event_hash, prev_hash,
-                timestamp_iso, anchor_id, merkle_index
+                timestamp_iso, anchor_id, merkle_index, accountable_key_signature
          FROM decisions WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 200",
     )
     .bind(&tenant.0)
@@ -355,6 +465,7 @@ pub async fn list(
         .iter()
         .map(|r| -> Result<DecisionSummary, sqlx::Error> {
             let anchor_id: Option<String> = r.try_get(7)?;
+            let accountable_key_signature: Option<String> = r.try_get(9)?;
             Ok(DecisionSummary {
                 id: r.try_get(0)?,
                 decision_type: r.try_get(1)?,
@@ -366,6 +477,9 @@ pub async fn list(
                 anchored: anchor_id.is_some(),
                 anchor_id,
                 merkle_index: r.try_get(8)?,
+                accountable_key_verified: accountable_key_signature
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false),
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -385,7 +499,7 @@ pub async fn proof(
     let row = sqlx::query(
         "SELECT agent_key_id, accountable_key, model_version, strategy_id, decision_type,
                 payload_hash, prev_hash, event_hash, signature, sign_algo, timestamp_iso,
-                timestamp_int, hsip_gov_ext, anchor_id, merkle_index
+                timestamp_int, hsip_gov_ext, anchor_id, merkle_index, accountable_key_signature
          FROM decisions WHERE id = $1 AND tenant_id = $2",
     )
     .bind(&id)
@@ -394,6 +508,7 @@ pub async fn proof(
     .await?
     .ok_or_else(|| ApiError::NotFound("Decision not found".into()))?;
 
+    let accountable_key_signature: Option<String> = row.try_get(15)?;
     let envelope = DecisionEnvelope {
         decision_id: id.clone(),
         tenant_id: tenant.0.clone(),
@@ -407,12 +522,23 @@ pub async fn proof(
         timestamp_iso: row.try_get(10)?,
         timestamp_int: row.try_get(11)?,
         hsip_gov_ext: row.try_get(12)?,
+        accountable_key_signature: accountable_key_signature.unwrap_or_default(),
     };
     let event_hash_hex: String = row.try_get(7)?;
     let signature: String = row.try_get(8)?;
     let sign_algo: String = row.try_get(9)?;
     let anchor_id: Option<String> = row.try_get(13)?;
     let merkle_index: Option<i64> = row.try_get(14)?;
+    let accountable_key_verified = verify_accountable_proof(
+        &envelope.accountable_key,
+        &envelope.accountable_key_signature,
+        &tenant.0,
+        &envelope.model_version,
+        &envelope.strategy_id,
+        &envelope.decision_type,
+        &envelope.payload_hash,
+    )
+    .unwrap_or(false);
 
     let ident_row = sqlx::query("SELECT verify_key_b64 FROM identities WHERE tenant_id = $1")
         .bind(&tenant.0)
@@ -438,6 +564,7 @@ pub async fn proof(
             anchor_verify_key: None,
             ots_status: None,
             ots_proof: None,
+            accountable_key_verified,
         }));
     };
 
@@ -500,6 +627,7 @@ pub async fn proof(
         anchor_verify_key: Some(anchor_verify_key),
         ots_status: Some(ots_status),
         ots_proof: ots_proof.map(|b| BASE64.encode(b)),
+        accountable_key_verified,
     }))
 }
 
@@ -517,6 +645,7 @@ pub async fn verify(Json(req): Json<VerifyDecisionRequest>) -> Json<VerifyDecisi
                 signature_valid: false,
                 merkle_inclusion_valid: None,
                 anchor_signature_valid: None,
+                accountable_key_verified: None,
                 reason: Some("envelope failed to canonicalize".into()),
             });
         }
@@ -531,6 +660,7 @@ pub async fn verify(Json(req): Json<VerifyDecisionRequest>) -> Json<VerifyDecisi
                 signature_valid: false,
                 merkle_inclusion_valid: None,
                 anchor_signature_valid: None,
+                accountable_key_verified: None,
                 reason: Some("event_hash must be 32-byte hex".into()),
             });
         }
@@ -591,10 +721,21 @@ pub async fn verify(Json(req): Json<VerifyDecisionRequest>) -> Json<VerifyDecisi
         _ => None,
     };
 
+    let accountable_key_verified = verify_accountable_proof(
+        &req.envelope.accountable_key,
+        &req.envelope.accountable_key_signature,
+        &req.envelope.tenant_id,
+        &req.envelope.model_version,
+        &req.envelope.strategy_id,
+        &req.envelope.decision_type,
+        &req.envelope.payload_hash,
+    );
+
     let valid = event_hash_matches
         && signature_valid
         && merkle_inclusion_valid.unwrap_or(true)
-        && anchor_signature_valid.unwrap_or(true);
+        && anchor_signature_valid.unwrap_or(true)
+        && accountable_key_verified.unwrap_or(true);
 
     let reason = if !event_hash_matches {
         Some("envelope does not match claimed event_hash — payload was tampered with".to_string())
@@ -604,6 +745,12 @@ pub async fn verify(Json(req): Json<VerifyDecisionRequest>) -> Json<VerifyDecisi
         Some("inclusion proof does not verify against merkle_root".to_string())
     } else if anchor_signature_valid == Some(false) {
         Some("anchor signature does not verify against anchor_verify_key".to_string())
+    } else if accountable_key_verified == Some(false) {
+        Some(
+            "accountable_key_signature does not verify against accountable_key — \
+             proof-of-possession failed"
+                .to_string(),
+        )
     } else if merkle_inclusion_valid.is_none() {
         Some(
             "signature and envelope verified; not yet anchored, so timing and \
@@ -624,6 +771,7 @@ pub async fn verify(Json(req): Json<VerifyDecisionRequest>) -> Json<VerifyDecisi
         signature_valid,
         merkle_inclusion_valid,
         anchor_signature_valid,
+        accountable_key_verified,
         reason,
     })
 }

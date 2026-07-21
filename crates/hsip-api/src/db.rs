@@ -460,6 +460,18 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Non-fatal: column may already exist on upgraded databases. Empty/NULL
+    // (the default, and the only possibility before this column existed)
+    // means accountable_key remains purely caller-asserted metadata,
+    // unchanged. When set (base64 Ed25519 signature by accountable_key's
+    // own private key over accountable_proof_preimage_hash — see
+    // hsip-core::canonical), it proves whoever submitted the decision
+    // actually holds accountable_key's private key, not just its public
+    // identifier. See routes/decisions.rs::record.
+    let _ = sqlx::query("ALTER TABLE decisions ADD COLUMN accountable_key_signature TEXT")
+        .execute(pool)
+        .await;
+
     // Non-fatal, repeated every startup: widens every millisecond-epoch (or
     // similarly wide) column from the old plain INTEGER to BIGINT, in case
     // this pool is a PostgreSQL database whose tables were created by an

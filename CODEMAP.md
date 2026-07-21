@@ -546,7 +546,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `trusted_peers` (`id`, `tenant_id`, `label`, `verify_key`, `added_at BIGINT`, `UNIQUE(tenant_id, verify_key)`) — federated trust store for `routes/trust.rs` — was documented here and in `CLAUDE.md`'s schema table as if it already existed, but this line was aspirational until it was actually added: the table itself was missing from this function since the federated-trust feature shipped, so every `/v1/trust/*` call 500'd with "no such table" on any real database. Found while building the dashboard's Trust page; fixed by actually adding the `CREATE TABLE`. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs. `api_keys` also has a nullable `bound_client_cert_fingerprint TEXT` column (same ignored-error `ALTER TABLE` pattern) — `NULL` (the default) means the key authenticates on bearer token alone, unchanged; set (via `POST /v1/keys/:id/bind-client-cert`) means `auth.rs` additionally requires that exact TLS client-certificate fingerprint on the connection — see `mtls.rs`.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `trusted_peers` (`id`, `tenant_id`, `label`, `verify_key`, `added_at BIGINT`, `UNIQUE(tenant_id, verify_key)`) — federated trust store for `routes/trust.rs` — was documented here and in `CLAUDE.md`'s schema table as if it already existed, but this line was aspirational until it was actually added: the table itself was missing from this function since the federated-trust feature shipped, so every `/v1/trust/*` call 500'd with "no such table" on any real database. Found while building the dashboard's Trust page; fixed by actually adding the `CREATE TABLE`. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `decisions` also has a nullable `accountable_key_signature TEXT` column (same ignored-error `ALTER TABLE` pattern) — `NULL`/empty means `accountable_key` is pure caller-asserted metadata, unchanged; set means it's a base64 Ed25519 signature by `accountable_key`'s own private key, verified against `hsip_core::canonical::accountable_proof_preimage_hash` — see `routes/decisions.rs::verify_accountable_proof`. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs. `api_keys` also has a nullable `bound_client_cert_fingerprint TEXT` column (same ignored-error `ALTER TABLE` pattern) — `NULL` (the default) means the key authenticates on bearer token alone, unchanged; set (via `POST /v1/keys/:id/bind-client-cert`) means `auth.rs` additionally requires that exact TLS client-certificate fingerprint on the connection — see `mtls.rs`.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -578,7 +578,7 @@ Second `[[bin]]` target in `hsip-api`'s `Cargo.toml` (binary name `hsip-migrate`
 ### `TABLES`
 - **type**: variable (constant, `&[Table]`)
 - **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
-- **purpose**: Every table in `db::run_migrations`'s schema, with its exact column list and types, driving the copy loop. **Not** discovered dynamically — a table added to `db.rs` without a matching entry here silently isn't migrated (documented inline and in `CLAUDE.md`'s Key Invariants). `api_keys`' column list includes `("bound_client_cert_fingerprint", Col::OptText)` — added alongside `db.rs`'s new column per the same invariant.
+- **purpose**: Every table in `db::run_migrations`'s schema, with its exact column list and types, driving the copy loop. **Not** discovered dynamically — a table added to `db.rs` without a matching entry here silently isn't migrated (documented inline and in `CLAUDE.md`'s Key Invariants). `api_keys`' column list includes `("bound_client_cert_fingerprint", Col::OptText)` — added alongside `db.rs`'s new column per the same invariant. `decisions`' column list includes `("accountable_key_signature", Col::OptText)`, same reasoning.
 - **called_by**: `main`
 
 ### `parse_args`
@@ -2624,13 +2624,13 @@ its `payload_hash`.
 ### `RecordDecisionRequest` / `RecordDecisionResponse`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: Request/response bodies for `POST /v1/decisions`. Response is the full signed receipt (`envelope`, `event_hash`, `signature`, `issuer_verify_key`) meant to be persisted client-side (see SDK `save_receipt`).
+- **purpose**: Request/response bodies for `POST /v1/decisions`. Response is the full signed receipt (`envelope`, `event_hash`, `signature`, `issuer_verify_key`, `accountable_key_verified`) meant to be persisted client-side (see SDK `save_receipt`). `RecordDecisionRequest.accountable_key_signature` (`Option<String>`, `#[serde(default)]`) is the optional proof-of-possession field — see `verify_accountable_proof` below.
 - **called_by**: `record`
 
 ### `DecisionSummary`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: Row shape for `GET /v1/decisions` listing.
+- **purpose**: Row shape for `GET /v1/decisions` listing. `accountable_key_verified: bool` — whether `accountable_key_signature` was supplied and verifies, derived from whether the stored `decisions.accountable_key_signature` column is non-empty.
 - **called_by**: `list`
 
 ### `ProofStepDto`
@@ -2642,22 +2642,32 @@ its `payload_hash`.
 ### `DecisionProofBundle`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: Full self-contained verification bundle returned by `GET /v1/decisions/:id/proof` — everything a third party needs to independently verify authorship and (once anchored) tamper-evidence, with zero further calls to this server.
+- **purpose**: Full self-contained verification bundle returned by `GET /v1/decisions/:id/proof` — everything a third party needs to independently verify authorship and (once anchored) tamper-evidence, with zero further calls to this server. `accountable_key_verified: bool` is re-derived (not merely copied from a stored flag) via `verify_accountable_proof` on every call.
 - **called_by**: `proof`
 
 ### `VerifyDecisionRequest` / `VerifyDecisionResponse`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: Request/response for `POST /v1/decisions/verify`.
+- **purpose**: Request/response for `POST /v1/decisions/verify`. `VerifyDecisionResponse.accountable_key_verified: Option<bool>` — `None` when `envelope.accountable_key_signature` is empty (nothing claimed, doesn't invalidate the bundle), `Some(bool)` otherwise (`Some(false)` does invalidate it, folded into `valid` the same way `merkle_inclusion_valid`/`anchor_signature_valid` already are).
 - **called_by**: `verify`
+
+### `verify_accountable_proof`
+- **type**: function
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: Checks a claimed `accountable_key_signature` against `accountable_key` over `hsip_core::canonical::accountable_proof_preimage_hash`. Returns `None` when no signature was supplied at all (empty string), `Some(bool)` otherwise — including `Some(false)` for a malformed (non-base64, wrong length) signature or key, since a claimed-but-garbage proof is a real verification failure, not "nothing to check." Single call site for this check — `record()` (verify before persisting), `proof()` (re-derive for the bundle), and `verify()` (the independent, DB-free re-check) all call it, so the logic can't drift between "checked at write time" and "checked by a third party."
+- **inputs**: `accountable_key_b64: &str`, `accountable_key_signature: &str`, `tenant_id: &str`, `model_version: &str`, `strategy_id: &str`, `decision_type: &str`, `payload_hash: &str`
+- **outputs**: `Option<bool>`
+- **calls**: `hsip_core::canonical::accountable_proof_preimage_hash`, `ed25519_dalek::VerifyingKey::verify`
+- **called_by**: `record`, `proof`, `verify`
+- **mutates**: nothing
 
 ### `record`
 - **type**: function (async handler)
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: `POST /v1/decisions` — resolves the authenticated `api_keys` row, validates fields, builds a `DecisionEnvelope` chained to the tenant's last decision (`prev_hash`), signs its `event_hash` with the tenant's Ed25519 identity, inserts it. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS` (another request extended the chain first). Writes `decision.recorded` audit entry, increments `DECISIONS_RECORDED`.
+- **purpose**: `POST /v1/decisions` — resolves the authenticated `api_keys` row, validates fields, verifies `accountable_key_signature` if supplied (rejecting the whole request with `400` before any DB write if a *claimed* signature doesn't verify — never silently records it as unverified), builds a `DecisionEnvelope` chained to the tenant's last decision (`prev_hash`), signs its `event_hash` with the tenant's Ed25519 identity, inserts it. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS` (another request extended the chain first). Writes `decision.recorded` audit entry, increments `DECISIONS_RECORDED`.
 - **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`, `Json(req): Json<RecordDecisionRequest>`
 - **outputs**: `ApiResult<Json<RecordDecisionResponse>>`
-- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `ms_to_iso`, `hash_key`, sqlx queries, `audit_log::record`, `audit_log::chain_retry_backoff`, `metrics::CHAIN_WRITE_RETRIES`
+- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `verify_accountable_proof`, `ms_to_iso`, `hash_key`, sqlx queries, `audit_log::record`, `audit_log::chain_retry_backoff`, `metrics::CHAIN_WRITE_RETRIES`
 - **called_by**: Axum router
 - **mutates**: DB (`decisions`, `audit_entries`)
 
@@ -2673,20 +2683,20 @@ its `payload_hash`.
 ### `proof`
 - **type**: function (async handler)
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: `GET /v1/decisions/:id/proof` — builds the full proof bundle. If unanchored, returns `anchored: false` with signature-only proof. If anchored, reconstructs the batch's leaf set from `decisions.anchor_id` ordered by `merkle_index`, rebuilds the `MerkleTree`, regenerates the inclusion proof, and defensively re-checks the recomputed root against the stored `decision_anchors.merkle_root`.
+- **purpose**: `GET /v1/decisions/:id/proof` — builds the full proof bundle. If unanchored, returns `anchored: false` with signature-only proof. If anchored, reconstructs the batch's leaf set from `decisions.anchor_id` ordered by `merkle_index`, rebuilds the `MerkleTree`, regenerates the inclusion proof, and defensively re-checks the recomputed root against the stored `decision_anchors.merkle_root`. Also re-derives `accountable_key_verified` via `verify_accountable_proof` on every call rather than trusting a stored flag.
 - **inputs**: `State(state)`, `tenant: TenantId`, `Path(id)`
 - **outputs**: `ApiResult<Json<DecisionProofBundle>>`
-- **calls**: `hsip_core::merkle::MerkleTree::from_leaves`, `MerkleTree::inclusion_proof`
+- **calls**: `hsip_core::merkle::MerkleTree::from_leaves`, `MerkleTree::inclusion_proof`, `verify_accountable_proof`
 - **called_by**: Axum router
 - **mutates**: nothing
 
 ### `verify`
 - **type**: function (async handler)
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: `POST /v1/decisions/verify` — pure verification of a self-contained bundle. Deliberately takes no `TenantId` and no `State`; makes no database call. Recomputes `event_hash` from the disclosed envelope, verifies the Ed25519 signature, and (if anchor fields are present) verifies RFC 6962 inclusion and the anchor signature. This is the function meant to be run independently of HSIP entirely.
+- **purpose**: `POST /v1/decisions/verify` — pure verification of a self-contained bundle. Deliberately takes no `TenantId` and no `State`; makes no database call. Recomputes `event_hash` from the disclosed envelope, verifies the Ed25519 signature, verifies RFC 6962 inclusion and the anchor signature if those fields are present, and independently re-checks `envelope.accountable_key_signature` via `verify_accountable_proof`. This is the function meant to be run independently of HSIP entirely.
 - **inputs**: `Json(req): Json<VerifyDecisionRequest>`
 - **outputs**: `Json<VerifyDecisionResponse>`
-- **calls**: `hsip_core::canonical::event_hash`, `hsip_core::merkle::verify_inclusion`, `anchor_job::verify_anchor_signature`
+- **calls**: `hsip_core::canonical::event_hash`, `hsip_core::merkle::verify_inclusion`, `anchor_job::verify_anchor_signature`, `verify_accountable_proof`
 - **called_by**: Axum router
 - **mutates**: nothing
 
@@ -4669,7 +4679,7 @@ formatting.
 ### `DecisionEnvelope`
 - **type**: struct
 - **file**: `crates/hsip-core/src/canonical.rs`
-- **purpose**: The signed envelope for one AI-agent decision attestation. Two-tier: `model_version`/`strategy_id`/`accountable_key`/`decision_type` are clear accountability metadata; `payload_hash` is an opaque SHA-256 of content HSIP never receives. `prev_hash` chains to the tenant's previous decision (empty string for the first). `timestamp_int` is kept as a string, not a JSON number, so canonicalization never risks IEEE-754-double precision loss on large timestamps.
+- **purpose**: The signed envelope for one AI-agent decision attestation. Two-tier: `model_version`/`strategy_id`/`accountable_key`/`decision_type` are clear accountability metadata; `payload_hash` is an opaque SHA-256 of content HSIP never receives. `prev_hash` chains to the tenant's previous decision (empty string for the first). `timestamp_int` is kept as a string, not a JSON number, so canonicalization never risks IEEE-754-double precision loss on large timestamps. `accountable_key_signature` (`#[serde(default)]`, empty string when unsupplied) is a base64 Ed25519 signature by `accountable_key`'s own private key over `accountable_proof_preimage_hash(...)`, proving whoever submitted the decision actually holds that key rather than merely naming it — optional proof-of-possession, part of the canonical signed envelope so a third party re-running `verify()` sees exactly what was (or wasn't) claimed.
 - **called_by**: `hsip-api`'s `routes::decisions::{record, proof, verify}`
 
 ### `canonical_bytes` / `event_hash`
@@ -4680,6 +4690,15 @@ formatting.
 - **outputs**: `Result<Vec<u8>, serde_json::Error>` / `Result<[u8; 32], serde_json::Error>`
 - **calls**: `serde_jcs::to_vec`, `sha2::Sha256::digest`
 - **called_by**: `hsip-api`'s `routes::decisions::{record, proof, verify}`
+
+### `AccountableProofPreimage` / `accountable_proof_preimage_hash`
+- **type**: struct (private) + function (public)
+- **file**: `crates/hsip-core/src/canonical.rs`
+- **purpose**: `AccountableProofPreimage` is the narrow set of fields `accountable_key`'s own signature attests to — deliberately smaller than `DecisionEnvelope`: only fields the caller can compute *before* submitting `POST /v1/decisions` (unlike `decision_id`/`prev_hash`/`timestamp_*`, server-assigned and possibly different across a hash-chain retry). `accountable_proof_preimage_hash` is `SHA256(JCS(AccountableProofPreimage))` — the exact bytes `accountable_key` must sign to produce `DecisionEnvelope::accountable_key_signature`. `tenant_id` is included specifically to bind the proof to one tenant on one deployment — without it, a real signature for one tenant's decision could be replayed by a different tenant reusing the same (non-secret) `{model_version, strategy_id, decision_type, payload_hash}` values. Single source of truth for this formula — `hsip-api`'s `routes::decisions::verify_accountable_proof` is the one place that calls it, in turn called identically by `record()`/`proof()`/`verify()`.
+- **inputs**: `accountable_key: &str`, `tenant_id: &str`, `model_version: &str`, `strategy_id: &str`, `decision_type: &str`, `payload_hash: &str`
+- **outputs**: `Result<[u8; 32], serde_json::Error>`
+- **calls**: `serde_jcs::to_vec`, `sha2::Sha256::digest`
+- **called_by**: `hsip-api`'s `routes::decisions::verify_accountable_proof`; Python SDK's `HSIPClient.accountable_proof_preimage_hash` is an independent reimplementation of the same formula (confirmed byte-identical output for identical input before being trusted)
 
 ---
 
@@ -5949,20 +5968,20 @@ Node-level administration: master key fingerprint/rotation and root-admin list/g
 ### `HSIPClient.__init__`
 - **type**: function
 - **file**: `sdks/python/hsip/client.py`
-- **purpose**: Initialises client with base URL and API key; creates `requests.Session` with auth header.
-- **inputs**: `base_url: str`, `api_key: str`
+- **purpose**: Initialises client with `api_key`, `base_url`, and `replay_protection` (default `False`). Corrects a stale entry here that claimed a `requests.Session` — this SDK is deliberately pure stdlib (`urllib.request`), no third-party HTTP dependency at all. `replay_protection` is opt-in HTTP replay protection: `False` (default, and this SDK's only behavior before the flag existed) means every existing caller is unaffected unless it deliberately opts in.
+- **inputs**: `api_key: str`, `base_url: str = "http://localhost:3000"`, `replay_protection: bool = False`
 - **outputs**: none
-- **calls**: `requests.Session`
+- **calls**: none
 - **called_by**: SDK users
-- **mutates**: `self.session`
+- **mutates**: `self.api_key`, `self.base_url`, `self.replay_protection`
 
 ### `HSIPClient._request`
 - **type**: function
 - **file**: `sdks/python/hsip/client.py`
-- **purpose**: Internal HTTP helper: sends request, raises `HSIPError` on non-2xx.
-- **inputs**: `method: str`, `path: str`, `**kwargs`
-- **outputs**: `dict`
-- **calls**: `self.session.request`, `response.raise_for_status`
+- **purpose**: Internal HTTP helper via `urllib.request` (no third-party HTTP library): builds the request, sends it, raises `HSIPError` on a non-2xx `HTTPError`. When `self.replay_protection` is `True`, adds `x-hsip-timestamp` (current Unix seconds) and `x-hsip-nonce` (`secrets.token_hex(16)`, fresh per call — reusing a fixed value would cause the client to lock itself out on its own second request, since the server dedups per `(key_id, nonce)`) to every request.
+- **inputs**: `method: str`, `path: str`, `body: Optional[Dict] = None`
+- **outputs**: `Any` (parsed JSON)
+- **calls**: `urllib.request.urlopen`, `secrets.token_hex`, `time.time`
 - **called_by**: all public methods
 - **mutates**: nothing
 
@@ -6155,11 +6174,21 @@ Node-level administration: master key fingerprint/rotation and root-admin list/g
 - **calls**: `hashlib.sha256`
 - **called_by**: SDK users, `record_decision` callers
 
+### `HSIPClient.accountable_proof_preimage_hash`
+- **type**: function (static)
+- **file**: `sdks/python/hsip/client.py`
+- **purpose**: The exact 32 bytes `accountable_key`'s own private key must sign to produce `accountable_key_signature` for `record_decision` — an independent Python reimplementation of `hsip_core::canonical::accountable_proof_preimage_hash`, confirmed byte-for-byte identical output to the Rust implementation for the same input. Uses `json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=False)` rather than a full RFC 8785 JCS library — valid specifically because all six fields in this preimage are plain ASCII strings, so none of JCS's number-formatting or non-ASCII-escaping edge cases apply. This SDK has no cryptography dependency by design; the caller signs the returned bytes with whatever Ed25519 library they already use.
+- **inputs**: `accountable_key: str`, `tenant_id: str`, `model_version: str`, `strategy_id: str`, `decision_type: str`, `payload_hash: str`
+- **outputs**: `bytes` (32 bytes)
+- **calls**: `json.dumps`, `hashlib.sha256`
+- **called_by**: SDK users, before calling `record_decision` with `accountable_key_signature`
+- **mutates**: nothing
+
 ### `HSIPClient.record_decision`
 - **type**: function
 - **file**: `sdks/python/hsip/client.py`
-- **purpose**: `POST /v1/decisions` — signs and chains one AI-agent decision attestation. If `receipt_dir` is given, immediately persists the receipt via `save_receipt` — the client-side mitigation for the gap between signing and the next anchor cycle (see `anchor_job.rs`).
-- **inputs**: `self`, `accountable_key: str`, `model_version: str`, `strategy_id: str`, `decision_type: str`, `payload_hash: str`, `receipt_dir: Optional[str]`
+- **purpose**: `POST /v1/decisions` — signs and chains one AI-agent decision attestation. `accountable_key_signature` (optional, base64 Ed25519 — see `accountable_proof_preimage_hash` above) is additive proof-of-possession; omitting it is a pre-existing, still-valid call shape. If `receipt_dir` is given, immediately persists the receipt via `save_receipt` — the client-side mitigation for the gap between signing and the next anchor cycle (see `anchor_job.rs`).
+- **inputs**: `self`, `accountable_key: str`, `model_version: str`, `strategy_id: str`, `decision_type: str`, `payload_hash: str`, `accountable_key_signature: Optional[str] = None`, `receipt_dir: Optional[str] = None`
 - **outputs**: `dict`
 - **calls**: `_request`, `save_receipt`
 - **called_by**: SDK users (e.g. Predicta's trading loop)

@@ -719,6 +719,252 @@ async fn test_decision_attestation_sign_anchor_verify_end_to_end() {
     assert_eq!(tamper_json["event_hash_matches"], false);
 }
 
+// ── accountable_key proof-of-possession ─────────────────────────────────
+//
+// `accountable_key` used to be pure caller-asserted metadata with no check
+// at all. `accountable_key_signature` lets a caller optionally prove they
+// hold that key's private key by signing
+// `hsip_core::canonical::accountable_proof_preimage_hash(...)` — these
+// tests exercise record-time verification, the derived field on `proof`,
+// and the independent DB-free re-check in `verify`.
+
+#[tokio::test]
+async fn test_accountable_key_proof_of_possession_valid_signature_recorded_and_verified() {
+    use ed25519_dalek::{Signer, SigningKey};
+    use sha2::{Digest, Sha256};
+
+    use sqlx::Row;
+    let (app, key, db, _master_key) = test_app_with_db().await;
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let tenant_row = sqlx::query("SELECT tenant_id FROM api_keys WHERE key_hash = ?")
+        .bind(hsip_api::auth::hash_key(&key))
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let tenant_id: String = tenant_row.try_get(0).unwrap();
+
+    let mut csprng = rand::rngs::OsRng;
+    let accountable_signing_key = SigningKey::generate(&mut csprng);
+    let accountable_key_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        accountable_signing_key.verifying_key().to_bytes(),
+    );
+
+    let payload_hash = hex::encode(Sha256::digest(b"BUY 50 TSLA @ 250.00"));
+    let model_version = "predicta-v3.2";
+    let strategy_id = "mean-reversion-1";
+    let decision_type = "trade.order";
+
+    let preimage_hash = hsip_core::canonical::accountable_proof_preimage_hash(
+        &accountable_key_b64,
+        &tenant_id,
+        model_version,
+        strategy_id,
+        decision_type,
+        &payload_hash,
+    )
+    .unwrap();
+    let sig = accountable_signing_key.sign(&preimage_hash);
+    let sig_b64 =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, sig.to_bytes());
+
+    let record_body = serde_json::json!({
+        "accountable_key": accountable_key_b64,
+        "model_version": model_version,
+        "strategy_id": strategy_id,
+        "decision_type": decision_type,
+        "payload_hash": payload_hash,
+        "accountable_key_signature": sig_b64,
+    });
+    let record_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(record_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record_res.status(), StatusCode::OK);
+    let record_json = body_json(record_res.into_body()).await;
+    assert_eq!(record_json["accountable_key_verified"], true);
+    assert_eq!(
+        record_json["envelope"]["accountable_key_signature"],
+        sig_b64
+    );
+    let decision_id = record_json["decision_id"].as_str().unwrap().to_string();
+
+    // The proof bundle independently re-derives the same verdict.
+    let proof_res = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/decisions/{decision_id}/proof"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let proof_json = body_json(proof_res.into_body()).await;
+    assert_eq!(proof_json["accountable_key_verified"], true);
+
+    // The pure, DB-free verify() endpoint also independently re-checks it.
+    let verify_body = serde_json::json!({
+        "envelope": proof_json["envelope"],
+        "event_hash": proof_json["event_hash"],
+        "signature": proof_json["signature"],
+        "issuer_verify_key": proof_json["issuer_verify_key"],
+    });
+    let verify_res = app
+        .oneshot(
+            Request::post("/v1/decisions/verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(verify_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let verify_json = body_json(verify_res.into_body()).await;
+    assert_eq!(verify_json["valid"], true);
+    assert_eq!(verify_json["accountable_key_verified"], true);
+}
+
+#[tokio::test]
+async fn test_accountable_key_proof_of_possession_invalid_signature_rejected() {
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
+
+    let (app, key) = test_app().await;
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let mut csprng = rand::rngs::OsRng;
+    let accountable_signing_key = SigningKey::generate(&mut csprng);
+    let accountable_key_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        accountable_signing_key.verifying_key().to_bytes(),
+    );
+    let payload_hash = hex::encode(Sha256::digest(b"some undisclosed payload"));
+
+    // A signature from a *different* key — proves possession of nothing
+    // relevant to accountable_key_b64.
+    let wrong_signing_key = SigningKey::generate(&mut csprng);
+    let bogus_sig = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        ed25519_dalek::Signer::sign(&wrong_signing_key, b"unrelated bytes").to_bytes(),
+    );
+
+    let record_body = serde_json::json!({
+        "accountable_key": accountable_key_b64,
+        "model_version": "v1",
+        "strategy_id": "s1",
+        "decision_type": "trade.order",
+        "payload_hash": payload_hash,
+        "accountable_key_signature": bogus_sig,
+    });
+    let record_res = app
+        .oneshot(
+            Request::post("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(record_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = record_res.status();
+    let body = body_json(record_res.into_body()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("proof-of-possession"),
+        "rejection must be attributed to the accountable_key_signature check specifically, \
+         not some other validation failure — got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_accountable_key_without_signature_still_records_but_unverified() {
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
+
+    let (app, key) = test_app().await;
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let mut csprng = rand::rngs::OsRng;
+    let accountable_signing_key = SigningKey::generate(&mut csprng);
+    let accountable_key_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        accountable_signing_key.verifying_key().to_bytes(), // a real key — just never used to sign here
+    );
+    let payload_hash = hex::encode(Sha256::digest(b"no proof supplied"));
+
+    let record_body = serde_json::json!({
+        "accountable_key": accountable_key_b64,
+        "model_version": "v1",
+        "strategy_id": "s1",
+        "decision_type": "trade.order",
+        "payload_hash": payload_hash,
+    });
+    let record_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(record_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Omitting the field entirely is a pre-existing, still-valid call shape
+    // — this must not become a breaking change for existing callers.
+    assert_eq!(record_res.status(), StatusCode::OK);
+    let record_json = body_json(record_res.into_body()).await;
+    assert_eq!(record_json["accountable_key_verified"], false);
+    assert_eq!(record_json["envelope"]["accountable_key_signature"], "");
+
+    // list() surfaces the same unverified state.
+    let list_res = app
+        .oneshot(
+            Request::get("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_json = body_json(list_res.into_body()).await;
+    assert_eq!(list_json[0]["accountable_key_verified"], false);
+}
+
 /// A `decision_anchors` batch that's `ots_status = 'pending'` must upgrade
 /// to `'confirmed'` once its calendar reports a Bitcoin-block-header
 /// attestation — the THREAT_MODEL.md §4.20 follow-up:

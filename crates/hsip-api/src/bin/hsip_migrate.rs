@@ -236,6 +236,7 @@ const TABLES: &[Table] = &[
             ("anchor_id", Col::OptText),
             ("merkle_index", Col::OptInt),
             ("created_at", Col::Int),
+            ("accountable_key_signature", Col::OptText),
         ],
     },
 ];

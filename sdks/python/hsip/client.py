@@ -3,6 +3,8 @@
 import hashlib
 import json
 import os
+import secrets
+import time
 import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any
@@ -24,9 +26,23 @@ class HSIPClient:
         verified = client.verify_message(content="Hello", signature="...", peer_verify_key="...")
     """
 
-    def __init__(self, api_key: str, base_url: str = "http://localhost:3000"):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = "http://localhost:3000",
+        replay_protection: bool = False,
+    ):
         self.api_key  = api_key
         self.base_url = base_url.rstrip("/")
+        # Opt-in HTTP replay protection: when True, every request carries
+        # x-hsip-timestamp + x-hsip-nonce so the server can reject a
+        # captured request being resent verbatim (a bearer token alone
+        # proves *who* sent a request, not that a copy hasn't been
+        # replayed). False (the default, and this SDK's only behavior
+        # before this flag existed) sends neither header — a complete
+        # no-op server-side, so existing callers are unaffected unless
+        # they deliberately opt in.
+        self.replay_protection = replay_protection
 
     def _request(self, method: str, path: str, body: Optional[Dict] = None) -> Any:
         url     = f"{self.base_url}{path}"
@@ -35,6 +51,9 @@ class HSIPClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type":  "application/json",
         }
+        if self.replay_protection:
+            headers["x-hsip-timestamp"] = str(int(time.time()))
+            headers["x-hsip-nonce"] = secrets.token_hex(16)
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req) as resp:
@@ -182,6 +201,49 @@ class HSIPClient:
         """Hex-encoded SHA-256 of a decision payload, ready for `payload_hash`."""
         return hashlib.sha256(payload).hexdigest()
 
+    @staticmethod
+    def accountable_proof_preimage_hash(
+        accountable_key: str,
+        tenant_id: str,
+        model_version: str,
+        strategy_id: str,
+        decision_type: str,
+        payload_hash: str,
+    ) -> bytes:
+        """
+        The exact 32 bytes `accountable_key`'s own private key must sign to
+        produce `accountable_key_signature` for `record_decision` — proof
+        that whoever submits the decision actually holds that key, not just
+        its public identifier. Must byte-for-byte match the server's
+        `hsip_core::canonical::accountable_proof_preimage_hash`
+        (`SHA256(JCS({accountable_key, tenant_id, model_version,
+        strategy_id, decision_type, payload_hash}))`).
+
+        This SDK has no cryptography dependency by design (pure stdlib) —
+        sign the returned bytes with whatever Ed25519 library you already
+        use (`pynacl`, `cryptography`, etc.) and pass the base64-encoded
+        signature to `record_decision` as `accountable_key_signature`.
+        `tenant_id` is available from `get_identity()`'s response.
+
+        All six fields are plain ASCII strings (base64/hex/identifiers), so
+        Python's `json.dumps` with sorted keys, no extra whitespace, and
+        `ensure_ascii=False` already produces RFC 8785 JCS-identical bytes
+        for this specific flat shape — none of JCS's number-formatting or
+        non-ASCII-escaping edge cases apply here.
+        """
+        preimage = {
+            "accountable_key": accountable_key,
+            "tenant_id": tenant_id,
+            "model_version": model_version,
+            "strategy_id": strategy_id,
+            "decision_type": decision_type,
+            "payload_hash": payload_hash,
+        }
+        canonical = json.dumps(
+            preimage, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).digest()
+
     def record_decision(
         self,
         accountable_key: str,
@@ -189,6 +251,7 @@ class HSIPClient:
         strategy_id: str,
         decision_type: str,
         payload_hash: str,
+        accountable_key_signature: Optional[str] = None,
         receipt_dir: Optional[str] = None,
     ) -> Dict:
         """
@@ -197,21 +260,33 @@ class HSIPClient:
         `payload_hash` must be the hex-encoded SHA-256 of your actual (never
         disclosed to HSIP) decision content — see `hash_payload`.
 
+        `accountable_key_signature` is optional: a base64 Ed25519 signature
+        by `accountable_key`'s own private key over
+        `accountable_proof_preimage_hash(...)`, proving whoever calls this
+        actually holds that key rather than merely naming it. Omitting it
+        keeps `accountable_key` exactly as caller-asserted metadata, same as
+        before this parameter existed — this is additive, not a breaking
+        change to existing callers.
+
         Returns a self-contained receipt: { decision_id, envelope, event_hash,
-        signature, sign_algo, issuer_verify_key }. If `receipt_dir` is given,
-        the receipt is also written to disk immediately — this is the
-        client-side mitigation for the gap between signing and anchoring: if
-        this HSIP instance's own database were ever tampered with or a
-        decision deleted before the next anchor cycle, your own copy is
-        independent proof the decision was signed.
+        signature, sign_algo, issuer_verify_key, accountable_key_verified }.
+        If `receipt_dir` is given, the receipt is also written to disk
+        immediately — this is the client-side mitigation for the gap
+        between signing and anchoring: if this HSIP instance's own database
+        were ever tampered with or a decision deleted before the next
+        anchor cycle, your own copy is independent proof the decision was
+        signed.
         """
-        receipt = self._request("POST", "/v1/decisions", {
+        body: Dict[str, Any] = {
             "accountable_key": accountable_key,
             "model_version":   model_version,
             "strategy_id":      strategy_id,
             "decision_type":    decision_type,
             "payload_hash":     payload_hash,
-        })
+        }
+        if accountable_key_signature:
+            body["accountable_key_signature"] = accountable_key_signature
+        receipt = self._request("POST", "/v1/decisions", body)
         if receipt_dir:
             self.save_receipt(receipt, receipt_dir)
         return receipt
