@@ -2448,3 +2448,202 @@ async fn test_trust_add_list_verify_remove() {
     let list_after = body_json(list_after_res.into_body()).await;
     assert_eq!(list_after.as_array().unwrap().len(), 0);
 }
+
+// ── mTLS client-certificate binding (`POST /v1/keys/:id/bind-client-cert`) ──
+//
+// These tests don't stand up a real TLS listener — that's covered by
+// `mtls.rs`'s own unit tests (real X.509 certs via the system `openssl`
+// CLI) and by manual end-to-end verification against a running server.
+// Here, the request-level effect of `mtls::ClientCertAcceptor` (inserting a
+// `ClientCertFingerprint` into the request's extensions once a real TLS
+// handshake has already happened) is simulated directly by inserting that
+// same extension onto the `http::Request` before it reaches the router —
+// exactly what `tower_http::add_extension::AddExtension` does on a real
+// connection, just without needing an actual socket.
+
+#[tokio::test]
+async fn test_bind_client_cert_requires_owner_role() {
+    let (app, owner_key) = test_app().await;
+
+    let create_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"member"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_res.status(), StatusCode::OK);
+    let created = body_json(create_res.into_body()).await;
+    let member_id = created["id"].as_str().unwrap().to_string();
+    let member_key = created["key"].as_str().unwrap().to_string();
+
+    // A member-role key cannot bind a cert on any key, including itself —
+    // same privilege boundary as key create/revoke.
+    let mut req = Request::post(format!("/v1/keys/{member_id}/bind-client-cert"))
+        .header(header::AUTHORIZATION, bearer(&member_key))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{}"#))
+        .unwrap();
+    req.extensions_mut()
+        .insert(hsip_api::mtls::ClientCertFingerprint(Some(
+            "deadbeef".into(),
+        )));
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_bind_client_cert_requires_a_presented_certificate() {
+    let (app, owner_key) = test_app().await;
+
+    // No ClientCertFingerprint extension inserted at all — simulates a
+    // plain (non-mTLS, or mTLS-configured-but-no-client-cert) connection.
+    // Binding without ever having presented a certificate would let an
+    // owner brick a key against a fingerprint nobody can ever produce.
+    let res = app
+        .oneshot(
+            Request::post("/v1/keys/nonexistent-id/bind-client-cert")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_bind_client_cert_enforced_then_cleared() {
+    let (app, owner_key) = test_app().await;
+
+    let create_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"agent"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created = body_json(create_res.into_body()).await;
+    let target_id = created["id"].as_str().unwrap().to_string();
+    let target_key = created["key"].as_str().unwrap().to_string();
+
+    // Bind the target key to a specific certificate fingerprint.
+    let mut bind_req = Request::post(format!("/v1/keys/{target_id}/bind-client-cert"))
+        .header(header::AUTHORIZATION, bearer(&owner_key))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{}"#))
+        .unwrap();
+    bind_req
+        .extensions_mut()
+        .insert(hsip_api::mtls::ClientCertFingerprint(Some(
+            "aa11bb22cc33".to_string(),
+        )));
+    let bind_res = app.clone().oneshot(bind_req).await.unwrap();
+    assert_eq!(bind_res.status(), StatusCode::OK);
+    let bound = body_json(bind_res.into_body()).await;
+    assert_eq!(bound["bound_client_cert_fingerprint"], "aa11bb22cc33");
+
+    // The bound key's bearer token with NO client cert presented is now
+    // rejected — a stolen bearer token alone is no longer sufficient.
+    let no_cert_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&target_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_cert_res.status(), StatusCode::UNAUTHORIZED);
+
+    // Same bearer token, WRONG client cert presented — still rejected.
+    let mut wrong_cert_req = Request::get("/v1/keys")
+        .header(header::AUTHORIZATION, bearer(&target_key))
+        .body(Body::empty())
+        .unwrap();
+    wrong_cert_req
+        .extensions_mut()
+        .insert(hsip_api::mtls::ClientCertFingerprint(Some(
+            "wrong-fingerprint".to_string(),
+        )));
+    let wrong_cert_res = app.clone().oneshot(wrong_cert_req).await.unwrap();
+    assert_eq!(wrong_cert_res.status(), StatusCode::UNAUTHORIZED);
+
+    // Same bearer token, the EXACT bound client cert presented — accepted.
+    let mut right_cert_req = Request::get("/v1/keys")
+        .header(header::AUTHORIZATION, bearer(&target_key))
+        .body(Body::empty())
+        .unwrap();
+    right_cert_req
+        .extensions_mut()
+        .insert(hsip_api::mtls::ClientCertFingerprint(Some(
+            "aa11bb22cc33".to_string(),
+        )));
+    let right_cert_res = app.clone().oneshot(right_cert_req).await.unwrap();
+    assert_eq!(right_cert_res.status(), StatusCode::OK);
+
+    // Clearing the binding restores plain bearer-token-only auth.
+    let clear_req = Request::post(format!("/v1/keys/{target_id}/bind-client-cert"))
+        .header(header::AUTHORIZATION, bearer(&owner_key))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"clear":true}"#))
+        .unwrap();
+    let clear_res = app.clone().oneshot(clear_req).await.unwrap();
+    assert_eq!(clear_res.status(), StatusCode::OK);
+    let cleared = body_json(clear_res.into_body()).await;
+    assert!(cleared["bound_client_cert_fingerprint"].is_null());
+
+    let after_clear_res = app
+        .oneshot(
+            Request::get("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&target_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_clear_res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_unbound_key_unaffected_by_absent_or_present_client_cert() {
+    // A key with no binding set (the default, and the only state possible
+    // before this feature existed) must authenticate identically whether or
+    // not a ClientCertFingerprint extension is present on the connection —
+    // the entire point of this being opt-in.
+    let (app, owner_key) = test_app().await;
+
+    let plain_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/keys")
+                .header(header::AUTHORIZATION, bearer(&owner_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plain_res.status(), StatusCode::OK);
+
+    let mut with_cert_req = Request::get("/v1/keys")
+        .header(header::AUTHORIZATION, bearer(&owner_key))
+        .body(Body::empty())
+        .unwrap();
+    with_cert_req
+        .extensions_mut()
+        .insert(hsip_api::mtls::ClientCertFingerprint(Some(
+            "some-unrelated-cert".to_string(),
+        )));
+    let with_cert_res = app.oneshot(with_cert_req).await.unwrap();
+    assert_eq!(with_cert_res.status(), StatusCode::OK);
+}

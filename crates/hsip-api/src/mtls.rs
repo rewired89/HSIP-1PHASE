@@ -23,12 +23,18 @@
 //! (`RustlsConfig::from_pem_file`) as before this module existed.
 
 use anyhow::{Context, Result};
-use axum_server::tls_rustls::RustlsConfig;
+use axum_server::accept::Accept;
+use axum_server::tls_rustls::{RustlsAcceptor, RustlsConfig};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
+use sha2::{Digest, Sha256};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tower_http::add_extension::AddExtension;
 
 /// Builds the TLS config the server actually binds with. `client_ca_path`
 /// absent → today's server-only-TLS behavior, unchanged. `client_ca_path`
@@ -124,6 +130,67 @@ fn load_client_verifier(
     WebPkiClientVerifier::builder(Arc::new(roots))
         .build()
         .context("failed to build client certificate verifier")
+}
+
+/// SHA-256 fingerprint (hex) of a client's presented TLS certificate for
+/// this connection, if any — inserted into every request's extensions by
+/// [`ClientCertAcceptor`] so `auth.rs` can check it against a key's bound
+/// fingerprint (`api_keys.bound_client_cert_fingerprint`). `None` on a
+/// connection with no client certificate (plain TLS, or mTLS not
+/// configured) — a key with no binding set is unaffected either way; a key
+/// *with* a binding set requires this to be `Some` and matching.
+#[derive(Clone, Debug, Default)]
+pub struct ClientCertFingerprint(pub Option<String>);
+
+fn cert_fingerprint(cert: &CertificateDer<'_>) -> String {
+    hex::encode(Sha256::digest(cert.as_ref()))
+}
+
+/// Wraps [`RustlsAcceptor`] to additionally extract the client's presented
+/// certificate (already verified against `client_ca_path`'s CA by rustls
+/// itself during the handshake — this only reads what the handshake already
+/// decided) and make its fingerprint available to every request on that
+/// connection via [`ClientCertFingerprint`]. Only ever constructed when
+/// `client_ca_path` is configured (see `main.rs`) — the plain server-TLS
+/// path continues to use `axum_server::bind_rustls` directly, untouched.
+#[derive(Clone)]
+pub struct ClientCertAcceptor {
+    inner: RustlsAcceptor,
+}
+
+impl ClientCertAcceptor {
+    pub fn new(config: RustlsConfig) -> Self {
+        Self {
+            inner: RustlsAcceptor::new(config),
+        }
+    }
+}
+
+impl<I, S> Accept<I, S> for ClientCertAcceptor
+where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    S: Send + 'static,
+{
+    type Stream = <RustlsAcceptor as Accept<I, S>>::Stream;
+    type Service = AddExtension<S, ClientCertFingerprint>;
+    type Future =
+        Pin<Box<dyn Future<Output = std::io::Result<(Self::Stream, Self::Service)>> + Send>>;
+
+    fn accept(&self, stream: I, service: S) -> Self::Future {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let (tls_stream, service) = inner.accept(stream, service).await?;
+            let fingerprint = {
+                let (_, connection) = tls_stream.get_ref();
+                connection
+                    .peer_certificates()
+                    .and_then(|certs| certs.first())
+                    .map(cert_fingerprint)
+            };
+            let service = AddExtension::new(service, ClientCertFingerprint(fingerprint));
+            Ok((tls_stream, service))
+        })
+    }
 }
 
 #[cfg(test)]

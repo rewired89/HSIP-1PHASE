@@ -134,6 +134,17 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         .execute(pool)
         .await;
 
+    // Non-fatal: column may already exist on upgraded databases. NULL (the
+    // default) means this key is unbound — its bearer token alone is
+    // sufficient, unchanged from before this column existed. When set (hex
+    // SHA-256 of a client certificate's DER bytes), `auth.rs` additionally
+    // requires the request to arrive over an mTLS connection presenting
+    // that exact certificate — closing "a stolen bearer token works from
+    // anywhere" for whichever keys an operator opts in. See mtls.rs.
+    let _ = sqlx::query("ALTER TABLE api_keys ADD COLUMN bound_client_cert_fingerprint TEXT")
+        .execute(pool)
+        .await;
+
     // Backfill for upgraded databases: the earliest-created key in each
     // tenant becomes that tenant's 'owner' if no role is set yet, every
     // other still-unset key becomes 'member'. Preserves today's behavior

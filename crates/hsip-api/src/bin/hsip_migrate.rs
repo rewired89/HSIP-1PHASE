@@ -69,6 +69,7 @@ const TABLES: &[Table] = &[
             ("active", Col::Int),
             ("role", Col::OptText),
             ("is_root_admin", Col::Int),
+            ("bound_client_cert_fingerprint", Col::OptText),
         ],
     },
     Table {

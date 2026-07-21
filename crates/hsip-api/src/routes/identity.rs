@@ -171,8 +171,10 @@ pub async fn load_signing_key(
 
     let encrypted_b64: String = row.try_get(0)?;
 
-    let key_bytes = decrypt_signing_key(&encrypted_b64, master_key)
-        .map_err(|e| ApiError::Internal(format!("key decryption failed: {e}")))?;
+    let key_bytes = decrypt_signing_key(&encrypted_b64, master_key).map_err(|e| {
+        tracing::error!(error = %e, "key decryption failed");
+        ApiError::Internal("internal server error".into())
+    })?;
 
     Ok(SigningKey::from_bytes(&key_bytes))
 }

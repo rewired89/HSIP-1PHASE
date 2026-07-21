@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::HeaderMap,
     Json,
 };
@@ -254,6 +254,104 @@ pub async fn revoke(
     .await;
 
     Ok(Json(serde_json::json!({ "revoked": key_id })))
+}
+
+#[derive(Deserialize)]
+pub struct BindClientCertRequest {
+    /// If true, clears any existing binding on the target key instead of
+    /// setting one — the target key goes back to bearer-token-only auth.
+    /// Mutually exclusive with actually binding: when `clear` is true the
+    /// caller's own presented certificate (if any) is ignored.
+    pub clear: Option<bool>,
+}
+
+#[derive(Serialize)]
+pub struct BindClientCertResponse {
+    pub id: String,
+    pub bound_client_cert_fingerprint: Option<String>,
+}
+
+/// `POST /v1/keys/:id/bind-client-cert` — binds (or, with `{"clear":true}`,
+/// clears) `api_keys.bound_client_cert_fingerprint` on an existing key in
+/// the caller's own tenant. Owner-role gated, same as `create`/`revoke`
+/// above — key management in general is an owner-only privilege in this
+/// tenant, and binding a cert is exactly that.
+///
+/// The fingerprint bound is always the *caller's own* current connection's
+/// presented client certificate (from `mtls::ClientCertAcceptor`, via the
+/// `ClientCertFingerprint` request extension) — there is no way to bind an
+/// arbitrary fingerprint string the caller doesn't actually possess, which
+/// would let an owner brick another key by binding it to a certificate
+/// nobody can ever present. To bind key B while authenticated as key A
+/// (both owner-role, same tenant), the caller must be connected over mTLS
+/// with the certificate intended for B; the server has no way to tell whose
+/// intent that is beyond "this connection presented this cert" — the same
+/// trust boundary every other owner-role key-management action in this file
+/// already operates under (an owner can already revoke or reconfigure any
+/// key in its own tenant).
+pub async fn bind_client_cert(
+    State(state): State<AppState>,
+    tenant: TenantId,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+    presented: Option<Extension<crate::mtls::ClientCertFingerprint>>,
+    Json(req): Json<BindClientCertRequest>,
+) -> ApiResult<Json<BindClientCertResponse>> {
+    let caller_role = resolve_caller_role(&state.db, &headers, &tenant.0).await?;
+    if caller_role.as_deref() != Some("owner") {
+        return Err(ApiError::Unauthorized(
+            "Only an owner-role key can bind or clear a client-certificate requirement on a key \
+             in this tenant."
+                .into(),
+        ));
+    }
+
+    let clear = req.clear.unwrap_or(false);
+    let fingerprint: Option<String> = if clear {
+        None
+    } else {
+        let fp = presented.and_then(|Extension(f)| f.0).ok_or_else(|| {
+            ApiError::BadRequest(
+                "No TLS client certificate was presented on this connection — connect over \
+                     mTLS (client_ca_path configured, a matching client cert presented) to bind \
+                     one, or pass {\"clear\":true} to remove an existing binding instead."
+                    .into(),
+            )
+        })?;
+        Some(fp)
+    };
+
+    let result = sqlx::query(
+        "UPDATE api_keys SET bound_client_cert_fingerprint = $1 WHERE id = $2 AND tenant_id = $3",
+    )
+    .bind(&fingerprint)
+    .bind(&key_id)
+    .bind(&tenant.0)
+    .execute(&state.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound(format!("Key {key_id} not found")));
+    }
+
+    let _ = crate::audit_log::record(
+        &state.db,
+        &tenant.0,
+        if clear {
+            "key.cert_unbound"
+        } else {
+            "key.cert_bound"
+        },
+        None,
+        Some(&format!("id={key_id}")),
+        now_ms(),
+    )
+    .await;
+
+    Ok(Json(BindClientCertResponse {
+        id: key_id,
+        bound_client_cert_fingerprint: fingerprint,
+    }))
 }
 
 /// L1: Use OsRng explicitly for cryptographic key generation.

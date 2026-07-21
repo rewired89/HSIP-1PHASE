@@ -30,6 +30,19 @@ fn rate_limit_rpm() -> u64 {
 const REPLAY_TOLERANCE_SECS: i64 = 300; // 5 minutes
 const REPLAY_NONCE_MAX_LEN: usize = 128;
 
+/// Logs a database error server-side and returns a client-safe generic
+/// message instead of the raw `sqlx::Error` text — same fix as
+/// `errors.rs`'s `From<sqlx::Error>` impl, needed here too because this
+/// extractor builds `ApiError::Internal` directly via `.map_err(...)`
+/// rather than `?`, so it never went through that conversion. This is the
+/// single highest-traffic code path in the whole system (every
+/// authenticated request), so it's the last place raw error detail should
+/// leak to a caller.
+fn internal_db_error(e: sqlx::Error) -> ApiError {
+    tracing::error!(error = %e, "database error in auth extractor");
+    ApiError::Internal("internal server error".into())
+}
+
 #[derive(Clone, Debug)]
 pub struct TenantId(pub String);
 
@@ -59,7 +72,7 @@ impl FromRequestParts<AppState> for TenantId {
         let now = now_ms();
 
         let row = sqlx::query(
-            "SELECT tenant_id, id, agent_type FROM api_keys
+            "SELECT tenant_id, id, agent_type, bound_client_cert_fingerprint FROM api_keys
              WHERE key_hash = $1 AND active = 1
                AND (expires_at IS NULL OR expires_at > $2)",
         )
@@ -67,7 +80,7 @@ impl FromRequestParts<AppState> for TenantId {
         .bind(now)
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(internal_db_error)?;
 
         let row = row.ok_or_else(|| {
             metrics::AUTH_FAILURES
@@ -77,15 +90,11 @@ impl FromRequestParts<AppState> for TenantId {
             ApiError::Unauthorized("Invalid or expired API key".into())
         })?;
 
-        let tenant_id: String = row
-            .try_get(0)
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-        let key_id: String = row
-            .try_get(1)
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-        let agent_type: String = row
-            .try_get(2)
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        let tenant_id: String = row.try_get(0).map_err(internal_db_error)?;
+        let key_id: String = row.try_get(1).map_err(internal_db_error)?;
+        let agent_type: String = row.try_get(2).map_err(internal_db_error)?;
+        let bound_client_cert_fingerprint: Option<String> =
+            row.try_get(3).map_err(internal_db_error)?;
 
         // H2: reject immediately if key is pending revocation (DB write may still be in-flight)
         if state.pending_revocation.contains(&key_id) {
@@ -93,6 +102,34 @@ impl FromRequestParts<AppState> for TenantId {
                 .with_label_values(&["pending_revocation"])
                 .inc();
             return Err(ApiError::Unauthorized("API key has been revoked".into()));
+        }
+
+        // Opt-in per-key mTLS binding: unset (the default, and the only
+        // possibility before this existed) means zero behavior change — a
+        // bearer token alone is sufficient, exactly as before. Set means
+        // the bearer token alone is no longer enough: this connection must
+        // also have presented the exact client certificate this key was
+        // bound to (checked at the TLS handshake against client_ca_path,
+        // fingerprint carried in request extensions by
+        // mtls::ClientCertAcceptor). Missing extension means either the
+        // connection isn't TLS at all, or client_ca_path isn't configured
+        // on this deployment — either way, a bound key can never be
+        // satisfied without both configured together.
+        if let Some(expected) = bound_client_cert_fingerprint {
+            let presented = parts
+                .extensions
+                .get::<crate::mtls::ClientCertFingerprint>()
+                .and_then(|f| f.0.as_deref());
+            if presented != Some(expected.as_str()) {
+                metrics::AUTH_FAILURES
+                    .with_label_values(&["client_cert_mismatch"])
+                    .inc();
+                return Err(ApiError::Unauthorized(
+                    "This key requires a bound TLS client certificate that wasn't presented \
+                     on this connection"
+                        .into(),
+                ));
+            }
         }
 
         // Opt-in replay protection: only checked when the caller sends both

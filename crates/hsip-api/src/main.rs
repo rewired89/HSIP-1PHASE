@@ -391,9 +391,22 @@ async fn run() -> Result<()> {
         tracing::info!("   Health:  https://{}/health", addr);
 
         let bind_addr: std::net::SocketAddr = addr.parse()?;
-        axum_server::bind_rustls(bind_addr, rustls_config)
-            .serve(app.into_make_service())
-            .await?;
+        if tls_config.client_ca_path.is_some() {
+            // mTLS is configured: use ClientCertAcceptor so every request's
+            // extensions carry the connection's client-cert fingerprint,
+            // for auth.rs's per-key binding check
+            // (api_keys.bound_client_cert_fingerprint). The plain-TLS
+            // branch below is untouched — this only runs when an operator
+            // has already opted into client_ca_path.
+            axum_server::bind(bind_addr)
+                .acceptor(mtls::ClientCertAcceptor::new(rustls_config))
+                .serve(app.into_make_service())
+                .await?;
+        } else {
+            axum_server::bind_rustls(bind_addr, rustls_config)
+                .serve(app.into_make_service())
+                .await?;
+        }
     } else {
         tracing::warn!("⚠️  TLS is DISABLED - this is insecure for production!");
         tracing::warn!("   Configure [server.tls] in config.toml to enable HTTPS");

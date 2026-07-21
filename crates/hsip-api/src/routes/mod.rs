@@ -50,6 +50,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/keys", get(keys::list))
         .route("/v1/keys", post(keys::create))
         .route("/v1/keys/:id", delete(keys::revoke))
+        .route(
+            "/v1/keys/:id/bind-client-cert",
+            post(keys::bind_client_cert),
+        )
         // Contacts
         .route("/v1/contacts", get(contacts::list))
         .route("/v1/contacts", post(contacts::add))

@@ -71,7 +71,10 @@ pub async fn sign(
         let master_key = state.master_key.read().await;
         decrypt_signing_key(&encrypted_b64, &master_key)
     }
-    .map_err(|e| ApiError::Internal(format!("key decryption failed: {e}")))?;
+    .map_err(|e| {
+        tracing::error!(error = %e, "key decryption failed");
+        ApiError::Internal("internal server error".into())
+    })?;
 
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let signature = signing_key.sign(req.content.as_bytes());

@@ -90,7 +90,10 @@ fn canonical_json(payload: &CredentialPayload) -> Result<String, ApiError> {
         "user_token",
         serde_json::Value::String(payload.user_token.clone()),
     );
-    serde_json::to_string(&map).map_err(|e| ApiError::Internal(e.to_string()))
+    serde_json::to_string(&map).map_err(|e| {
+        tracing::error!(error = %e, "failed to serialize credential claim map");
+        ApiError::Internal("internal server error".into())
+    })
 }
 
 pub async fn issue(

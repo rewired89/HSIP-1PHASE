@@ -260,8 +260,10 @@ pub async fn record(
             hsip_gov_ext: HSIP_GOV_EXT_VERSION.to_string(),
         };
 
-        let event_hash_bytes = event_hash(&envelope)
-            .map_err(|e| ApiError::Internal(format!("canonicalization failed: {e}")))?;
+        let event_hash_bytes = event_hash(&envelope).map_err(|e| {
+            tracing::error!(error = %e, "canonicalization failed");
+            ApiError::Internal("internal server error".into())
+        })?;
         let event_hash_hex = hex::encode(event_hash_bytes);
         let signature = signing_key.sign(&event_hash_bytes);
         let sig_b64 = BASE64.encode(signature.to_bytes());

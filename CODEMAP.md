@@ -39,10 +39,10 @@
 ### `run`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns five background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), the OpenTimestamps upgrade-poll cycle (15-minute interval — deliberately much slower than the 10s anchor loop, since Bitcoin blocks land roughly every 10 minutes on average — calls `anchor_job::run_upgrade_cycle` to flip confirmed `ots_status = 'pending'` batches to `'confirmed'`; see THREAT_MODEL.md §4.21), a system-health metrics refresh (5-minute interval, calls `system_health::check_and_update_metrics` so `metrics::SYSTEM_HEALTH_ISSUES` stays current even if nobody polls `GET /v1/admin/system-health`; see THREAT_MODEL.md §4.22), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded. When `[server.tls]` is configured, delegates cert/key (and optional mutual-TLS client-CA) loading to `mtls::build_rustls_config` instead of calling `RustlsConfig::from_pem_file` directly — logs "Mutual TLS enabled" when `tls_config.client_ca_path` is set.
+- **purpose**: Full server startup: loads config, master key, DB, bootstraps admin, builds Axum router, binds TCP listener, serves. Restores rate-limit/AI-agent-velocity state via `rate_limit_persistence::load` before accepting traffic. Also spawns five background loops: the anchoring cycle (~10s poll, calls both `anchor_job::run_anchor_cycle` for decisions and `anchor_job::run_audit_anchor_cycle` for the audit log on every tick), the OpenTimestamps upgrade-poll cycle (15-minute interval — deliberately much slower than the 10s anchor loop, since Bitcoin blocks land roughly every 10 minutes on average — calls `anchor_job::run_upgrade_cycle` to flip confirmed `ots_status = 'pending'` batches to `'confirmed'`; see THREAT_MODEL.md §4.21), a system-health metrics refresh (5-minute interval, calls `system_health::check_and_update_metrics` so `metrics::SYSTEM_HEALTH_ISSUES` stays current even if nobody polls `GET /v1/admin/system-health`; see THREAT_MODEL.md §4.22), a rate-limit state snapshot (`rate_limit_persistence::SNAPSHOT_INTERVAL_SECS` = 30s interval, calls `rate_limit_persistence::snapshot`), and a replay-nonce sweep (60s interval, `state.replay_nonces.retain(...)`) that removes expired `(key_id, nonce)` entries so opt-in HTTP replay protection (see `auth.rs::check_replay_protection`) can't grow the tracker unbounded. When `[server.tls]` is configured, delegates cert/key (and optional mutual-TLS client-CA) loading to `mtls::build_rustls_config` instead of calling `RustlsConfig::from_pem_file` directly — logs "Mutual TLS enabled" when `tls_config.client_ca_path` is set. When `client_ca_path` is additionally set, binds via `axum_server::bind(...).acceptor(mtls::ClientCertAcceptor::new(tls_config))` instead of `axum_server::bind_rustls(...)` — the only way a request ever carries a `mtls::ClientCertFingerprint` extension for `auth.rs`'s per-key binding check to read. The plain (no client CA) TLS branch keeps calling `axum_server::bind_rustls(...)` exactly as before, unchanged.
 - **inputs**: none
 - **outputs**: `Result<()>`
-- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `anchor_job::run_upgrade_cycle`, `system_health::check_and_update_metrics`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`, `mtls::build_rustls_config`
+- **calls**: `Config::load`, `Config::desktop_defaults`, `init_logging`, `load_master_key`, `db::init`, `bootstrap_admin`, `build_cors_layer`, `AppState::new`, `router`, `create_shortcuts`, `anchor_job::run_anchor_cycle`, `anchor_job::run_audit_anchor_cycle`, `anchor_job::run_upgrade_cycle`, `system_health::check_and_update_metrics`, `rate_limit_persistence::{load, snapshot}`, `db::now_ms`, `mtls::build_rustls_config`, `mtls::ClientCertAcceptor::new`
 - **called_by**: `main`
 - **mutates**: filesystem (admin key), DB (migrations, initial tenant/key rows, `rate_limit_state` snapshots, `decision_anchors`/`audit_anchors` `ots_status` via the upgrade cycle), `state.replay_nonces` DashMap (sweep removes expired entries), `state.rate_limiter`/`agent_tracker`/`sandbox_rate` (populated from persisted state at startup), `metrics::SYSTEM_HEALTH_ISSUES` gauge values
 
@@ -432,12 +432,22 @@
 ### `TenantId::from_request_parts`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/auth.rs`
-- **purpose**: Implements `FromRequestParts`: extracts Bearer token, hashes it, looks up in DB, checks active/expiry/pending-revocation, enforces opt-in replay protection, rate limit, and AI velocity check.
+- **purpose**: Implements `FromRequestParts`: extracts Bearer token, hashes it, looks up in DB (now also fetching `bound_client_cert_fingerprint`), checks active/expiry/pending-revocation, enforces the opt-in per-key mTLS client-certificate binding, opt-in replay protection, rate limit, and AI velocity check. The mTLS-binding check compares `bound_client_cert_fingerprint` (if set) against the connection's `mtls::ClientCertFingerprint` request extension (inserted by `mtls::ClientCertAcceptor` during a real TLS handshake) — mismatch or absent extension rejects with 401 and `metrics::AUTH_FAILURES{reason="client_cert_mismatch"}`.
 - **inputs**: `parts: &mut Parts`, `state: &AppState`
 - **outputs**: `Result<Self, ApiError>`
-- **calls**: `hash_key`, `check_replay_protection`, `check_rate_limit`, `check_agent_velocity`, `sqlx::query`
+- **calls**: `hash_key`, `internal_db_error`, `check_replay_protection`, `check_rate_limit`, `check_agent_velocity`, `sqlx::query`
 - **called_by**: Axum extractor machinery
 - **mutates**: `rate_limiter` DashMap (inserts/updates window), `agent_tracker` DashMap, `replay_nonces` DashMap
+
+### `internal_db_error`
+- **type**: function
+- **file**: `crates/hsip-api/src/auth.rs`
+- **purpose**: Shared `sqlx::Error -> ApiError` mapper for the `TenantId` extractor's manual `.map_err(...)` call sites (these bypass `errors.rs`'s `From<sqlx::Error>` impl, so needed the same fix independently). Logs the real error via `tracing::error!` server-side and returns a fixed `ApiError::Internal("internal server error")` — never the raw `sqlx::Error` text — to the caller.
+- **inputs**: `e: sqlx::Error`
+- **outputs**: `ApiError`
+- **calls**: `tracing::error!`
+- **called_by**: `TenantId::from_request_parts` (4 sites)
+- **mutates**: nothing
 
 ### `check_replay_protection`
 - **type**: function
@@ -536,7 +546,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `trusted_peers` (`id`, `tenant_id`, `label`, `verify_key`, `added_at BIGINT`, `UNIQUE(tenant_id, verify_key)`) — federated trust store for `routes/trust.rs` — was documented here and in `CLAUDE.md`'s schema table as if it already existed, but this line was aspirational until it was actually added: the table itself was missing from this function since the federated-trust feature shipped, so every `/v1/trust/*` call 500'd with "no such table" on any real database. Found while building the dashboard's Trust page; fixed by actually adding the `CREATE TABLE`. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `trusted_peers` (`id`, `tenant_id`, `label`, `verify_key`, `added_at BIGINT`, `UNIQUE(tenant_id, verify_key)`) — federated trust store for `routes/trust.rs` — was documented here and in `CLAUDE.md`'s schema table as if it already existed, but this line was aspirational until it was actually added: the table itself was missing from this function since the federated-trust feature shipped, so every `/v1/trust/*` call 500'd with "no such table" on any real database. Found while building the dashboard's Trust page; fixed by actually adding the `CREATE TABLE`. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs. `api_keys` also has a nullable `bound_client_cert_fingerprint TEXT` column (same ignored-error `ALTER TABLE` pattern) — `NULL` (the default) means the key authenticates on bearer token alone, unchanged; set (via `POST /v1/keys/:id/bind-client-cert`) means `auth.rs` additionally requires that exact TLS client-certificate fingerprint on the connection — see `mtls.rs`.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -568,7 +578,7 @@ Second `[[bin]]` target in `hsip-api`'s `Cargo.toml` (binary name `hsip-migrate`
 ### `TABLES`
 - **type**: variable (constant, `&[Table]`)
 - **file**: `crates/hsip-api/src/bin/hsip_migrate.rs`
-- **purpose**: Every table in `db::run_migrations`'s schema, with its exact column list and types, driving the copy loop. **Not** discovered dynamically — a table added to `db.rs` without a matching entry here silently isn't migrated (documented inline and in `CLAUDE.md`'s Key Invariants).
+- **purpose**: Every table in `db::run_migrations`'s schema, with its exact column list and types, driving the copy loop. **Not** discovered dynamically — a table added to `db.rs` without a matching entry here silently isn't migrated (documented inline and in `CLAUDE.md`'s Key Invariants). `api_keys`' column list includes `("bound_client_cert_fingerprint", Col::OptText)` — added alongside `db.rs`'s new column per the same invariant.
 - **called_by**: `main`
 
 ### `parse_args`
@@ -864,6 +874,16 @@ Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_K
 - **calls**: none
 - **called_by**: all route handlers
 - **mutates**: nothing
+
+### `From<anyhow::Error> for ApiError` / `From<sqlx::Error> for ApiError`
+- **type**: function (trait impl)
+- **file**: `crates/hsip-api/src/errors.rs`
+- **purpose**: Converts a caught `anyhow`/`sqlx` error (via `?`) into `ApiError`. Previously embedded the raw error's `Display` text directly into `ApiError::Internal`, which `into_response` sends verbatim to the HTTP caller — real DB/internal error detail (schema names, query fragments) leaking with no debug-only gate. Now logs the real error server-side via `tracing::error!` and returns a fixed `"internal server error"` message instead; `sqlx::Error::RowNotFound` still maps to a clean `ApiError::NotFound`, unchanged.
+- **inputs**: `e: anyhow::Error` / `e: sqlx::Error`
+- **outputs**: `ApiError`
+- **calls**: `tracing::error!`
+- **called_by**: every route handler's `?`-propagated `sqlx`/`anyhow` errors
+- **mutates**: nothing (logs only)
 
 ### `ApiError::into_response`
 - **type**: function
@@ -1198,6 +1218,36 @@ fully backward compatible.
 - **called_by**: `build_server_config`
 - **mutates**: nothing
 
+### `ClientCertFingerprint`
+- **type**: struct (`pub struct ClientCertFingerprint(pub Option<String>)`)
+- **file**: `crates/hsip-api/src/mtls.rs`
+- **purpose**: Per-connection request-extension value carrying the SHA-256 hex fingerprint of the client's presented TLS certificate, if any. Inserted into every request's `http::Extensions` by `ClientCertAcceptor`. `None` on a connection with no client certificate (plain TLS, or mTLS not configured); the extension is entirely absent on a connection `ClientCertAcceptor` never wrapped (the plain server-TLS or non-TLS path). Read by `auth.rs::TenantId::from_request_parts` to enforce a key's `bound_client_cert_fingerprint`, and directly by `routes::keys::bind_client_cert` to read the *caller's own* connection's fingerprint when binding.
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `ClientCertAcceptor::accept` (constructs it), `auth.rs::TenantId::from_request_parts` and `routes::keys::bind_client_cert` (read it via `parts.extensions.get`/`Extension` extractor)
+- **mutates**: nothing
+
+### `cert_fingerprint`
+- **type**: function
+- **file**: `crates/hsip-api/src/mtls.rs`
+- **purpose**: SHA-256 hex digest of a certificate's raw DER bytes — the fingerprint format stored in `api_keys.bound_client_cert_fingerprint` and compared against on every request to a bound key.
+- **inputs**: `cert: &CertificateDer<'_>`
+- **outputs**: `String`
+- **calls**: `sha2::Sha256::digest`, `hex::encode`
+- **called_by**: `ClientCertAcceptor::accept`
+- **mutates**: nothing
+
+### `ClientCertAcceptor`
+- **type**: struct + `impl Accept<I, S>`
+- **file**: `crates/hsip-api/src/mtls.rs`
+- **purpose**: Wraps `axum_server::tls_rustls::RustlsAcceptor` to additionally extract the client's presented certificate (already verified against `client_ca_path` by rustls itself during the handshake — this only reads what the handshake already decided) and make its fingerprint available to every request on that connection via `ClientCertFingerprint`. Delegates the actual TLS handshake to the inner `RustlsAcceptor` completely unchanged; only constructed when `client_ca_path` is configured (see `main.rs::run`) — the plain server-TLS path continues to use `axum_server::bind_rustls` directly, untouched, preserving the same "unaffected until an operator opts in" guarantee `build_rustls_config`'s `None` branch already makes.
+- **inputs**: `stream: I`, `service: S` (via the `Accept` trait's `accept` method)
+- **outputs**: `(Self::Stream, AddExtension<S, ClientCertFingerprint>)` wrapped in a boxed future
+- **calls**: `RustlsAcceptor::accept`, `TlsStream::get_ref`, `ServerConnection::peer_certificates`, `cert_fingerprint`, `AddExtension::new`
+- **called_by**: `main.rs::run` (constructed and bound via `axum_server::bind` + `.acceptor(...)` when `client_ca_path` is `Some`)
+- **mutates**: nothing (wraps/delegates only)
+
 ---
 
 ## `crates/hsip-api/src/rate_limit_persistence.rs`
@@ -1251,7 +1301,7 @@ module-level doc comment for why.
 ### `router`
 - **type**: function
 - **file**: `crates/hsip-api/src/routes/mod.rs`
-- **purpose**: Builds the complete Axum router with all `/v1/*` routes, static file serving, and shared state.
+- **purpose**: Builds the complete Axum router with all `/v1/*` routes, static file serving, and shared state. Includes `POST /v1/keys/:id/bind-client-cert` → `keys::bind_client_cert`.
 - **inputs**: `state: AppState`
 - **outputs**: `Router`
 - **calls**: `Router::new`, `Router::nest`, all route module `router()` functions
@@ -1668,6 +1718,26 @@ module-level doc comment for why.
 - **calls**: `resolve_caller_role`, `sqlx::query`, `state.pending_revocation.insert`, `audit_log::record`
 - **called_by**: Axum router
 - **mutates**: DB (`api_keys.active`), `pending_revocation` DashSet, `agent_tracker`/`rate_limiter` DashMaps (removed), `audit_entries`
+
+### `BindClientCertRequest` / `BindClientCertResponse`
+- **type**: structs
+- **file**: `crates/hsip-api/src/routes/keys.rs`
+- **purpose**: `BindClientCertRequest` — JSON body for `POST /v1/keys/:id/bind-client-cert`: `clear: Option<bool>` (`true` removes an existing binding instead of setting one). `BindClientCertResponse` — the key's id and its resulting `bound_client_cert_fingerprint` (`None` after a clear or if binding failed validation).
+- **inputs**: none
+- **outputs**: none
+- **calls**: none
+- **called_by**: `bind_client_cert`
+- **mutates**: nothing
+
+### `bind_client_cert`
+- **type**: function (async)
+- **file**: `crates/hsip-api/src/routes/keys.rs`
+- **purpose**: `POST /v1/keys/:id/bind-client-cert` — owner-role gated (same privilege boundary as `create`/`revoke` above). Binds `api_keys.bound_client_cert_fingerprint` on a key in the caller's own tenant to the fingerprint from the *caller's own current connection* (read from the `mtls::ClientCertFingerprint` request extension via `Option<Extension<...>>` — `Option` because a non-mTLS caller has no such extension at all), never an arbitrary caller-supplied string — this is what prevents an owner from bricking a key by binding it to a fingerprint nobody can ever present. Without a presented certificate and without `{"clear":true}`, returns `400 BadRequest`. `{"clear":true}` clears an existing binding instead (no certificate required for that path). Writes `key.cert_bound`/`key.cert_unbound` audit entries.
+- **inputs**: `State(state)`, `tenant`, `headers`, `Path(key_id)`, `presented: Option<Extension<mtls::ClientCertFingerprint>>`, `Json(req)`
+- **outputs**: `ApiResult<Json<BindClientCertResponse>>`
+- **calls**: `resolve_caller_role`, `sqlx::query`, `audit_log::record`
+- **called_by**: Axum router
+- **mutates**: DB (`api_keys.bound_client_cert_fingerprint`, `audit_entries`)
 
 ### `gen_key`
 - **type**: function
