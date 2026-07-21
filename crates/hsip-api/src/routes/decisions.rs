@@ -404,7 +404,7 @@ pub async fn record(
 
         match insert_result {
             Ok(_) => {
-                crate::audit_log::record(
+                crate::audit_log::record_best_effort(
                     &state.db,
                     &tenant.0,
                     "decision.recorded",
@@ -412,7 +412,7 @@ pub async fn record(
                     Some(&decision_id),
                     now,
                 )
-                .await?;
+                .await;
 
                 metrics::DECISIONS_RECORDED.inc();
 

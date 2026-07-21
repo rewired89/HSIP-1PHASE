@@ -154,7 +154,7 @@ pub async fn issue(
     .execute(&state.db)
     .await?;
 
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "credential.issued",
@@ -162,7 +162,7 @@ pub async fn issue(
         Some(&req.claim),
         now,
     )
-    .await?;
+    .await;
 
     metrics::CREDENTIALS_ISSUED.inc();
 
@@ -225,7 +225,7 @@ pub async fn verify(
     } else {
         "credential.verification_failed"
     };
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         action,
@@ -233,7 +233,7 @@ pub async fn verify(
         Some(&req.credential.claim),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(VerifyResponse {
         valid,
@@ -260,7 +260,7 @@ pub async fn revoke(
         return Err(ApiError::NotFound("Credential not found".into()));
     }
 
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "credential.revoked",
@@ -268,7 +268,7 @@ pub async fn revoke(
         Some(&id),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(serde_json::json!({ "revoked": true, "id": id })))
 }

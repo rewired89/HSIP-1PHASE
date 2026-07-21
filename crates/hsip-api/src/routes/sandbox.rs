@@ -106,7 +106,7 @@ pub async fn provision(
     .await?;
 
     // Audit trail entry for this provision event.
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant_id,
         "sandbox.provision",
@@ -114,7 +114,7 @@ pub async fn provision(
         Some(&format!("trial_key_issued ip={ip}")),
         now,
     )
-    .await?;
+    .await;
 
     crate::metrics::SANDBOX_PROVISIONS.inc();
 

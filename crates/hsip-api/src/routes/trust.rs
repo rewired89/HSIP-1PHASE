@@ -75,7 +75,7 @@ pub async fn add(
     .execute(&state.db)
     .await?;
 
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "trust.peer_added",
@@ -83,7 +83,7 @@ pub async fn add(
         Some(&body.label),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(TrustedPeer {
         id,
@@ -145,7 +145,7 @@ pub async fn remove(
         .await?;
 
     let now = now_ms();
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "trust.peer_removed",
@@ -153,7 +153,7 @@ pub async fn remove(
         Some(&label),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(serde_json::json!({ "removed": id })))
 }
@@ -203,7 +203,7 @@ pub async fn verify(
     } else {
         "trust.verify_failed"
     };
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         action,
@@ -211,7 +211,7 @@ pub async fn verify(
         Some(&req.label),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(TrustVerifyResponse {
         verified,

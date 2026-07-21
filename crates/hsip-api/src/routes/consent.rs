@@ -144,7 +144,7 @@ pub async fn grant(
     .execute(&state.db)
     .await?;
 
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "consent.granted",
@@ -152,7 +152,7 @@ pub async fn grant(
         Some(&format!("expires_at={exp} granted_by={granted_by}")),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(ConsentRecord {
         id,
@@ -204,7 +204,7 @@ pub async fn revoke(
     .fetch_one(&state.db)
     .await?;
 
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "consent.revoked",
@@ -212,7 +212,7 @@ pub async fn revoke(
         Some(&format!("revoked_by={revoked_by}")),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(ConsentRecord {
         id: row.try_get(0)?,

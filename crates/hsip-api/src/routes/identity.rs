@@ -60,7 +60,7 @@ pub async fn create_or_get(
     .execute(&state.db)
     .await?;
 
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "identity.created",
@@ -68,7 +68,7 @@ pub async fn create_or_get(
         Some(&verify_b64),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(IdentityResponse {
         tenant_id: tenant.0,
@@ -138,7 +138,7 @@ pub async fn rotate(
     .execute(&state.db)
     .await?;
 
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "identity.key_rotated",
@@ -148,7 +148,7 @@ pub async fn rotate(
         )),
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(IdentityResponse {
         tenant_id: tenant.0,

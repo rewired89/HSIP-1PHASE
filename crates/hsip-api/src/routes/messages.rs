@@ -96,7 +96,7 @@ pub async fn sign(
     .execute(&state.db)
     .await?;
 
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "message.signed",
@@ -104,7 +104,7 @@ pub async fn sign(
         None,
         now,
     )
-    .await?;
+    .await;
 
     metrics::MESSAGES_SIGNED.inc();
 
@@ -163,7 +163,7 @@ pub async fn verify(
     } else {
         "message.verification_failed"
     };
-    crate::audit_log::record(
+    crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         action,
@@ -171,7 +171,7 @@ pub async fn verify(
         None,
         now,
     )
-    .await?;
+    .await;
 
     Ok(Json(VerifyResponse {
         verified,

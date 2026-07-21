@@ -965,6 +965,176 @@ async fn test_accountable_key_without_signature_still_records_but_unverified() {
     assert_eq!(list_json[0]["accountable_key_verified"], false);
 }
 
+/// The entire reason `decisions.event_hash` and `audit_entries.entry_hash`
+/// carry a `UNIQUE(tenant_id, prev_hash)` constraint plus a
+/// retry-on-conflict loop is to keep the hash chain from forking when two
+/// requests race to extend it — but every other test in this file writes
+/// sequentially (one request, awaited, before the next), which never
+/// actually creates that race. A sequential test can't tell a correct
+/// retry loop from a broken one; both look identical when nothing ever
+/// conflicts. This test does what no other test in this suite does: fires
+/// many `POST /v1/decisions` calls at the *same* tenant genuinely
+/// concurrently (via `tokio::spawn`, not sequential `.await`s), then checks
+/// the property that actually matters — the resulting chain is a single
+/// unforked line with no duplicate or missing links, not just that
+/// individual requests didn't error out.
+#[tokio::test]
+async fn test_concurrent_decision_writes_do_not_fork_the_chain() {
+    use sha2::{Digest, Sha256};
+
+    let (app, key, _db, _master_key) = test_app_with_db().await;
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // `CHAIN_WRITE_RETRIES` is a process-global Prometheus counter shared
+    // across every test in this binary — snapshot it before, so the
+    // assertion below checks *this test's* delta, not an absolute value
+    // that some other concurrently-running test could have also touched.
+    let retries_before = hsip_api::metrics::CHAIN_WRITE_RETRIES
+        .with_label_values(&["decisions"])
+        .get();
+
+    // A single, genuinely valid Ed25519 verify key shared by every request —
+    // `accountable_key` just needs to decode to a real curve point (checked
+    // by `validate_verify_key`), it doesn't need to vary per request for
+    // this test's purpose. Arbitrary fixed-byte-pattern keys like
+    // `[i as u8; 32]` are *not* guaranteed to be valid compressed Edwards
+    // points, which silently turned earlier drafts of this test into a
+    // `400`-testing test instead of a concurrency test.
+    let accountable_key_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng)
+            .verifying_key()
+            .to_bytes(),
+    );
+
+    const CONCURRENCY: usize = 25;
+    let mut handles = Vec::with_capacity(CONCURRENCY);
+    for i in 0..CONCURRENCY {
+        let app = app.clone();
+        let key = key.clone();
+        let accountable_key_b64 = accountable_key_b64.clone();
+        handles.push(tokio::spawn(async move {
+            let payload_hash = hex::encode(Sha256::digest(format!("payload-{i}").as_bytes()));
+            let body = serde_json::json!({
+                "accountable_key": accountable_key_b64,
+                "model_version": "v1",
+                "strategy_id": "s1",
+                "decision_type": "trade.order",
+                "payload_hash": payload_hash,
+            });
+            app.oneshot(
+                Request::post("/v1/decisions")
+                    .header(header::AUTHORIZATION, bearer(&key))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        }));
+    }
+
+    let mut statuses = Vec::with_capacity(CONCURRENCY);
+    for h in handles {
+        statuses.push(h.await.unwrap().status());
+    }
+    // Under genuinely heavy single-tenant contention, `record()`'s retry
+    // loop is deliberately capped at `MAX_ATTEMPTS` (5) — a request that
+    // can't win within that budget correctly returns `409 Conflict` rather
+    // than blocking forever, and the caller is expected to retry
+    // client-side (the same optimistic-concurrency contract as a
+    // conflicting PUT). A `409` here is documented, correct behavior, not
+    // a bug — what would be a bug is anything *other* than `200` or `409`
+    // (a `500`, a hang, or — the property actually checked below — two
+    // different `200`s that both claim the same `prev_hash`, meaning the
+    // retry loop let the chain fork instead of correctly serializing).
+    assert!(
+        statuses
+            .iter()
+            .all(|s| *s == StatusCode::OK || *s == StatusCode::CONFLICT),
+        "every concurrent write must either succeed or cleanly report contention, \
+         got: {statuses:?}"
+    );
+    let succeeded = statuses.iter().filter(|s| **s == StatusCode::OK).count();
+    assert!(
+        succeeded > 0,
+        "at least some concurrent writes must succeed — all {CONCURRENCY} returning 409 would \
+         mean the retry loop never actually resolves contention, got: {statuses:?}"
+    );
+
+    // The property that actually matters: whatever *did* succeed must form
+    // a single unforked line, not a tree/fork caused by two requests both
+    // reading the same stale prev_hash and both successfully inserting
+    // against it.
+    let list_res = app
+        .oneshot(
+            Request::get("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_json = body_json(list_res.into_body()).await;
+    let entries = list_json.as_array().unwrap();
+    assert_eq!(
+        entries.len(),
+        succeeded,
+        "the number of stored entries must exactly match the number of 200 responses — no \
+         write silently lost, and no phantom entry from a request that was reported as failed"
+    );
+
+    let prev_hashes: std::collections::HashSet<&str> = entries
+        .iter()
+        .map(|e| e["prev_hash"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        prev_hashes.len(),
+        succeeded,
+        "every entry must have a distinct prev_hash — a duplicate means two entries forked \
+         off the same predecessor instead of chaining linearly"
+    );
+    let event_hashes: std::collections::HashSet<&str> = entries
+        .iter()
+        .map(|e| e["event_hash"].as_str().unwrap())
+        .collect();
+    // Every entry's prev_hash must be either "" (the genesis) or another
+    // entry's own event_hash — i.e. this is a single walkable chain, not a
+    // fork with two branches that never reconnect.
+    let mut linked = 0;
+    for prev_hash in &prev_hashes {
+        if prev_hash.is_empty() || event_hashes.contains(prev_hash) {
+            linked += 1;
+        }
+    }
+    assert_eq!(
+        linked, succeeded,
+        "every prev_hash must resolve to the genesis or to a real entry's event_hash — a \
+         dangling prev_hash means the chain forked"
+    );
+
+    // If this genuinely never triggered contention, the test above proves
+    // nothing about the retry loop specifically — confirm real conflicts
+    // actually happened, not that CONCURRENCY sequential-looking writes
+    // just happened not to race.
+    let retries_after = hsip_api::metrics::CHAIN_WRITE_RETRIES
+        .with_label_values(&["decisions"])
+        .get();
+    assert!(
+        retries_after > retries_before,
+        "test did not actually exercise concurrent contention (no new retries) — increase \
+         CONCURRENCY or investigate why writes aren't interleaving"
+    );
+}
+
 /// A `decision_anchors` batch that's `ots_status = 'pending'` must upgrade
 /// to `'confirmed'` once its calendar reports a Bitcoin-block-header
 /// attestation — the THREAT_MODEL.md §4.20 follow-up:
