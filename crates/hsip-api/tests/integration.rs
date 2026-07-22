@@ -1026,6 +1026,290 @@ async fn test_decision_keys_are_per_transaction_derived_and_root_never_signs_dir
     assert_ne!(wrong_b64, issuer_verify_key_2);
 }
 
+// ── receipt collection ───────────────────────────────────────────────────
+//
+// A business can let every employee/agent run HSIP purely locally and still
+// get one centralized audit trail, without a shared database holding
+// everyone's raw operational data — by having each local instance submit
+// only self-contained, already-signed proof bundles to a "collector"
+// instance. These tests exercise the collector side: verify-before-store,
+// listing, full-bundle retrieval, duplicate rejection, and tamper rejection.
+
+#[tokio::test]
+async fn test_receipts_submit_list_get_and_reject_invalid() {
+    use sha2::{Digest, Sha256};
+
+    let (app, key) = test_app().await;
+
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_json = body_json(ident_res.into_body()).await;
+    let accountable_key = ident_json["verify_key"].as_str().unwrap().to_string();
+
+    let payload_hash = hex::encode(Sha256::digest(b"receipt test payload"));
+    let record_body = serde_json::json!({
+        "accountable_key": accountable_key,
+        "model_version": "v1",
+        "strategy_id": "s1",
+        "decision_type": "test.decision",
+        "payload_hash": payload_hash,
+    });
+    let record_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(record_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record_res.status(), StatusCode::OK);
+    let record_json = body_json(record_res.into_body()).await;
+    let decision_id = record_json["decision_id"].as_str().unwrap().to_string();
+
+    let proof_res = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/decisions/{decision_id}/proof"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let proof_json = body_json(proof_res.into_body()).await;
+
+    // A second, independent tenant acts as the "collector" — a different
+    // bearer key/tenant than the one that produced the decision, matching
+    // the real-world shape (submitter and collector are different HSIP
+    // instances/operators).
+    let (collector_app, collector_key) = test_app().await;
+
+    let submit_body = serde_json::json!({
+        "submitter_label": "alice-laptop",
+        "receipt_type": "decision",
+        "bundle": proof_json,
+    });
+    let submit_res = collector_app
+        .clone()
+        .oneshot(
+            Request::post("/v1/receipts/submit")
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(submit_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submit_res.status(), StatusCode::OK);
+    let submit_json = body_json(submit_res.into_body()).await;
+    assert_eq!(submit_json["valid"], true);
+    let receipt_id = submit_json["id"].as_str().unwrap().to_string();
+
+    // Listing shows the summary.
+    let list_res = collector_app
+        .clone()
+        .oneshot(
+            Request::get("/v1/receipts")
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_json = body_json(list_res.into_body()).await;
+    let list_arr = list_json.as_array().unwrap();
+    assert_eq!(list_arr.len(), 1);
+    assert_eq!(list_arr[0]["submitter_label"], "alice-laptop");
+    assert_eq!(list_arr[0]["valid"], true);
+
+    // Fetching one returns the full original bundle.
+    let get_res = collector_app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/receipts/{receipt_id}"))
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let get_json = body_json(get_res.into_body()).await;
+    assert_eq!(get_json["bundle"]["event_hash"], proof_json["event_hash"]);
+
+    // Resubmitting the exact same receipt is rejected (idempotent-safe —
+    // never silently duplicates storage).
+    let dup_res = collector_app
+        .clone()
+        .oneshot(
+            Request::post("/v1/receipts/submit")
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(submit_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dup_res.status(), StatusCode::CONFLICT);
+
+    // A tampered bundle (signature corrupted) must be rejected outright,
+    // not stored as "invalid" — the collector's whole point is being a
+    // trustworthy log of genuinely-verified receipts.
+    let mut tampered = proof_json.clone();
+    tampered["signature"] = serde_json::json!(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    );
+    let tampered_body = serde_json::json!({
+        "submitter_label": "mallory",
+        "receipt_type": "decision",
+        "bundle": tampered,
+    });
+    let tampered_res = collector_app
+        .clone()
+        .oneshot(
+            Request::post("/v1/receipts/submit")
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(tampered_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tampered_res.status(), StatusCode::BAD_REQUEST);
+
+    // An unrecognized receipt_type is also rejected.
+    let bad_type_body = serde_json::json!({
+        "submitter_label": "x",
+        "receipt_type": "not-a-real-type",
+        "bundle": proof_json,
+    });
+    let bad_type_res = collector_app
+        .clone()
+        .oneshot(
+            Request::post("/v1/receipts/submit")
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(bad_type_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_type_res.status(), StatusCode::BAD_REQUEST);
+
+    // Neither the tampered nor bad-type submission left a trace — still
+    // exactly one stored receipt.
+    let final_list_res = collector_app
+        .oneshot(
+            Request::get("/v1/receipts")
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let final_list_json = body_json(final_list_res.into_body()).await;
+    assert_eq!(final_list_json.as_array().unwrap().len(), 1);
+}
+
+/// The "audit" receipt_type path, exercised separately from the more
+/// thorough decision-receipt test above — proves both bundle shapes work,
+/// not just decisions.
+#[tokio::test]
+async fn test_receipts_submit_audit_entry_receipt() {
+    let (app, key) = test_app().await;
+
+    // Any authenticated call writes at least one audit entry
+    // (identity creation) that we can fetch a proof bundle for.
+    let ident_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ident_res.status(), StatusCode::OK);
+
+    let audit_list_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/audit")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let audit_list_json = body_json(audit_list_res.into_body()).await;
+    let entry_id = audit_list_json[0]["id"].as_str().unwrap().to_string();
+
+    let proof_res = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/audit/{entry_id}/proof"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let proof_json = body_json(proof_res.into_body()).await;
+
+    let (collector_app, collector_key) = test_app().await;
+    let submit_body = serde_json::json!({
+        "submitter_label": "bob-desktop",
+        "receipt_type": "audit",
+        "bundle": proof_json,
+    });
+    let submit_res = collector_app
+        .clone()
+        .oneshot(
+            Request::post("/v1/receipts/submit")
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(submit_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submit_res.status(), StatusCode::OK);
+    let submit_json = body_json(submit_res.into_body()).await;
+    assert_eq!(submit_json["valid"], true);
+
+    let list_res = collector_app
+        .oneshot(
+            Request::get("/v1/receipts")
+                .header(header::AUTHORIZATION, bearer(&collector_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_json = body_json(list_res.into_body()).await;
+    assert_eq!(list_json[0]["receipt_type"], "audit");
+}
+
 // ── accountable_key proof-of-possession ─────────────────────────────────
 //
 // `accountable_key` used to be pure caller-asserted metadata with no check

@@ -240,6 +240,20 @@ const TABLES: &[Table] = &[
             ("issuer_verify_key", Col::OptText),
         ],
     },
+    Table {
+        name: "submitted_receipts",
+        columns: &[
+            ("id", Col::Text),
+            ("collector_tenant_id", Col::Text),
+            ("submitter_label", Col::Text),
+            ("receipt_type", Col::Text),
+            ("source_tenant_id", Col::Text),
+            ("source_record_id", Col::Text),
+            ("bundle_json", Col::Text),
+            ("valid", Col::Int),
+            ("submitted_at", Col::Int),
+        ],
+    },
 ];
 
 struct Opts {

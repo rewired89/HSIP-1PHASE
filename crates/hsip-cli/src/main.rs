@@ -411,6 +411,12 @@ enum Commands {
         cmd: commands::keys::KeysCmd,
     },
 
+    /// Submit a local decision/audit proof to a remote collector
+    Receipts {
+        #[command(subcommand)]
+        cmd: commands::receipts::ReceiptsCmd,
+    },
+
     /// Show HSIP server status: identity, active agents, recent audit events
     Status {
         #[arg(long, env = "HSIP_API_URL")]
@@ -1695,6 +1701,13 @@ fn main() {
 
         Commands::Keys { cmd } => {
             if let Err(e) = commands::keys::run(cmd) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Receipts { cmd } => {
+            if let Err(e) = commands::receipts::run(cmd) {
                 eprintln!("Error: {e:#}");
                 std::process::exit(1);
             }

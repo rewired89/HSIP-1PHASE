@@ -488,6 +488,33 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         .execute(pool)
         .await;
 
+    // A "collector" node's receipt inbox — see routes/receipts.rs. Holds
+    // only self-contained, already-verified proof bundles submitted by
+    // other (typically local-only) HSIP instances, never a copy of their
+    // full operational database. `bundle_json` contains exactly what
+    // GET /v1/decisions/:id/proof or GET /v1/audit/:id/proof already
+    // return: hashes, signatures, public verify keys, Merkle proofs — never
+    // decision payload content (HSIP never receives that anywhere) and
+    // never a private key. UNIQUE(...) makes resubmitting the same receipt
+    // to the same collector idempotent-safe rather than silently
+    // duplicating storage.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS submitted_receipts (
+            id                  TEXT PRIMARY KEY,
+            collector_tenant_id TEXT NOT NULL,
+            submitter_label     TEXT NOT NULL,
+            receipt_type        TEXT NOT NULL,
+            source_tenant_id    TEXT NOT NULL,
+            source_record_id    TEXT NOT NULL,
+            bundle_json         TEXT NOT NULL,
+            valid               INTEGER NOT NULL,
+            submitted_at        BIGINT NOT NULL,
+            UNIQUE(collector_tenant_id, receipt_type, source_tenant_id, source_record_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Non-fatal, repeated every startup: widens every millisecond-epoch (or
     // similarly wide) column from the old plain INTEGER to BIGINT, in case
     // this pool is a PostgreSQL database whose tables were created by an
@@ -541,6 +568,7 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_decisions_anchor   ON decisions (anchor_id)",
         "CREATE INDEX IF NOT EXISTS idx_decisions_created  ON decisions (tenant_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_audit_anchor       ON audit_entries (anchor_id)",
+        "CREATE INDEX IF NOT EXISTS idx_receipts_collector  ON submitted_receipts (collector_tenant_id)",
     ];
     for idx in &indexes {
         sqlx::query(idx).execute(pool).await?;

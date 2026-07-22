@@ -10,6 +10,7 @@ pub mod identity;
 pub mod keys;
 pub mod messages;
 pub mod proxy;
+pub mod receipts;
 pub mod sandbox;
 pub mod tenant;
 pub mod trust;
@@ -89,6 +90,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/decisions", get(decisions::list))
         .route("/v1/decisions/verify", post(decisions::verify))
         .route("/v1/decisions/:id/proof", get(decisions::proof))
+        // Receipt collection — see routes/receipts.rs
+        .route("/v1/receipts/submit", post(receipts::submit))
+        .route("/v1/receipts", get(receipts::list))
+        .route("/v1/receipts/:id", get(receipts::get_one))
         // Sandbox self-provision (active only when HSIP_SANDBOX=true)
         .route("/v1/sandbox/provision", post(sandbox::provision))
         // Node-level admin (bootstrap admin key only, see routes/admin.rs)
