@@ -219,6 +219,14 @@ mod tests {
                 "-subj",
                 "/CN=HSIP Test CA",
             ])
+            // Some `openssl` builds (notably certain Windows/MSYS2 portable
+            // builds) have a build-machine-specific default config path
+            // baked in and fail with "No such file or directory" if that
+            // path doesn't exist on the machine actually running the test.
+            // An empty OPENSSL_CONF makes openssl skip config-file lookup
+            // entirely and fall back to compiled-in defaults, which this
+            // self-signed, -subj-supplied CA generation doesn't need.
+            .env("OPENSSL_CONF", "")
             .status()
             .expect("openssl must be available to run this test");
         assert!(status.success(), "openssl CA generation failed");

@@ -294,10 +294,16 @@ mod tests {
         // Must not panic — this is called from route handlers after their
         // real work already succeeded, so a panic here would take down an
         // otherwise-successful request.
+        //
+        // Uses its own action label, distinct from every other test in this
+        // module — AUDIT_WRITE_FAILURES is a process-wide metric, and Rust
+        // runs #[tokio::test]s in parallel within the same test binary, so
+        // sharing a label with record_best_effort_increments_failure_metric
+        // _on_failure's "key.created" would race on that counter's value.
         record_best_effort(
             &db,
             "tenant1",
-            "key.created",
+            "test.record_best_effort_does_not_panic_on_failure",
             None,
             Some("id=abc"),
             now_ms(),
