@@ -14,6 +14,7 @@ use crate::{
     auth::TenantId,
     db::now_ms,
     errors::{ApiError, ApiResult},
+    key_encryption::{decrypt_field, encrypt_field},
     metrics,
     state::AppState,
 };
@@ -133,10 +134,15 @@ pub async fn issue(
         expires_at,
     };
 
-    // M1: sign canonical JSON (alphabetically-sorted keys)
+    // M1: sign canonical JSON (alphabetically-sorted keys) — always over
+    // the plaintext claim/user_token from the request; encryption below is
+    // purely at-rest storage protection and never touches what gets signed.
     let canonical = canonical_json(&payload)?;
     let signature = signing_key.sign(canonical.as_bytes());
     let sig_b64 = BASE64.encode(signature.to_bytes());
+
+    let encrypted_claim = encrypt_field(&req.claim, &master_key);
+    let encrypted_user_token = encrypt_field(&req.user_token, &master_key);
 
     sqlx::query(
         "INSERT INTO credentials
@@ -145,8 +151,8 @@ pub async fn issue(
     )
     .bind(&cred_id)
     .bind(&tenant.0)
-    .bind(&req.claim)
-    .bind(&req.user_token)
+    .bind(&encrypted_claim)
+    .bind(&encrypted_user_token)
     .bind(&verify_b64)
     .bind(now)
     .bind(expires_at)
@@ -154,12 +160,16 @@ pub async fn issue(
     .execute(&state.db)
     .await?;
 
+    // Audit `details` is not encrypted (see key_encryption::encrypt_field's
+    // doc comment / THREAT_MODEL.md's at-rest-encryption entry) — log the
+    // credential ID, never the claim text itself, so this audit entry
+    // doesn't undo the confidentiality `credentials.claim` now has.
     crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         "credential.issued",
         None,
-        Some(&req.claim),
+        Some(&cred_id),
         now,
     )
     .await;
@@ -225,12 +235,15 @@ pub async fn verify(
     } else {
         "credential.verification_failed"
     };
+    // Same reasoning as issue() above — log the credential ID, not the
+    // claim text, so this audit entry doesn't leak what
+    // credentials.claim's encryption is protecting.
     crate::audit_log::record_best_effort(
         &state.db,
         &tenant.0,
         action,
         None,
-        Some(&req.credential.claim),
+        Some(&req.credential.id),
         now,
     )
     .await;
@@ -286,20 +299,31 @@ pub async fn list(
     .fetch_all(&state.db)
     .await?;
 
+    let master_key = state.master_key.read().await;
     let records = rows
         .iter()
-        .map(|r| -> Result<CredentialRecord, sqlx::Error> {
+        .map(|r| -> ApiResult<CredentialRecord> {
+            let encrypted_claim: String = r.try_get(1)?;
+            let encrypted_user_token: String = r.try_get(2)?;
+            let claim = decrypt_field(&encrypted_claim, &master_key).map_err(|e| {
+                tracing::error!(error = %e, "credential claim decryption failed");
+                ApiError::Internal("internal server error".into())
+            })?;
+            let user_token = decrypt_field(&encrypted_user_token, &master_key).map_err(|e| {
+                tracing::error!(error = %e, "credential user_token decryption failed");
+                ApiError::Internal("internal server error".into())
+            })?;
             Ok(CredentialRecord {
                 id: r.try_get(0)?,
-                claim: r.try_get(1)?,
-                user_token: r.try_get(2)?,
+                claim,
+                user_token,
                 issuer_verify_key: r.try_get(3)?,
                 issued_at: r.try_get(4)?,
                 expires_at: r.try_get(5)?,
                 revoked: r.try_get::<i64, _>(6)? != 0,
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<ApiResult<Vec<_>>>()?;
 
     Ok(Json(records))
 }

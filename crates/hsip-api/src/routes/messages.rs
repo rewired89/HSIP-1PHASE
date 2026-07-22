@@ -9,7 +9,7 @@ use crate::{
     auth::TenantId,
     db::now_ms,
     errors::{ApiError, ApiResult},
-    key_encryption::decrypt_signing_key,
+    key_encryption::{decrypt_field, decrypt_signing_key, encrypt_field},
     metrics,
     state::AppState,
 };
@@ -77,11 +77,18 @@ pub async fn sign(
     })?;
 
     let signing_key = SigningKey::from_bytes(&key_bytes);
+    // Sign the plaintext content — encryption below is purely at-rest
+    // storage protection and never changes what gets signed or verified.
     let signature = signing_key.sign(req.content.as_bytes());
     let sig_b64 = BASE64.encode(signature.to_bytes());
     let now = now_ms();
     let msg_id = Uuid::new_v4().to_string();
     let peer = req.peer_verify_key.clone().unwrap_or_default();
+
+    let encrypted_content = {
+        let master_key = state.master_key.read().await;
+        encrypt_field(&req.content, &master_key)
+    };
 
     sqlx::query(
         "INSERT INTO messages (id, tenant_id, peer_verify_key, direction, content, signature, timestamp, verified)
@@ -90,7 +97,7 @@ pub async fn sign(
     .bind(&msg_id)
     .bind(&tenant.0)
     .bind(&peer)
-    .bind(&req.content)
+    .bind(&encrypted_content)
     .bind(&sig_b64)
     .bind(now)
     .execute(&state.db)
@@ -144,6 +151,11 @@ pub async fn verify(
     let msg_id = Uuid::new_v4().to_string();
     let v_int: i64 = verified as i64;
 
+    let encrypted_content = {
+        let master_key = state.master_key.read().await;
+        encrypt_field(&req.content, &master_key)
+    };
+
     sqlx::query(
         "INSERT INTO messages (id, tenant_id, peer_verify_key, direction, content, signature, timestamp, verified)
          VALUES ($1, $2, $3, 'inbound', $4, $5, $6, $7)",
@@ -151,7 +163,7 @@ pub async fn verify(
     .bind(&msg_id)
     .bind(&tenant.0)
     .bind(&req.peer_verify_key)
-    .bind(&req.content)
+    .bind(&encrypted_content)
     .bind(&req.signature)
     .bind(now)
     .bind(v_int)
@@ -192,20 +204,26 @@ pub async fn list(
     .fetch_all(&state.db)
     .await?;
 
+    let master_key = state.master_key.read().await;
     let records = rows
         .iter()
-        .map(|r| -> Result<MessageRecord, sqlx::Error> {
+        .map(|r| -> ApiResult<MessageRecord> {
+            let encrypted_content: String = r.try_get(3)?;
+            let content = decrypt_field(&encrypted_content, &master_key).map_err(|e| {
+                tracing::error!(error = %e, "message content decryption failed");
+                ApiError::Internal("internal server error".into())
+            })?;
             Ok(MessageRecord {
                 id: r.try_get(0)?,
                 peer_verify_key: r.try_get(1)?,
                 direction: r.try_get(2)?,
-                content: r.try_get(3)?,
+                content,
                 signature: r.try_get(4)?,
                 timestamp: r.try_get(5)?,
                 verified: r.try_get::<i64, _>(6)? != 0,
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<ApiResult<Vec<_>>>()?;
 
     Ok(Json(records))
 }

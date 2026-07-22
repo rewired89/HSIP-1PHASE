@@ -435,6 +435,145 @@ async fn test_credential_issue_verify_revoke() {
     assert_eq!(vj2["revoked"], true);
 }
 
+/// Message content and credential claim/user_token are encrypted at rest —
+/// this proves the actual security property (the raw DB row does not
+/// contain the plaintext), not just that the API still round-trips
+/// correctly. A stolen database file must not disclose either.
+#[tokio::test]
+async fn test_message_content_and_credential_claim_are_encrypted_at_rest() {
+    use sqlx::Row;
+
+    let (app, key, db, master_key) = test_app_with_db().await;
+
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let distinctive_content = "TOP-SECRET-MESSAGE-CONTENT-xyz789";
+    let sign_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/messages/sign")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "content": distinctive_content }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sign_res.status(), StatusCode::OK);
+
+    // The API round-trip must still return the exact plaintext.
+    let list_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/messages")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_json = body_json(list_res.into_body()).await;
+    assert_eq!(list_json[0]["content"], distinctive_content);
+
+    // But the raw DB row must NOT contain the plaintext — only ciphertext.
+    let msg_row = sqlx::query("SELECT content FROM messages LIMIT 1")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let raw_content: String = msg_row.try_get(0).unwrap();
+    assert_ne!(raw_content, distinctive_content);
+    assert!(
+        !raw_content.contains("TOP-SECRET"),
+        "raw DB content must not leak the plaintext substring"
+    );
+    // And it must be exactly our own encrypted-field format, recoverable
+    // under the real master key.
+    let decrypted = hsip_api::key_encryption::decrypt_field(&raw_content, &master_key)
+        .expect("stored content must decrypt under the real master key");
+    assert_eq!(decrypted, distinctive_content);
+
+    // Same two properties for credentials.claim / credentials.user_token.
+    let distinctive_claim = "age-verified-over-21-CLAIMXYZ";
+    let distinctive_token = "user-token-SECRET-abc123";
+    let issue_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/credentials/issue")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "claim": distinctive_claim,
+                        "user_token": distinctive_token,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(issue_res.status(), StatusCode::OK);
+
+    let cred_list_res = app
+        .oneshot(
+            Request::get("/v1/credentials")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cred_list_json = body_json(cred_list_res.into_body()).await;
+    assert_eq!(cred_list_json[0]["claim"], distinctive_claim);
+    assert_eq!(cred_list_json[0]["user_token"], distinctive_token);
+
+    let cred_row = sqlx::query("SELECT claim, user_token FROM credentials LIMIT 1")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let raw_claim: String = cred_row.try_get(0).unwrap();
+    let raw_token: String = cred_row.try_get(1).unwrap();
+    assert_ne!(raw_claim, distinctive_claim);
+    assert_ne!(raw_token, distinctive_token);
+    assert!(!raw_claim.contains("CLAIMXYZ"));
+    assert!(!raw_token.contains("SECRET"));
+    assert_eq!(
+        hsip_api::key_encryption::decrypt_field(&raw_claim, &master_key).unwrap(),
+        distinctive_claim
+    );
+    assert_eq!(
+        hsip_api::key_encryption::decrypt_field(&raw_token, &master_key).unwrap(),
+        distinctive_token
+    );
+
+    // audit_entries.details is NOT encrypted (out of scope this round —
+    // see THREAT_MODEL.md) — so credentials.rs must never pass the claim
+    // itself as the audit detail, or this column-encryption fix would be
+    // undone by its own audit trail. Confirmed directly: no audit_entries
+    // row anywhere in this test's tenant contains the claim text.
+    let audit_rows = sqlx::query("SELECT details FROM audit_entries WHERE details IS NOT NULL")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    for row in &audit_rows {
+        let details: String = row.try_get(0).unwrap();
+        assert!(
+            !details.contains("CLAIMXYZ"),
+            "audit_entries.details must never contain the credential claim text, found: {details}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_rate_limit_enforced() {
     // Set a very low limit for this test via env (default is 300, we'll just confirm
