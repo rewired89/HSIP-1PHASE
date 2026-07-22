@@ -530,6 +530,20 @@ Requested directly, as six questions about the test suite itself rather than the
 
 ---
 
+### 4.28 DNS Resolver Response Spoofing
+
+`hsip-dns` had gone untouched by every QA pass in this document up to now — every prior round scoped to `hsip-api`. A pass asking "what requires tribal knowledge / which decision depends on memory instead of design" widened to a direct look at it, since it's the one component whose entire job is *reducing* trust in the raw network, which made it worth checking on its own merits rather than assuming its "Working" status meant "reviewed."
+
+**The finding:** `handle_query`'s upstream-forwarding path bound its outbound socket on `0.0.0.0:0` (not loopback-restricted), sent the client's query to `1.1.1.1:53`, then read back *any* datagram that arrived on that socket and relayed it to the client — the response's source address was discarded (`recv_from`'s peer address bound to `_`) and the DNS transaction ID was never checked against the query's. An unconnected UDP socket has no notion of "who I'm expecting to hear from," so this forwarding path would relay a spoofed response from anyone able to race the real upstream and land a packet on that ephemeral port first — textbook DNS response spoofing / cache poisoning, for a resolver a user runs specifically to be *more* protected against exactly this class of attack.
+
+**Fixed** with two independent layers: the forwarding socket now `.connect()`s to the upstream address before sending, so the OS refuses to deliver a datagram from any other source at the kernel level (the primary fix — not application-logic-dependent); a `response_transaction_id_matches()` check on top of that, defending even against a legitimate-but-confused reply from the correctly-connected peer.
+
+**Verified four ways:** a unit test for the transaction-ID check; a test proving the connect()-based OS-level filtering itself, using the exact same `bind`/`connect`/`send`/`recv` primitives production code uses — a spoofed datagram sent directly at the connected socket's known address (test-only knowledge; a real attacker doesn't get to know the ephemeral port either) is never delivered, while the real connected peer's reply is; an end-to-end test of the real `handle_query` path against a fake upstream, confirming the fix didn't break ordinary forwarding; and, against a real running server, a raw Python-crafted DNS query for a tracker domain got a correct NXDOMAIN with zero network dependency, and a query for a non-blocked domain was genuinely forwarded to and answered by the real `1.1.1.1` — transaction ID matched, `GET /v1/dns/status`/`log` afterward showed the exact counts and log entry that should exist.
+
+*Source: `crates/hsip-dns/src/lib.rs`.*
+
+---
+
 ## 5. Trust Boundaries
 
 | Boundary | Trust level | Notes |

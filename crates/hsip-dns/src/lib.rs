@@ -347,7 +347,14 @@ async fn handle_query(
         }
     }
 
-    // Forward to upstream DNS
+    // Forward to upstream DNS. The forwarding socket is `connect()`-ed to
+    // `upstream` so the OS itself refuses to deliver any datagram whose
+    // source address doesn't match — without this, an off-path attacker who
+    // can reach this socket (it's bound on 0.0.0.0, not just loopback) could
+    // race the real upstream with a spoofed response and have it forwarded
+    // straight to the client, defeating the whole point of running a
+    // "security" DNS resolver. See response_transaction_id_matches below
+    // for the second half of this defense.
     let fwd = match UdpSocket::bind("0.0.0.0:0").await {
         Ok(s) => s,
         Err(e) => {
@@ -355,25 +362,39 @@ async fn handle_query(
             return;
         }
     };
+    if fwd.connect(upstream).await.is_err() {
+        tracing::warn!("DNS forward connect error to {}", upstream);
+        return;
+    }
 
-    if fwd.send_to(&query, upstream).await.is_err() {
+    if fwd.send(&query).await.is_err() {
         return;
     }
 
     let mut resp_buf = [0u8; 512];
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        fwd.recv_from(&mut resp_buf),
-    )
-    .await
-    {
-        Ok(Ok((n, _))) => {
-            let _ = socket.send_to(&resp_buf[..n], client).await;
+    match tokio::time::timeout(std::time::Duration::from_secs(3), fwd.recv(&mut resp_buf)).await {
+        Ok(Ok(n)) => {
+            if response_transaction_id_matches(&query, &resp_buf[..n]) {
+                let _ = socket.send_to(&resp_buf[..n], client).await;
+            } else {
+                tracing::warn!(
+                    "DNS response transaction ID mismatch for {:?}, dropping",
+                    hostname
+                );
+            }
         }
         _ => {
             tracing::debug!("DNS upstream timeout for {:?}", hostname);
         }
     }
+}
+
+/// Transaction ID (first 2 bytes of a DNS packet) must round-trip unchanged
+/// between query and response — a second, cheap layer of defense against
+/// response confusion/spoofing on top of the `connect()`-based source-address
+/// filtering above.
+fn response_transaction_id_matches(query: &[u8], response: &[u8]) -> bool {
+    query.len() >= 2 && response.len() >= 2 && query[0] == response[0] && query[1] == response[1]
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -406,7 +427,7 @@ mod tests {
     fn test_build_nxdomain_length() {
         // Minimal valid DNS query for "a.b" (11 bytes qname + 4 header bytes in question)
         // Header (12) + QNAME (5: \x01a\x01b\x00) + QTYPE (2) + QCLASS (2)
-        let mut query = vec![
+        let query = vec![
             0xAB, 0xCD, // ID
             0x01, 0x00, // Flags: standard query with RD=1
             0x00, 0x01, // QDCOUNT = 1
@@ -443,5 +464,116 @@ mod tests {
         assert!(result.is_some());
         let (name, _) = result.unwrap();
         assert_eq!(name, "hotjar.com");
+    }
+
+    #[test]
+    fn test_response_transaction_id_matches() {
+        let query = [0xAB, 0xCD, 0, 0];
+        let matching = [0xAB, 0xCD, 1, 1];
+        let mismatched = [0xAB, 0xCE, 0, 0];
+        assert!(response_transaction_id_matches(&query, &matching));
+        assert!(!response_transaction_id_matches(&query, &mismatched));
+        assert!(!response_transaction_id_matches(&query, &[0xAB]));
+        assert!(!response_transaction_id_matches(&[0xAB], &matching));
+    }
+
+    /// This is the security property the DNS-spoofing fix in `handle_query`
+    /// depends on: once the forwarding socket is `connect()`-ed to the real
+    /// upstream, the OS itself must refuse to deliver a datagram from any
+    /// other source, and must still deliver one from the real peer. Proven
+    /// directly against real loopback sockets on this OS, not mocked —
+    /// exactly the primitives `handle_query` actually uses.
+    #[tokio::test]
+    async fn connected_udp_socket_ignores_datagrams_from_other_sources() {
+        let real_upstream = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = real_upstream.local_addr().unwrap();
+        let attacker = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+
+        let fwd = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        fwd.connect(upstream_addr).await.unwrap();
+        let fwd_addr = fwd.local_addr().unwrap();
+
+        // Attacker races a spoofed response straight at the forwarding
+        // socket's address, from a source that is not the connected peer.
+        attacker.send_to(b"spoofed", fwd_addr).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(200), fwd.recv(&mut buf)).await;
+        assert!(
+            result.is_err(),
+            "a connected UDP socket must not receive a datagram from a non-peer source"
+        );
+
+        // The real upstream's reply, from the address `fwd` is connected to,
+        // must still be delivered.
+        real_upstream.send_to(b"legit", fwd_addr).await.unwrap();
+        let n = tokio::time::timeout(std::time::Duration::from_millis(200), fwd.recv(&mut buf))
+            .await
+            .expect("should not time out")
+            .expect("recv should succeed");
+        assert_eq!(&buf[..n], b"legit");
+    }
+
+    /// End-to-end through the real `handle_query` path (not just the raw
+    /// socket primitive above): a fake upstream answers a non-blocked query
+    /// and the client receives exactly that answer back.
+    #[tokio::test]
+    async fn handle_query_forwards_a_real_upstream_response_to_the_client() {
+        let fake_upstream = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = fake_upstream.local_addr().unwrap();
+
+        let resolver_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client_addr = client_socket.local_addr().unwrap();
+
+        // Query for a non-blocked domain so handle_query takes the forward path.
+        let mut query = vec![0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+        query.extend_from_slice(&[7, b'e', b'x', b'a', b'm', b'p', b'l', b'e']);
+        query.extend_from_slice(&[3, b'c', b'o', b'm', 0x00]);
+        query.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+
+        let stats = Arc::new(DnsStats {
+            queries_total: AtomicU64::new(0),
+            blocked_total: AtomicU64::new(0),
+        });
+        let log = Arc::new(DnsLog::new());
+
+        let handler = tokio::spawn(handle_query(
+            Arc::clone(&resolver_socket),
+            stats,
+            log,
+            query.clone(),
+            client_addr,
+            upstream_addr,
+        ));
+
+        // Act as the real upstream: receive the forwarded query, reply with
+        // a canned answer carrying the same transaction ID.
+        let mut up_buf = [0u8; 512];
+        let (n, from) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            fake_upstream.recv_from(&mut up_buf),
+        )
+        .await
+        .expect("upstream should receive the forwarded query")
+        .unwrap();
+        assert_eq!(&up_buf[..n], &query[..]);
+
+        let mut fake_answer = query.clone();
+        fake_answer.extend_from_slice(b"FAKE_ANSWER");
+        fake_upstream.send_to(&fake_answer, from).await.unwrap();
+
+        handler.await.unwrap();
+
+        let mut client_buf = [0u8; 512];
+        let (n, _) = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            client_socket.recv_from(&mut client_buf),
+        )
+        .await
+        .expect("client should receive the resolver's reply")
+        .unwrap();
+        assert_eq!(&client_buf[..n], &fake_answer[..]);
     }
 }
