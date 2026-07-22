@@ -73,7 +73,12 @@ struct RpcError {
 
 impl RpcResponse {
     fn ok(id: Option<Value>, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     fn err(id: Option<Value>, code: i32, message: impl Into<String>) -> Self {
@@ -81,7 +86,10 @@ impl RpcResponse {
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(RpcError { code, message: message.into() }),
+            error: Some(RpcError {
+                code,
+                message: message.into(),
+            }),
         }
     }
 }
@@ -149,8 +157,6 @@ impl ApiClient {
         }
         Ok(json)
     }
-
-
 }
 
 fn load_admin_key() -> Result<String> {
@@ -312,7 +318,10 @@ fn call_tool(name: &str, args: &Value, api: &ApiClient) -> Result<String> {
                     body["peer_verify_key"].as_str().unwrap_or("?")
                 ))
             } else {
-                Ok("✗ Signature INVALID. The message may have been altered or the key is wrong.".to_string())
+                Ok(
+                    "✗ Signature INVALID. The message may have been altered or the key is wrong."
+                        .to_string(),
+                )
             }
         }
 
@@ -360,7 +369,11 @@ fn call_tool(name: &str, args: &Value, api: &ApiClient) -> Result<String> {
                 Ok(resp) => {
                     let status = resp["status"].as_str().unwrap_or("unknown");
                     if status == "granted" {
-                        Ok(format!("✓ Consent ACTIVE for peer {}.\nScope: {}", peer, resp["scope"].as_str().unwrap_or("any")))
+                        Ok(format!(
+                            "✓ Consent ACTIVE for peer {}.\nScope: {}",
+                            peer,
+                            resp["scope"].as_str().unwrap_or("any")
+                        ))
                     } else {
                         Ok(format!("✗ Consent NOT active for peer {} (status: {}).\nYou should not act on this peer's behalf without explicit consent.", peer, status))
                     }
@@ -375,7 +388,10 @@ fn call_tool(name: &str, args: &Value, api: &ApiClient) -> Result<String> {
 
         "revoke_consent" => {
             let peer = req_str(args, "peer_verify_key")?;
-            api.post("/v1/consent/revoke", &serde_json::json!({ "peer_verify_key": peer }))?;
+            api.post(
+                "/v1/consent/revoke",
+                &serde_json::json!({ "peer_verify_key": peer }),
+            )?;
             Ok(format!(
                 "✓ Consent revoked for peer {peer}.\n\
                  All future consent checks for this peer will fail immediately."
@@ -387,7 +403,10 @@ fn call_tool(name: &str, args: &Value, api: &ApiClient) -> Result<String> {
             let detail = req_str(args, "detail")?;
             // Log via signed message so it's in the tamper-proof trail
             let content = format!("[ACTION:{action}] {detail}");
-            let resp = api.post("/v1/messages/sign", &serde_json::json!({ "content": content }))?;
+            let resp = api.post(
+                "/v1/messages/sign",
+                &serde_json::json!({ "content": content }),
+            )?;
             Ok(format!(
                 "✓ Action logged to tamper-proof audit trail.\n\
                  Action:    {action}\n\
@@ -401,7 +420,11 @@ fn call_tool(name: &str, args: &Value, api: &ApiClient) -> Result<String> {
         }
 
         "get_recent_actions" => {
-            let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(20).min(100);
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_i64)
+                .unwrap_or(20)
+                .min(100);
             let path = format!("/v1/audit?limit={limit}");
             let entries = api.get(&path)?;
             let arr = entries.as_array().cloned().unwrap_or_default();
@@ -413,7 +436,11 @@ fn call_tool(name: &str, args: &Value, api: &ApiClient) -> Result<String> {
                 let ts = e["timestamp"].as_i64().unwrap_or(0);
                 let action = e["action"].as_str().unwrap_or("?");
                 let detail = e["details"].as_str().unwrap_or("");
-                let detail_str = if detail.is_empty() { String::new() } else { format!(" — {detail}") };
+                let detail_str = if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {detail}")
+                };
                 out.push_str(&format!("  [{ts}ms] {action}{detail_str}\n"));
             }
             Ok(out)
@@ -443,7 +470,10 @@ fn main() {
         let req: RpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
-                send(&mut out, &RpcResponse::err(None, -32700, format!("Parse error: {e}")));
+                send(
+                    &mut out,
+                    &RpcResponse::err(None, -32700, format!("Parse error: {e}")),
+                );
                 continue;
             }
         };
@@ -455,9 +485,10 @@ fn main() {
 
         let id = req.id.clone();
         let response = handle(&req, &api);
-        send(&mut out, &response.unwrap_or_else(|e| {
-            RpcResponse::err(id, -32603, format!("{e:#}"))
-        }));
+        send(
+            &mut out,
+            &response.unwrap_or_else(|e| RpcResponse::err(id, -32603, format!("{e:#}"))),
+        );
     }
 }
 
@@ -465,22 +496,28 @@ fn handle(req: &RpcRequest, api: &Result<ApiClient>) -> Result<RpcResponse> {
     let id = req.id.clone();
 
     match req.method.as_str() {
-        "initialize" => Ok(RpcResponse::ok(id, serde_json::json!({
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
-            "instructions": "HSIP gives you a cryptographic identity and tamper-proof audit trail. \
-                             Call sign_message to create verifiable records. \
-                             Call check_consent before accessing another party's data. \
-                             Call log_action to record significant decisions. \
-                             Your HSIP API key determines your identity — treat it like a private key."
-        }))),
+        "initialize" => Ok(RpcResponse::ok(
+            id,
+            serde_json::json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
+                "instructions": "HSIP gives you a cryptographic identity and tamper-proof audit trail. \
+                                 Call sign_message to create verifiable records. \
+                                 Call check_consent before accessing another party's data. \
+                                 Call log_action to record significant decisions. \
+                                 Your HSIP API key determines your identity — treat it like a private key."
+            }),
+        )),
 
         "ping" => Ok(RpcResponse::ok(id, serde_json::json!({}))),
 
-        "tools/list" => Ok(RpcResponse::ok(id, serde_json::json!({
-            "tools": tool_list()
-        }))),
+        "tools/list" => Ok(RpcResponse::ok(
+            id,
+            serde_json::json!({
+                "tools": tool_list()
+            }),
+        )),
 
         "tools/call" => {
             let params = req.params.as_ref().context("missing params")?;
@@ -503,7 +540,11 @@ fn handle(req: &RpcRequest, api: &Result<ApiClient>) -> Result<RpcResponse> {
             }
         }
 
-        other => Ok(RpcResponse::err(id, -32601, format!("Method not found: {other}"))),
+        other => Ok(RpcResponse::err(
+            id,
+            -32601,
+            format!("Method not found: {other}"),
+        )),
     }
 }
 
