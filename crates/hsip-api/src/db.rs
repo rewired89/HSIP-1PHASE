@@ -478,6 +478,16 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         .execute(pool)
         .await;
 
+    // Non-fatal: column may already exist on upgraded databases. NULL means
+    // this decision predates per-transaction key derivation and was signed
+    // directly with the tenant's root identity key — proof() falls back to
+    // identities.verify_key_b64 for those rows. When set (base64 Ed25519
+    // public key), it's the per-decision key HKDF-derived from the tenant's
+    // root seed — see hsip_core::tx_key and routes/decisions.rs::record.
+    let _ = sqlx::query("ALTER TABLE decisions ADD COLUMN issuer_verify_key TEXT")
+        .execute(pool)
+        .await;
+
     // Non-fatal, repeated every startup: widens every millisecond-epoch (or
     // similarly wide) column from the old plain INTEGER to BIGINT, in case
     // this pool is a PostgreSQL database whose tables were created by an

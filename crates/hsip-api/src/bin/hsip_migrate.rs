@@ -237,6 +237,7 @@ const TABLES: &[Table] = &[
             ("merkle_index", Col::OptInt),
             ("created_at", Col::Int),
             ("accountable_key_signature", Col::OptText),
+            ("issuer_verify_key", Col::OptText),
         ],
     },
 ];

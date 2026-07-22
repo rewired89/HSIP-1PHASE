@@ -329,11 +329,16 @@ pub async fn record(
         .ok_or_else(|| ApiError::Internal("authenticated key vanished mid-request".into()))?;
     let agent_key_id: String = key_row.try_get(0)?;
 
-    let signing_key = {
+    // The tenant's long-lived root identity key never signs a decision
+    // directly — a fresh, single-use key is HKDF-derived from it per
+    // decision_id below (hsip_core::tx_key), so no two decisions from the
+    // same tenant carry a linkable public key, and the root itself is
+    // never exposed on the wire.
+    let root_signing_key = {
         let master_key = state.master_key.read().await;
         load_signing_key(&state.db, &tenant.0, &master_key).await?
     };
-    let issuer_verify_b64 = BASE64.encode(signing_key.verifying_key().to_bytes());
+    let root_seed = root_signing_key.to_bytes();
 
     for attempt in 1..=MAX_ATTEMPTS {
         let now = now_ms();
@@ -368,20 +373,27 @@ pub async fn record(
             accountable_key_signature: accountable_key_signature.clone().unwrap_or_default(),
         };
 
+        // Per-decision key, deterministically derived from the tenant's
+        // root seed + tenant_id + this decision_id — never the root key
+        // itself, and never reused for any other decision.
+        let tx_signing_key =
+            hsip_core::tx_key::derive_transaction_signing_key(&root_seed, &tenant.0, &decision_id);
+        let issuer_verify_b64 = BASE64.encode(tx_signing_key.verifying_key().to_bytes());
+
         let event_hash_bytes = event_hash(&envelope).map_err(|e| {
             tracing::error!(error = %e, "canonicalization failed");
             ApiError::Internal("internal server error".into())
         })?;
         let event_hash_hex = hex::encode(event_hash_bytes);
-        let signature = signing_key.sign(&event_hash_bytes);
+        let signature = tx_signing_key.sign(&event_hash_bytes);
         let sig_b64 = BASE64.encode(signature.to_bytes());
 
         let insert_result = sqlx::query(
             "INSERT INTO decisions
              (id, tenant_id, agent_key_id, accountable_key, model_version, strategy_id, decision_type,
               payload_hash, prev_hash, event_hash, signature, sign_algo, timestamp_iso, timestamp_int,
-              hsip_gov_ext, anchor_id, merkle_index, created_at, accountable_key_signature)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ED25519', $12, $13, $14, NULL, NULL, $15, $16)",
+              hsip_gov_ext, anchor_id, merkle_index, created_at, accountable_key_signature, issuer_verify_key)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ED25519', $12, $13, $14, NULL, NULL, $15, $16, $17)",
         )
         .bind(&decision_id)
         .bind(&tenant.0)
@@ -399,6 +411,7 @@ pub async fn record(
         .bind(&envelope.hsip_gov_ext)
         .bind(now)
         .bind(&envelope.accountable_key_signature)
+        .bind(&issuer_verify_b64)
         .execute(&state.db)
         .await;
 
@@ -497,7 +510,8 @@ pub async fn proof(
     let row = sqlx::query(
         "SELECT agent_key_id, accountable_key, model_version, strategy_id, decision_type,
                 payload_hash, prev_hash, event_hash, signature, sign_algo, timestamp_iso,
-                timestamp_int, hsip_gov_ext, anchor_id, merkle_index, accountable_key_signature
+                timestamp_int, hsip_gov_ext, anchor_id, merkle_index, accountable_key_signature,
+                issuer_verify_key
          FROM decisions WHERE id = $1 AND tenant_id = $2",
     )
     .bind(&id)
@@ -538,14 +552,26 @@ pub async fn proof(
     )
     .unwrap_or(false);
 
-    let ident_row = sqlx::query("SELECT verify_key_b64 FROM identities WHERE tenant_id = $1")
-        .bind(&tenant.0)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(|| {
-            ApiError::Internal("identity missing for tenant with recorded decisions".into())
-        })?;
-    let issuer_verify_key: String = ident_row.try_get(0)?;
+    // Per-decision key (hsip_core::tx_key), stored at record() time. NULL
+    // only for decisions predating this scheme — those were signed
+    // directly with the tenant's root identity key, so fall back to that.
+    let stored_issuer_verify_key: Option<String> = row.try_get(16)?;
+    let issuer_verify_key = match stored_issuer_verify_key {
+        Some(k) => k,
+        None => {
+            let ident_row =
+                sqlx::query("SELECT verify_key_b64 FROM identities WHERE tenant_id = $1")
+                    .bind(&tenant.0)
+                    .fetch_optional(&state.db)
+                    .await?
+                    .ok_or_else(|| {
+                        ApiError::Internal(
+                            "identity missing for tenant with recorded decisions".into(),
+                        )
+                    })?;
+            ident_row.try_get(0)?
+        }
+    };
 
     let Some(anchor_id) = anchor_id else {
         return Ok(Json(DecisionProofBundle {

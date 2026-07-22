@@ -719,6 +719,174 @@ async fn test_decision_attestation_sign_anchor_verify_end_to_end() {
     assert_eq!(tamper_json["event_hash_matches"], false);
 }
 
+/// Two decisions from the same tenant must carry unrelated-looking public
+/// keys (unlinkable to an outside observer without the tenant's root),
+/// neither signature-verifying key may equal the tenant's root identity
+/// key (the root never signs a decision directly), both must still verify
+/// correctly through the real DB-free `/v1/decisions/verify`, and — the
+/// audit side of the scheme — anyone holding the tenant's root seed must
+/// be able to independently recompute each decision's key and confirm it
+/// really descends from that root.
+#[tokio::test]
+async fn test_decision_keys_are_per_transaction_derived_and_root_never_signs_directly() {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use sha2::{Digest, Sha256};
+    use sqlx::Row;
+
+    let (app, key, db, master_key) = test_app_with_db().await;
+
+    app.clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_json = body_json(ident_res.into_body()).await;
+    let accountable_key = ident_json["verify_key"].as_str().unwrap().to_string();
+    let root_verify_key = accountable_key.clone();
+
+    let record_one = |app: axum::Router, key: String, tag: &'static str| {
+        let accountable_key = accountable_key.clone();
+        async move {
+            let payload_hash = hex::encode(Sha256::digest(tag.as_bytes()));
+            let body = serde_json::json!({
+                "accountable_key": accountable_key,
+                "model_version": "v1",
+                "strategy_id": "s1",
+                "decision_type": "test.decision",
+                "payload_hash": payload_hash,
+            });
+            let res = app
+                .oneshot(
+                    Request::post("/v1/decisions")
+                        .header(header::AUTHORIZATION, bearer(&key))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            body_json(res.into_body()).await
+        }
+    };
+
+    let record1 = record_one(app.clone(), key.clone(), "first decision payload").await;
+    let record2 = record_one(app.clone(), key.clone(), "second decision payload").await;
+
+    let decision_id_1 = record1["decision_id"].as_str().unwrap().to_string();
+    let decision_id_2 = record2["decision_id"].as_str().unwrap().to_string();
+    let issuer_verify_key_1 = record1["issuer_verify_key"].as_str().unwrap().to_string();
+    let issuer_verify_key_2 = record2["issuer_verify_key"].as_str().unwrap().to_string();
+
+    // Property 1: unlinkable — two decisions from the same tenant get
+    // different, unrelated-looking public keys.
+    assert_ne!(
+        issuer_verify_key_1, issuer_verify_key_2,
+        "two decisions from the same tenant must not share a signing key"
+    );
+
+    // Property 2: the root identity key never signs a decision directly.
+    assert_ne!(issuer_verify_key_1, root_verify_key);
+    assert_ne!(issuer_verify_key_2, root_verify_key);
+
+    // Property 3: both still verify correctly through the real,
+    // DB-free /v1/decisions/verify endpoint, each under its own key.
+    for decision_id in [&decision_id_1, &decision_id_2] {
+        let proof_res = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/decisions/{decision_id}/proof"))
+                    .header(header::AUTHORIZATION, bearer(&key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let proof_json = body_json(proof_res.into_body()).await;
+        let verify_body = serde_json::json!({
+            "envelope": proof_json["envelope"],
+            "event_hash": proof_json["event_hash"],
+            "signature": proof_json["signature"],
+            "issuer_verify_key": proof_json["issuer_verify_key"],
+        });
+        let verify_res = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/decisions/verify")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(verify_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let verify_json = body_json(verify_res.into_body()).await;
+        assert_eq!(
+            verify_json["valid"], true,
+            "decision {decision_id} must verify"
+        );
+        assert_eq!(verify_json["signature_valid"], true);
+    }
+
+    // Property 4 — the audit side: given the tenant's root seed (never
+    // transmitted by this scheme, only ever held by the tenant itself),
+    // independently recompute each decision's key via
+    // hsip_core::tx_key::derive_transaction_signing_key and confirm it
+    // matches exactly what HSIP recorded — without querying HSIP for the
+    // derivation itself, only for the tenant_id + decision_ids it already
+    // discloses.
+    let tenant_row = sqlx::query("SELECT tenant_id FROM api_keys LIMIT 1")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let tenant_id: String = tenant_row.try_get(0).unwrap();
+    let ident_row = sqlx::query("SELECT signing_key_b64 FROM identities WHERE tenant_id = ?")
+        .bind(&tenant_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let encrypted_root: String = ident_row.try_get(0).unwrap();
+    let root_seed = hsip_api::key_encryption::decrypt_signing_key(&encrypted_root, &master_key)
+        .expect("root key must decrypt under the tenant's own master key");
+
+    for (decision_id, expected_b64) in [
+        (&decision_id_1, &issuer_verify_key_1),
+        (&decision_id_2, &issuer_verify_key_2),
+    ] {
+        let recomputed =
+            hsip_core::tx_key::derive_transaction_signing_key(&root_seed, &tenant_id, decision_id);
+        let recomputed_b64 = BASE64.encode(recomputed.verifying_key().to_bytes());
+        assert_eq!(
+            &recomputed_b64, expected_b64,
+            "auditor holding the root seed must be able to re-derive decision {decision_id}'s key exactly"
+        );
+    }
+
+    // And a mismatched decision_id must NOT re-derive to the same key —
+    // the audit check has to actually discriminate, not vacuously pass.
+    let wrong = hsip_core::tx_key::derive_transaction_signing_key(
+        &root_seed,
+        &tenant_id,
+        "not-a-real-decision-id",
+    );
+    let wrong_b64 = BASE64.encode(wrong.verifying_key().to_bytes());
+    assert_ne!(wrong_b64, issuer_verify_key_1);
+    assert_ne!(wrong_b64, issuer_verify_key_2);
+}
+
 // ── accountable_key proof-of-possession ─────────────────────────────────
 //
 // `accountable_key` used to be pure caller-asserted metadata with no check
