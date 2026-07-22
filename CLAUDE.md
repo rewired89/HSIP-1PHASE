@@ -14,7 +14,9 @@ HSIP (High Security Internet Protocol) is a self-hosted, single-binary local ide
 
 **IMPORTANT:** `config.toml` is NOT committed (it's `.gitignore`d). `config.example.toml` shows the format. Without `config.toml`, the server always starts in desktop mode on port 7474. Do not re-add `config.toml` to the repo.
 
-**Active development branch:** `claude/create-claude-md-pBtap`
+**Active development branch:** `claude/hsip-variables-confidence-vnu8ft`
+
+This line is a snapshot, not a live pointer — it drifts every time work moves to a new branch (this repo has already gone through at least one prior branch since this file was created) and nothing enforces it staying current. Don't trust it blindly; confirm with `git branch --show-current` if it matters for what you're doing.
 
 ---
 
@@ -104,6 +106,8 @@ mtls.rs           Optional mutual TLS for [server.tls] — see Mutual TLS below
 routes/           One file per domain (see route table below)
 static_files.rs   Serves dashboard/dist/ via rust-embed (only active with embed-dashboard feature)
 ```
+
+**Tribal-knowledge gotcha: this crate compiles as two separate targets that independently declare the same modules.** `src/lib.rs` has `pub mod db; pub mod state; ...` (used by `tests/integration.rs` and by other modules' own `#[cfg(test)]` code, e.g. `rate_limit_persistence.rs`'s tests calling `crate::db::init`). `src/main.rs` *also* declares its own private `mod db; mod state; ...` — it does not depend on the `hsip_api` library crate at all, it just re-declares and recompiles the same source files as part of the binary. This means dead-code analysis (and therefore `cargo clippy -- -D warnings`) runs **twice**, independently, and can disagree: a function called only from `lib.rs`-side test code (like `db::init`, superseded by `main.rs`'s own `db::init_with_config` on the binary side) is "used" in the `lib` target's compilation and genuinely dead in the `bin "hsip-api"` target's — hence the `#[allow(dead_code)]` with an explanatory comment on both. If you add a new function only one target ends up calling, expect the same split and don't "fix" it by deleting a function clippy calls dead without checking whether the *other* target's tests use it (`grep` for the call site across `tests/integration.rs` and other modules' `#[cfg(test)]` blocks first, not just `src/main.rs`).
 
 ### API Routes
 
