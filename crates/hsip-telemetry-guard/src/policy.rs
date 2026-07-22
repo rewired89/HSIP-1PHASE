@@ -12,7 +12,6 @@ use chrono::Duration;
 use parking_lot::RwLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A single policy rule
@@ -133,8 +132,7 @@ impl RuleCondition {
 
     /// Match a wildcard pattern (*.example.com)
     fn match_wildcard_pattern(pattern: &str, hostname: &str) -> bool {
-        if pattern.starts_with("*.") {
-            let suffix = &pattern[2..];
+        if let Some(suffix) = pattern.strip_prefix("*.") {
             hostname.ends_with(suffix) || hostname == suffix
         } else if pattern.contains('*') {
             // Convert glob to regex
@@ -241,8 +239,6 @@ pub struct PolicyEngine {
     rules: RwLock<Vec<PolicyRule>>,
     /// Known endpoints database
     endpoints: Arc<EndpointDatabase>,
-    /// Compiled regex cache
-    regex_cache: RwLock<HashMap<String, Regex>>,
 }
 
 impl PolicyEngine {
@@ -252,7 +248,6 @@ impl PolicyEngine {
             config: RwLock::new(PolicyConfig::default()),
             rules: RwLock::new(Vec::new()),
             endpoints,
-            regex_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -262,7 +257,6 @@ impl PolicyEngine {
             config: RwLock::new(config),
             rules: RwLock::new(Vec::new()),
             endpoints,
-            regex_cache: RwLock::new(HashMap::new()),
         }
     }
 

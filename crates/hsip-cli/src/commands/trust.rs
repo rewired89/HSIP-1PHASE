@@ -217,8 +217,8 @@ fn list(api_url: Option<String>, key: Option<String>) -> Result<()> {
 
     println!();
     println!(
-        "{:<36}  {:<20}  {:<26}  {}",
-        "ID", "Label", "Verify key (truncated)", "Added"
+        "{:<36}  {:<20}  {:<26}  Added",
+        "ID", "Label", "Verify key (truncated)"
     );
     println!("{}", "─".repeat(94));
     for p in &peers {

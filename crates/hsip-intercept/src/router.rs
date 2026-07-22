@@ -9,8 +9,9 @@ pub type PeerID = PeerId;
 
 /// Routes messages through HSIP protocol.
 pub struct HSIPRouter {
+    // Kept for the future hsip-core integration this router is a stub for.
+    #[allow(dead_code)]
     config: InterceptConfig,
-    // Will integrate with hsip-core components
 }
 
 impl HSIPRouter {
@@ -77,7 +78,7 @@ impl HSIPRouter {
     }
 
     /// Look up a contact in the local contact book.
-    async fn lookup_contact(&self, name: &str) -> Result<Option<PeerID>> {
+    async fn lookup_contact(&self, _name: &str) -> Result<Option<PeerID>> {
         // TODO: Implement contact book integration
         // For now, return None (manual entry required)
         Ok(None)
@@ -118,7 +119,7 @@ impl HSIPRouter {
     }
 
     /// Send a message through HSIP.
-    pub async fn send_message(&self, peer_id: PeerID, message: String) -> Result<()> {
+    pub async fn send_message(&self, peer_id: PeerID, _message: String) -> Result<()> {
         info!("Sending message via HSIP to {:?}", peer_id);
 
         // TODO: Implement message sending via hsip-session

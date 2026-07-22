@@ -52,7 +52,7 @@ pub fn save_keypair(signing_key: &SigningKey, verifying_key: &VerifyingKey) -> R
 fn apply_unix_file_permissions(path: &PathBuf) {
     use std::os::unix::fs::PermissionsExt;
 
-    if let Ok(mut file) = fs::File::open(path) {
+    if let Ok(file) = fs::File::open(path) {
         if let Ok(metadata) = file.metadata() {
             let mut permissions = metadata.permissions();
             permissions.set_mode(0o600);

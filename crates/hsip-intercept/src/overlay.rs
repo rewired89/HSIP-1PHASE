@@ -55,9 +55,7 @@ impl OverlayContent {
                 recipient, platform_name
             )
         } else {
-            format!(
-                "Send this message through HSIP instead?\nYour message will be end-to-end encrypted with consent verification.",
-            )
+            "Send this message through HSIP instead?\nYour message will be end-to-end encrypted with consent verification.".to_string()
         };
 
         Self {

@@ -168,7 +168,7 @@ pub static AUDIT_ANCHORED: Lazy<CounterVec> = Lazy::new(|| {
 
 /// Requests rejected by the opt-in replay-protection check (x-hsip-timestamp
 /// + x-hsip-nonce headers). Zero unless a caller opts in, since the headers
-/// are entirely optional — see `auth.rs::check_replay_protection`.
+///   are entirely optional — see `auth.rs::check_replay_protection`.
 pub static REPLAY_REJECTED: Lazy<CounterVec> = Lazy::new(|| {
     register_counter_vec!(
         "hsip_replay_rejected_total",

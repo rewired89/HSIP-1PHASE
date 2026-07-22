@@ -90,7 +90,7 @@ pub fn strip_image_metadata(image_data: &[u8]) -> Result<Vec<u8>, String> {
 ///
 /// # Future Feature
 /// This is planned for Phase 3 (Stable release).
-pub async fn start_cover_traffic(intensity: CoverTrafficIntensity) {
+pub async fn start_cover_traffic(_intensity: CoverTrafficIntensity) {
     // TODO: Implement cover traffic generation
     warn!("Cover traffic not yet implemented");
 }

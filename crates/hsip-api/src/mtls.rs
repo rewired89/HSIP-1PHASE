@@ -98,10 +98,8 @@ fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
     // A PEM file may contain other sections before the key (e.g. a cert) —
     // scan the whole file for the first parseable private key, same as
     // axum-server's own `config_from_pem`.
-    for item in PrivateKeyDer::pem_slice_iter(&bytes) {
-        if let Ok(key) = item {
-            return Ok(key);
-        }
+    if let Some(key) = PrivateKeyDer::pem_slice_iter(&bytes).flatten().next() {
+        return Ok(key);
     }
     anyhow::bail!("no private key found in {path}")
 }

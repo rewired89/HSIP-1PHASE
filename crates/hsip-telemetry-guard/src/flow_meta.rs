@@ -123,7 +123,7 @@ pub enum RiskLevel {
 }
 
 /// Device fingerprint information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeviceFingerprint {
     /// User-Agent string
     pub user_agent: Option<String>,
@@ -147,24 +147,6 @@ pub struct DeviceFingerprint {
     pub hardware_concurrency: Option<u8>,
     /// Device memory in GB
     pub device_memory: Option<u8>,
-}
-
-impl Default for DeviceFingerprint {
-    fn default() -> Self {
-        Self {
-            user_agent: None,
-            accept_language: None,
-            accept_encoding: None,
-            screen_resolution: None,
-            color_depth: None,
-            timezone_offset: None,
-            platform: None,
-            browser: None,
-            os: None,
-            hardware_concurrency: None,
-            device_memory: None,
-        }
-    }
 }
 
 impl DeviceFingerprint {
@@ -268,9 +250,9 @@ impl FlowMeta {
     pub fn new(source: SocketAddr, destination: SocketAddr) -> Self {
         let mut flow_id = [0u8; 32];
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&source.ip().to_string().as_bytes());
+        hasher.update(source.ip().to_string().as_bytes());
         hasher.update(&source.port().to_le_bytes());
-        hasher.update(&destination.ip().to_string().as_bytes());
+        hasher.update(destination.ip().to_string().as_bytes());
         hasher.update(&destination.port().to_le_bytes());
         hasher.update(
             &chrono::Utc::now()

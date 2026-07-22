@@ -857,7 +857,7 @@ async fn bootstrap_admin(db: &db::Db, admin_key_path: &str) -> Result<()> {
         _ => {
             let mut raw_bytes = [0u8; 32];
             OsRng.fill_bytes(&mut raw_bytes);
-            format!("hsip_{}", hex::encode(&raw_bytes))
+            format!("hsip_{}", hex::encode(raw_bytes))
         }
     };
     let key_hash = hash_key(&raw_key);

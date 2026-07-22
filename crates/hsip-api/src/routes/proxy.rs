@@ -261,7 +261,7 @@ pub async fn setup(_tenant: TenantId, State(s): State<AppState>) -> impl IntoRes
             "In Chrome/Edge: Settings → System → Open your computer's proxy settings (then follow Windows/Mac steps above)".into(),
             format!("In Firefox: Settings → search 'proxy' → Manual proxy → HTTP: 127.0.0.1 port {} → check 'Also use for HTTPS'", port),
         ],
-        pac_url: format!("http://127.0.0.1:7474/proxy.pac"),
+        pac_url: "http://127.0.0.1:7474/proxy.pac".to_string(),
     })
 }
 
@@ -378,7 +378,7 @@ fn handle_connection(
         req_str
             .lines()
             .find(|l| l.to_ascii_lowercase().starts_with("host:"))
-            .and_then(|l| l.splitn(2, ':').nth(1))
+            .and_then(|l| l.split_once(':').map(|x| x.1))
             .map(|h| h.trim().split(':').next().unwrap_or("").to_string())
             .unwrap_or_default()
     };

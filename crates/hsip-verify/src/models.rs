@@ -62,7 +62,7 @@ impl ConsentModel {
     /// Verify temporal consistency property
     pub fn verify_temporal_consistency(&self, requester_peer_id: &str) -> bool {
         if let Some(&revoke_time) = self.revoked_consents.get(requester_peer_id) {
-            if let Some(&grant_time) = self.granted_consents.get(requester_peer_id) {
+            if let Some(&_grant_time) = self.granted_consents.get(requester_peer_id) {
                 // For any time t > revoke_time, consent should not be allowed
                 // We check a large time in the future
                 let future_time = revoke_time + 1000000;

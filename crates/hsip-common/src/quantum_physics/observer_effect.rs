@@ -267,14 +267,14 @@ impl ObservationLog {
             let mut resource_idx = self.resource_index.write();
             resource_idx
                 .entry(resource_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(index as usize);
         }
         {
             let mut observer_idx = self.observer_index.write();
             observer_idx
                 .entry(observer_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(index as usize);
         }
 

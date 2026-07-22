@@ -242,7 +242,7 @@ fn register(
 
     let expiry_str = resp
         .expires_at
-        .map(|ms| format_timestamp(ms))
+        .map(format_timestamp)
         .unwrap_or_else(|| "never".to_string());
 
     println!();
@@ -504,9 +504,8 @@ pub fn status(api_url: Option<String>, key: Option<String>) -> Result<()> {
                     format!(" — {}", truncate(detail, 40))
                 };
                 println!(
-                    "    {} {}  {}{}",
+                    "    {}    {}{}",
                     format_timestamp(e.timestamp),
-                    " ",
                     e.action,
                     detail_str
                 );

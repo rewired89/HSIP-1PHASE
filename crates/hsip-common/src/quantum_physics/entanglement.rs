@@ -437,8 +437,8 @@ impl EntanglementManager {
         // Update indices
         {
             let mut index = self.party_index.write();
-            index.entry(party_a).or_insert_with(Vec::new).push(id);
-            index.entry(party_b).or_insert_with(Vec::new).push(id);
+            index.entry(party_a).or_default().push(id);
+            index.entry(party_b).or_default().push(id);
         }
 
         self.pairwise.write().insert(id, entanglement);
@@ -530,7 +530,7 @@ impl EntanglementManager {
         {
             let mut index = self.party_index.write();
             for party in &parties {
-                index.entry(*party).or_insert_with(Vec::new).push(id);
+                index.entry(*party).or_default().push(id);
             }
         }
 

@@ -9,7 +9,7 @@
 
 use crate::{
     config::InterceptConfig,
-    error::{InterceptError, Result},
+    error::Result,
     event::{EventMonitor, EventType, MessagingEvent, PlatformType},
 };
 use std::{
@@ -31,6 +31,7 @@ pub struct LinuxEventMonitor {
 
 impl LinuxEventMonitor {
     /// Create a new Linux event monitor.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         event_tx: mpsc::Sender<MessagingEvent>,
         config: &InterceptConfig,

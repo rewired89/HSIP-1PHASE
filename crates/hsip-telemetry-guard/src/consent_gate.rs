@@ -9,7 +9,7 @@
 use crate::{Decision, DecisionReason, FlowMeta, Result, TelemetryGuardError, TelemetryIntent};
 use blake3::Hasher;
 use chrono::{DateTime, Duration, Utc};
-use hsip_common::quantum_physics::{no_cloning::AntiReplayGuard, uncertainty::PrivacyLevel};
+use hsip_common::quantum_physics::uncertainty::PrivacyLevel;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -44,8 +44,8 @@ impl ConsentScope {
             }
             ConsentScope::DomainPattern(pattern) => {
                 let hostname = flow.effective_hostname().to_lowercase();
-                if pattern.starts_with("*.") {
-                    let suffix = pattern[2..].to_lowercase();
+                if let Some(stripped) = pattern.strip_prefix("*.") {
+                    let suffix = stripped.to_lowercase();
                     hostname.ends_with(&suffix) || hostname == suffix
                 } else {
                     hostname == pattern.to_lowercase()
@@ -267,8 +267,6 @@ pub struct ConsentGate {
     consents: RwLock<HashMap<[u8; 32], TelemetryConsent>>,
     /// Signing key for consent verification
     signing_key: [u8; 32],
-    /// Anti-replay guard for single-use tokens
-    anti_replay: AntiReplayGuard,
     /// Single-use tokens that have been consumed
     consumed_tokens: RwLock<HashMap<[u8; 32], DateTime<Utc>>>,
     /// Privacy level
@@ -281,7 +279,6 @@ impl ConsentGate {
         Self {
             consents: RwLock::new(HashMap::new()),
             signing_key,
-            anti_replay: AntiReplayGuard::new(),
             consumed_tokens: RwLock::new(HashMap::new()),
             privacy_level: RwLock::new(PrivacyLevel::Balanced),
         }

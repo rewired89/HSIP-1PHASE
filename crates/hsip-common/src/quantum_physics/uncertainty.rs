@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Privacy level on the uncertainty spectrum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 #[repr(u8)]
 pub enum PrivacyLevel {
     /// Minimal privacy - maximum performance
@@ -26,6 +28,7 @@ pub enum PrivacyLevel {
     Basic = 1,
     /// Balanced privacy and performance
     /// Default setting with reasonable tradeoffs
+    #[default]
     Balanced = 2,
     /// Enhanced privacy - reduced performance
     /// Extra encryption layers, significant padding
@@ -67,12 +70,6 @@ impl PrivacyLevel {
     /// Get the normalized value (0.0 - 1.0)
     pub fn normalized(&self) -> f32 {
         self.value() as f32 / 4.0
-    }
-}
-
-impl Default for PrivacyLevel {
-    fn default() -> Self {
-        Self::Balanced
     }
 }
 
@@ -330,12 +327,8 @@ impl UncertaintyConfig {
             }
             PrivacyLevel::Maximum => {
                 // Pad all messages to fixed size (4KB)
-                let target = 4096;
-                if message_size >= target {
-                    0
-                } else {
-                    target - message_size
-                }
+                let target: usize = 4096;
+                target.saturating_sub(message_size)
             }
         }
     }
@@ -443,8 +436,8 @@ impl TradeoffSummary {
     pub fn for_level(level: PrivacyLevel) -> Self {
         let features = PrivacyFeatures::for_level(level);
 
-        let privacy_score = (level.value() as u8 + 1) * 20;
-        let performance_score = 100 - (level.value() as u8 * 20);
+        let privacy_score = (level.value() + 1) * 20;
+        let performance_score = 100 - (level.value() * 20);
 
         let mut protected = vec!["Message content (always encrypted)".to_string()];
         let mut exposed = Vec::new();

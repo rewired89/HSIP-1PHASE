@@ -147,6 +147,10 @@ pub struct AppState {
 }
 
 impl AppState {
+    // Unused from the `hsip-api` binary target (which calls
+    // `new_with_master_key_path` directly), but exercised by the
+    // `hsip_api` library target's own tests and tests/integration.rs.
+    #[allow(dead_code)]
     pub fn new(db: Db, master_key: Vec<u8>) -> Self {
         Self::new_with_master_key_path(db, master_key, None)
     }

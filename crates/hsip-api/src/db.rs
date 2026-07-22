@@ -6,6 +6,12 @@ pub type Db = AnyPool;
 
 static DRIVERS: Once = Once::new();
 
+// Unused from the `hsip-api` binary target (which calls `init_with_config`
+// directly), but exercised by the `hsip_api` library target's own test
+// call sites (rate_limit_persistence.rs, anchor_job.rs, audit_log.rs,
+// system_health.rs) and by tests/integration.rs — both separate
+// compilations from this binary's own `mod db;`.
+#[allow(dead_code)]
 pub async fn init(database_url: &str) -> anyhow::Result<Db> {
     DRIVERS.call_once(|| {
         sqlx::any::install_default_drivers();

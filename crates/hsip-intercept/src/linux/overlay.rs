@@ -16,7 +16,7 @@ use crate::{
     PlatformType,
 };
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 const ACTION_HSIP: &str = "hsip";
 const ACTION_CONTINUE: &str = "continue";
@@ -31,6 +31,7 @@ pub struct LinuxOverlay {
 
 impl LinuxOverlay {
     /// Create a new Linux overlay.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(config: &InterceptConfig) -> Result<Box<dyn InterceptOverlay>> {
         Ok(Box::new(Self {
             config: config.clone(),

@@ -20,13 +20,13 @@ pub struct Hello {
 // Detect local node capabilities
 #[must_use]
 fn detect_local_capabilities() -> Vec<String> {
-    let mut capabilities = Vec::with_capacity(5);
-    capabilities.push("pqc=0".into());
-    capabilities.push("dtn=1".into());
-    capabilities.push("mesh=1".into());
-    capabilities.push("sat=0".into());
-    capabilities.push("consent=1".into());
-    capabilities
+    vec![
+        "pqc=0".into(),
+        "dtn=1".into(),
+        "mesh=1".into(),
+        "sat=0".into(),
+        "consent=1".into(),
+    ]
 }
 
 // Generate canonical signing payload from HELLO components

@@ -310,18 +310,19 @@ pub(crate) fn ms_to_iso(ms: i64) -> String {
     let mut days = secs / 86400;
     let mut year = 1970u32;
     loop {
-        let dy: u64 = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
-            366
-        } else {
-            365
-        };
+        let dy: u64 =
+            if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) {
+                366
+            } else {
+                365
+            };
         if days < dy {
             break;
         }
         days -= dy;
         year += 1;
     }
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
     let month_days: [u64; 12] = [
         31,
         if leap { 29 } else { 28 },

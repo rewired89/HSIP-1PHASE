@@ -387,6 +387,7 @@ fn receive_e1_initiation(
 }
 
 /// Main loop for processing encrypted control messages
+#[allow(clippy::too_many_arguments)]
 fn process_control_messages(
     sock: &UdpSocket,
     rx_session: &mut ManagedSession,

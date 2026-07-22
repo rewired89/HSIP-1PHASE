@@ -105,7 +105,7 @@ impl EndpointDatabase {
         for entry in entries {
             // Extract the base domain for indexing
             let base = Self::extract_base_domain(&entry.domain_pattern);
-            map.entry(base).or_insert_with(Vec::new).push(entry);
+            map.entry(base).or_default().push(entry);
         }
     }
 
@@ -155,8 +155,7 @@ impl EndpointDatabase {
 
     /// Check if hostname matches a pattern
     fn matches_pattern(pattern: &str, hostname: &str) -> bool {
-        if pattern.starts_with("*.") {
-            let suffix = &pattern[2..];
+        if let Some(suffix) = pattern.strip_prefix("*.") {
             hostname.ends_with(suffix) || hostname == suffix
         } else {
             hostname == pattern

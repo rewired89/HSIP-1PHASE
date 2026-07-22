@@ -193,7 +193,7 @@ impl DecoherenceState {
 
     /// Extend the expiry by the given duration (renewal)
     pub fn extend(&mut self, extension_secs: u64) {
-        self.expires_at = self.expires_at + ChronoDuration::seconds(extension_secs as i64);
+        self.expires_at += ChronoDuration::seconds(extension_secs as i64);
         self.touch();
     }
 }

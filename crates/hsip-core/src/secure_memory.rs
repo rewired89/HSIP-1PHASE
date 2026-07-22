@@ -200,13 +200,6 @@ impl SecureString {
         Self { data }
     }
 
-    /// Create from str
-    pub fn from_str(s: &str) -> Self {
-        Self {
-            data: s.to_string(),
-        }
-    }
-
     /// Get as str
     pub fn as_str(&self) -> &str {
         &self.data
@@ -364,14 +357,14 @@ mod tests {
 
     #[test]
     fn test_secure_string() {
-        let secret = SecureString::from_str("password123");
+        let secret = SecureString::new("password123".to_string());
         assert_eq!(secret.as_str(), "password123");
         assert_eq!(secret.len(), 11);
     }
 
     #[test]
     fn test_secure_string_debug() {
-        let secret = SecureString::from_str("password");
+        let secret = SecureString::new("password".to_string());
         let debug = format!("{:?}", secret);
         assert!(debug.contains("REDACTED"));
         assert!(!debug.contains("password"));

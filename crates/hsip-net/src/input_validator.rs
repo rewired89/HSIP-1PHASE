@@ -113,7 +113,7 @@ pub fn validate_hex_string(
     }
 
     // Must be even length (pairs of hex digits)
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(ValidationError::InvalidFormat(field_name.to_string()));
     }
 
