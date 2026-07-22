@@ -27,7 +27,17 @@ fn rate_limit_rpm() -> u64 {
 // Tolerance window applies in both directions (clock skew); nonces are
 // retained for double this so a nonce can't become valid again the instant
 // it's swept while its timestamp is still inside the tolerance window.
-const REPLAY_TOLERANCE_SECS: i64 = 300; // 5 minutes
+// Override with HSIP_REPLAY_TOLERANCE_SECS env var — a fixed 300s window
+// with no way to widen it would reject legitimate requests outright if
+// real-world latency or clock skew ever exceeded it, with no mitigation
+// short of a code change (same reasoning as `rate_limit_rpm()` below
+// already gets an env override and this constant originally didn't).
+fn replay_tolerance_secs() -> i64 {
+    std::env::var("HSIP_REPLAY_TOLERANCE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300)
+}
 const REPLAY_NONCE_MAX_LEN: usize = 128;
 
 /// Logs a database error server-side and returns a client-safe generic
@@ -156,7 +166,7 @@ impl FromRequestParts<AppState> for TenantId {
 /// Opt-in replay protection. If neither `x-hsip-timestamp` nor `x-hsip-nonce`
 /// is present, this is a no-op — existing callers are entirely unaffected.
 /// If a caller sends both, the timestamp must be within
-/// `REPLAY_TOLERANCE_SECS` of server time and the (key_id, nonce) pair must
+/// `replay_tolerance_secs()` of server time and the (key_id, nonce) pair must
 /// not have been seen before within that window. A signature alone can't
 /// stop a captured request from being replayed verbatim; this closes that
 /// gap for callers who opt in without breaking anyone who doesn't.
@@ -199,18 +209,19 @@ fn check_replay_protection(key_id: &str, parts: &Parts, state: &AppState) -> Res
         ApiError::BadRequest("x-hsip-timestamp must be a Unix timestamp in seconds".into())
     })?;
 
+    let tolerance_secs = replay_tolerance_secs();
     let now_secs = now_ms() / 1000;
-    if (now_secs - ts).abs() > REPLAY_TOLERANCE_SECS {
+    if (now_secs - ts).abs() > tolerance_secs {
         metrics::REPLAY_REJECTED
             .with_label_values(&["timestamp_out_of_window"])
             .inc();
         return Err(ApiError::Unauthorized(format!(
-            "x-hsip-timestamp outside the allowed {REPLAY_TOLERANCE_SECS}s window"
+            "x-hsip-timestamp outside the allowed {tolerance_secs}s window"
         )));
     }
 
     let dedup_key = format!("{key_id}:{nonce}");
-    let expiry_ms = now_ms() + REPLAY_TOLERANCE_SECS * 2 * 1000;
+    let expiry_ms = now_ms() + tolerance_secs * 2 * 1000;
     match state.replay_nonces.entry(dedup_key) {
         dashmap::mapref::entry::Entry::Occupied(_) => {
             metrics::REPLAY_REJECTED

@@ -53,9 +53,11 @@ mime_guess       = { version = "2", optional = true }
 hsip-core        = { path = "../hsip-core" }
 hsip-dns         = { path = "../hsip-dns" }
 
-# Windows-only: shortcut creation during self-install (pure Rust, no subprocess)
+# Windows-only: shortcut creation during self-install (native Shell COM API
+# via Microsoft's own windows-rs bindings, no subprocess, no third-party
+# .lnk-format crate)
 [target.'cfg(windows)'.dependencies]
-mslnk = "0.1"
+windows = { version = "0.58", features = ["Win32_System_Com", "Win32_UI_Shell", "Win32_Foundation"] }
 dirs  = "5"
 
 [dev-dependencies]

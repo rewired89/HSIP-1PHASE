@@ -704,12 +704,58 @@ async fn docs_handler() -> impl IntoResponse {
     )
 }
 
+/// Converts a Rust string to a null-terminated UTF-16 buffer suitable for a
+/// Win32 `PCWSTR` — the caller must keep the returned `Vec` alive for as
+/// long as any `PCWSTR` built from it is used, since `PCWSTR` is just a
+/// borrowed pointer.
+#[cfg(all(windows, feature = "embed-dashboard"))]
+fn to_wide(s: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// Writes one `.lnk` shortcut at `dest` pointing at `target_exe`, via the
+/// real Windows Shell COM API (`IShellLinkW` + `IPersistFile`) — the same
+/// mechanism Explorer and PowerShell's `New-Object -ComObject WScript.Shell`
+/// use under the hood, not a hand-rolled reimplementation of the `.lnk`
+/// binary format. Replaced the third-party `mslnk` crate (a tiny,
+/// single-purpose, single-maintainer dependency) with Microsoft's own
+/// `windows` bindings — already a transitive dependency of this workspace's
+/// other Windows-targeted crates (tokio, mio), so this trades one
+/// abandonment-risk crate for the one Windows Rust dependency with
+/// essentially none.
+///
+/// # Safety
+/// Requires COM to be initialized on the calling thread (`CoInitializeEx`)
+/// before this runs and un-initialized (`CoUninitialize`) after — handled
+/// by the caller, `create_shortcuts`, once for both shortcuts rather than
+/// per-call.
+#[cfg(all(windows, feature = "embed-dashboard"))]
+unsafe fn write_shortcut(dest: &std::path::Path, target_exe: &str) -> windows::core::Result<()> {
+    use windows::core::{Interface, PCWSTR};
+    use windows::Win32::Foundation::TRUE;
+    use windows::Win32::System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER};
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+
+    let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+
+    let target_wide = to_wide(target_exe);
+    link.SetPath(PCWSTR::from_raw(target_wide.as_ptr()))?;
+
+    let persist_file: IPersistFile = link.cast()?;
+    let dest_wide = to_wide(&dest.to_string_lossy());
+    persist_file.Save(PCWSTR::from_raw(dest_wide.as_ptr()), TRUE)?;
+
+    Ok(())
+}
+
 /// Write Desktop + Start Menu shortcuts pointing at `target_exe`.
-/// Uses the `mslnk` crate to write the .lnk binary directly — no PowerShell,
-/// no VBScript, no execution policy, no subprocess of any kind.
 #[cfg(all(windows, feature = "embed-dashboard"))]
 fn create_shortcuts(target_exe: &std::path::Path) {
-    use mslnk::ShellLink;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
     let target = target_exe.to_string_lossy();
 
@@ -734,12 +780,24 @@ fn create_shortcuts(target_exe: &std::path::Path) {
         );
     }
 
-    for folder in &folders {
-        let _ = std::fs::create_dir_all(folder);
-        let lnk = folder.join("HSIP.lnk");
-        if let Ok(sl) = ShellLink::new(&*target) {
-            let _ = sl.create_lnk(lnk.to_string_lossy().as_ref());
+    // SAFETY: CoInitializeEx/CoUninitialize bracket every COM call this
+    // function's helpers make, on this same thread, exactly once for both
+    // shortcuts — the standard COM apartment-init pattern.
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // S_FALSE (already initialized on this thread) is not an error —
+        // only a genuine failure HRESULT should abort shortcut creation.
+        if hr.is_err() {
+            return;
         }
+
+        for folder in &folders {
+            let _ = std::fs::create_dir_all(folder);
+            let lnk = folder.join("HSIP.lnk");
+            let _ = write_shortcut(&lnk, &target);
+        }
+
+        CoUninitialize();
     }
 }
 
@@ -801,8 +859,9 @@ fn maybe_self_install() {
     // HSIP was already running), create/refresh shortcuts as long as the
     // installed exe is present.
     if install_exe.exists() {
-        // mslnk writes the .lnk binary directly; dirs resolves Desktop path
-        // via SHGetKnownFolderPath (handles OneDrive-moved Desktops correctly).
+        // create_shortcuts writes the .lnk via the real Shell COM API; dirs
+        // resolves Desktop path via SHGetKnownFolderPath (handles
+        // OneDrive-moved Desktops correctly).
         create_shortcuts(&install_exe);
     } else {
         // Nothing to point a shortcut at — bail out entirely.

@@ -2789,6 +2789,39 @@ async fn test_replay_protection_different_keys_can_reuse_same_nonce() {
     assert_eq!(res_b.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn test_replay_tolerance_is_configurable_via_env_var() {
+    // Default (unset) window is 300s, so a request 250s old normally passes
+    // and one 10s old always passes. Shrinking the window via
+    // HSIP_REPLAY_TOLERANCE_SECS must make the 250s-old request start being
+    // rejected, proving the env var is actually read, not just accepted and
+    // ignored — the exact gap this override was added to close (a fixed,
+    // non-configurable window with no way to widen or narrow it without a
+    // code change).
+    std::env::set_var("HSIP_REPLAY_TOLERANCE_SECS", "5");
+
+    let (app, key) = test_app().await;
+    let borderline_secs = hsip_api::db::now_ms() / 1000 - 250; // inside 300s, outside 5s
+
+    let res = app
+        .oneshot(
+            Request::get("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .header("x-hsip-timestamp", borderline_secs.to_string())
+                .header("x-hsip-nonce", "tolerance-override-nonce")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    std::env::remove_var("HSIP_REPLAY_TOLERANCE_SECS");
+
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let json = body_json(res.into_body()).await;
+    assert!(json["error"].as_str().unwrap().contains("5s window"));
+}
+
 // ── RBAC: tenant-scoped key management (owner vs member) ───────────────────────
 
 #[tokio::test]
