@@ -718,6 +718,62 @@ The server-side check (`auth.rs::check_replay_protection`, see HTTP Replay Prote
 
 ---
 
+## Trading Bot Integration (Predicta) — Active Task
+
+Predicta is the repo owner's own AI trading-decision system, used since early in this project as the motivating example for the decision-attestation design (`accountable_key`, the DB-free `POST /v1/decisions/verify`, the whole "HSIP never sees the actual trade" model exists because of it — see Decision Attestations above). This is now a real integration task, not just a design reference: wire Predicta's actual buy/sell/hold decisions into HSIP so every one gets a tamper-evident, independently verifiable record the instant it happens.
+
+**Status:** not yet started. Predicta's repo has not been added to any session yet and its source has never been read — everything below is HSIP's side of the contract only. The actual integration point (wherever in Predicta's code a decision becomes final) can only be found by reading Predicta's own source once its repo is added — don't guess at Predicta's structure from this file.
+
+### What "integrated" means, concretely
+
+Every time Predicta decides buy/sell/hold, it calls HSIP's decision-attestation API at that exact point in its own code. HSIP never receives the trade's real content (price, size, symbol, reasoning) — only a SHA-256 hash of it plus non-sensitive metadata. This is the same `payload_hash`-only design every decision in this system already uses (see "Decision payload content must never reach HSIP" in Key Invariants) — Predicta gets no special exception to that rule.
+
+### Step 1 — a dedicated key for Predicta, never the admin/root key
+
+The admin key (`~/.hsip/admin.key` / `%APPDATA%\HSIP\admin.key`) is root-admin — master key rotation, granting other keys admin, etc. Predicta must never hold that key. Create a scoped `ai_agent`-type key instead, via any of:
+- The dashboard's **"+ Connect"** button on the AI Decisions page (Simple mode)
+- `hsip agent register predicta` (CLI)
+- `POST /v1/keys` with `{"agent_type": "ai_agent"}` (raw API)
+
+The raw key is shown once at creation — store it as an env var wherever Predicta runs (`HSIP_API_KEY`), never hardcoded in Predicta's source. Set `HSIP_API_URL=http://127.0.0.1:7474` (desktop mode default) alongside it.
+
+### Step 2 — find Predicta's decision point
+
+Read Predicta's actual code (once its repo is added to the session) to find where a buy/sell/hold decision becomes final — the one place in its control flow that should trigger a call into HSIP. Don't call HSIP speculatively at multiple points (e.g. both "signal generated" and "order placed") unless Predicta genuinely has multiple distinct decision events worth separately attesting.
+
+### Step 3 — call `record_decision` with the right fields
+
+| Field | What it is |
+|---|---|
+| `accountable_key` | The Ed25519 verify key accountable for this decision — Predicta's own HSIP identity (`GET /v1/identity` using Predicta's key, or the SDK's `get_identity`/equivalent — auto-creates if missing). Not HSIP's key, not a human's. |
+| `model_version` | Whatever Predicta calls its own model/strategy version string. |
+| `strategy_id` | Predicta's strategy identifier, if it has more than one. |
+| `decision_type` | e.g. `"buy"` / `"sell"` / `"hold"`. |
+| `payload_hash` | `HSIPClient.hash_payload(...)` (or language equivalent) over Predicta's actual decision content — **never send the raw content itself.** |
+| `accountable_key_signature` (optional, Python SDK only so far) | Proof-of-possession — sign `accountable_proof_preimage_hash(...)` with Predicta's own private key if Predicta can do Ed25519 signing itself. Omitting it is a valid, unverified-but-still-recorded call shape — don't treat it as required. |
+
+### Step 4 — which SDK
+
+Full `record_decision`/`list_decisions`/`get_decision_proof`/`verify_decision`/`save_receipt`/`hash_payload` parity already exists in **Python, Node, and Go** (see the SDK table above) — use whichever matches Predicta's actual language once known. If Predicta is in a language none of the three SDKs cover, skip the SDK and call `POST /v1/decisions` directly over HTTP with a bearer token — the wire contract is plain JSON, no SDK required. `accountable_key_signature`/`accountable_proof_preimage_hash` is Python-only as of this writing (see "Remaining"); if Predicta needs it in Node/Go, that's the point to port it, following the exact shape of the Python method.
+
+### Step 5 — verify the integration the way this codebase verifies everything
+
+Don't call this done because the code compiles or one call returns `200`. Follow the same discipline as every other feature in this file:
+1. Trigger one real decision from Predicta (a real buy/sell/hold, not a synthetic test call).
+2. Confirm `GET /v1/decisions` on HSIP's side lists it.
+3. Fetch `GET /v1/decisions/:id/proof` and independently POST that exact bundle to `POST /v1/decisions/verify` (no API key needed — it's the pure, DB-free check) — confirm `valid: true`.
+4. Confirm HSIP's audit log picked up a `decision.recorded` entry (`GET /v1/audit`) and `GET /v1/audit/verify` still reports the chain intact.
+5. Confirm the real trade content never reached HSIP — grep HSIP's raw `.hsip/hsip.db`/`.hsip/hsip.db-wal` for a distinctive fragment of the actual decision payload (not just its hash) and expect zero occurrences, same technique already used in "Field Encryption at Rest" above.
+
+### Open questions to resolve once Predicta's repo is added
+
+- What language is Predicta actually written in (determines SDK vs. raw HTTP)?
+- Does Predicta already manage its own Ed25519 identity for anything, or does this integration need to create one for it via `GET /v1/identity`?
+- Is there more than one distinct decision type worth attesting (e.g. entry vs. exit, or per-strategy), or is one `decision_type` enough?
+- Does Predicta run on the same machine as HSIP (desktop mode, `127.0.0.1:7474`, no network exposure needed) or does it need `HSIP_API_URL` pointed at a different host?
+
+---
+
 ## Security Self-Review (audit prep, not a substitute for a real third-party audit)
 
 A full-codebase sweep — every route handler, the `TenantId` auth extractor, key-encryption code, admin/rotation code, `hsip-cli`, `hsip-mcp` — done as prep for the eventual third-party audit (THREAT_MODEL.md §7/§8 still list that as not-yet-done; this is self-review by the same person who built the features, which cannot substitute for independent review). Every candidate finding was independently re-verified against real running-server or running-process behavior before being treated as confirmed, not just re-read as code. Full writeup: THREAT_MODEL.md §4.19.
