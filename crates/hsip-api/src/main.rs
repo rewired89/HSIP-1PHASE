@@ -752,9 +752,15 @@ unsafe fn write_shortcut(dest: &std::path::Path, target_exe: &str) -> windows::c
     Ok(())
 }
 
-/// Write Desktop + Start Menu shortcuts pointing at `target_exe`.
+/// Write Desktop + Start Menu shortcuts pointing at `target_exe`. Returns a
+/// human-readable log fragment (one line per attempted shortcut) instead of
+/// silently discarding each result — the caller, `maybe_self_install`, folds
+/// this into `install.log`. This process runs with `windows_subsystem =
+/// "windows"` (no console), so a bare `tracing::warn!` on failure here would
+/// go nowhere a real user could ever see it; `install.log` already exists
+/// for exactly this reason (see its own comment below).
 #[cfg(all(windows, feature = "embed-dashboard"))]
-fn create_shortcuts(target_exe: &std::path::Path) {
+fn create_shortcuts(target_exe: &std::path::Path) -> String {
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
     let target = target_exe.to_string_lossy();
@@ -809,19 +815,25 @@ fn create_shortcuts(target_exe: &std::path::Path) {
         //                      call, so proceed rather than bail out.
         //   anything else      a genuine initialization failure — bail.
         if hr.is_err() && hr != windows::Win32::Foundation::RPC_E_CHANGED_MODE {
-            return;
+            return format!("CoInitializeEx failed: {hr:?} — no shortcuts attempted\n");
         }
         let owns_com_reference = hr != windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 
+        let mut log = String::new();
         for folder in &folders {
             let _ = std::fs::create_dir_all(folder);
             let lnk = folder.join("HSIP.lnk");
-            let _ = write_shortcut(&lnk, &target);
+            match write_shortcut(&lnk, &target) {
+                Ok(()) => log.push_str(&format!("shortcut ok:     {}\n", lnk.display())),
+                Err(e) => log.push_str(&format!("shortcut FAILED: {} — {e}\n", lnk.display())),
+            }
         }
 
         if owns_com_reference {
             CoUninitialize();
         }
+
+        log
     }
 }
 
@@ -868,16 +880,18 @@ fn maybe_self_install() {
         return;
     }
 
-    // Write an install log — tells us exactly what happened (useful for debugging)
+    // Write an install log — tells us exactly what happened (useful for
+    // debugging). This is the *only* place a real user can see what this
+    // function did: windows_subsystem = "windows" means there's no console,
+    // so anything not written here is completely invisible.
     let log_path = install_dir.join("install.log");
     let copied = std::fs::copy(&current_exe, &install_exe).is_ok();
-    let log = format!(
+    let mut log = format!(
         "HSIP self-install\nfrom:   {}\nto:     {}\ncopy ok: {}\n",
         current_exe.display(),
         install_exe.display(),
         copied
     );
-    let _ = std::fs::write(&log_path, log.as_bytes());
 
     // Whether or not the copy succeeded (the exe may be locked because
     // HSIP was already running), create/refresh shortcuts as long as the
@@ -885,10 +899,14 @@ fn maybe_self_install() {
     if install_exe.exists() {
         // create_shortcuts writes the .lnk via the real Shell COM API; dirs
         // resolves Desktop path via SHGetKnownFolderPath (handles
-        // OneDrive-moved Desktops correctly).
-        create_shortcuts(&install_exe);
+        // OneDrive-moved Desktops correctly). Its per-shortcut result is
+        // folded into this same log rather than discarded — a shortcut
+        // silently failing to appear used to leave zero trace anywhere.
+        log.push_str(&create_shortcuts(&install_exe));
+        let _ = std::fs::write(&log_path, log.as_bytes());
     } else {
         // Nothing to point a shortcut at — bail out entirely.
+        let _ = std::fs::write(&log_path, log.as_bytes());
         return;
     }
 
