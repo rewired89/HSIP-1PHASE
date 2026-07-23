@@ -32,6 +32,13 @@ fn rate_limit_rpm() -> u64 {
 // real-world latency or clock skew ever exceeded it, with no mitigation
 // short of a code change (same reasoning as `rate_limit_rpm()` below
 // already gets an env override and this constant originally didn't).
+// CAUTION for operators: this window is exactly what stands between a
+// captured request and a successful replay for callers who opt in to
+// x-hsip-timestamp/x-hsip-nonce — widening it (e.g. to work around a
+// consistently slow or skewed network) directly widens that replay
+// window too. Prefer fixing the underlying latency/clock-skew problem
+// over raising this value, and treat any setting far above the 300s
+// default as a deliberate security tradeoff, not a convenience knob.
 fn replay_tolerance_secs() -> i64 {
     std::env::var("HSIP_REPLAY_TOLERANCE_SECS")
         .ok()

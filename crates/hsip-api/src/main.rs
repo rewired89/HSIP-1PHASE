@@ -782,14 +782,36 @@ fn create_shortcuts(target_exe: &std::path::Path) {
 
     // SAFETY: CoInitializeEx/CoUninitialize bracket every COM call this
     // function's helpers make, on this same thread, exactly once for both
-    // shortcuts — the standard COM apartment-init pattern.
+    // shortcuts — the standard COM apartment-init pattern. This runs inside
+    // a #[tokio::main] multi-threaded runtime, so the OS thread executing
+    // this synchronous, early-in-main() code is one the scheduler can
+    // later reuse for an unrelated spawned task (e.g. the onboarding
+    // flow's webbrowser::open() calls) — this thread's COM apartment state
+    // is not necessarily untouched by anything else in the process.
     unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        // S_FALSE (already initialized on this thread) is not an error —
-        // only a genuine failure HRESULT should abort shortcut creation.
-        if hr.is_err() {
+        // Three distinct outcomes, not two — treating this as a plain
+        // success/failure check would either wrongly abort or wrongly
+        // call CoUninitialize when nothing here needs undoing:
+        //   S_OK               freshly initialized on this thread by us —
+        //                      we own the reference, must uninitialize.
+        //   S_FALSE            already initialized on this thread, same
+        //                      concurrency model — still our reference to
+        //                      balance, must uninitialize.
+        //   RPC_E_CHANGED_MODE already initialized on this thread under a
+        //                      DIFFERENT concurrency model (by whatever
+        //                      else previously ran on this reused thread)
+        //                      — we were not granted a reference here, so
+        //                      we must NOT call CoUninitialize (there is
+        //                      nothing of ours to release), but the
+        //                      existing apartment is still perfectly
+        //                      usable for a plain IShellLinkW/IPersistFile
+        //                      call, so proceed rather than bail out.
+        //   anything else      a genuine initialization failure — bail.
+        if hr.is_err() && hr != windows::Win32::Foundation::RPC_E_CHANGED_MODE {
             return;
         }
+        let owns_com_reference = hr != windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 
         for folder in &folders {
             let _ = std::fs::create_dir_all(folder);
@@ -797,7 +819,9 @@ fn create_shortcuts(target_exe: &std::path::Path) {
             let _ = write_shortcut(&lnk, &target);
         }
 
-        CoUninitialize();
+        if owns_com_reference {
+            CoUninitialize();
+        }
     }
 }
 
