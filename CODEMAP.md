@@ -126,25 +126,45 @@
 - **called_by**: Axum router
 - **mutates**: nothing
 
-### `create_shortcuts`
-- **type**: function (async)
+### `to_wide`
+- **type**: function
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: On Windows creates a Start Menu shortcut for the HSIP server (no-op on other platforms).
-- **inputs**: none
-- **outputs**: none
-- **calls**: Windows COM APIs (cfg-gated)
-- **called_by**: `run`
-- **mutates**: filesystem (Start Menu on Windows)
+- **purpose**: `#[cfg(all(windows, feature = "embed-dashboard"))]`. Converts a Rust `&str` to a null-terminated UTF-16 `Vec<u16>` for building a Win32 `PCWSTR` — caller must keep the returned `Vec` alive for as long as any `PCWSTR` built from it is used, since `PCWSTR` is just a borrowed pointer.
+- **inputs**: `s: &str`
+- **outputs**: `Vec<u16>`
+- **calls**: `OsStr::encode_wide`
+- **called_by**: `write_shortcut`
+- **mutates**: nothing
+
+### `write_shortcut`
+- **type**: function (unsafe)
+- **file**: `crates/hsip-api/src/main.rs`
+- **purpose**: `#[cfg(all(windows, feature = "embed-dashboard"))]`. Writes one `.lnk` shortcut at `dest` pointing at `target_exe`, via the real Windows Shell COM API (`IShellLinkW` + `IPersistFile`) — replaced the third-party `mslnk` crate (tiny, single-maintainer, version-0.1 dependency, identified as the highest abandonment risk in the tree) with Microsoft's own `windows` crate, already transitively present via tokio/mio. Requires COM already initialized on the calling thread (handled by the caller, `create_shortcuts`).
+- **inputs**: `dest: &Path`, `target_exe: &str`
+- **outputs**: `windows::core::Result<()>`
+- **calls**: `CoCreateInstance`, `IShellLinkW::SetPath`, `.cast::<IPersistFile>()`, `IPersistFile::Save`, `to_wide`
+- **called_by**: `create_shortcuts`
+- **mutates**: filesystem (writes the `.lnk` file)
+
+### `create_shortcuts`
+- **type**: function
+- **file**: `crates/hsip-api/src/main.rs`
+- **purpose**: `#[cfg(all(windows, feature = "embed-dashboard"))]`. Writes Desktop + Start Menu shortcuts pointing at `target_exe`. Brackets both `write_shortcut` calls in one `CoInitializeEx`/`CoUninitialize` pair. Distinguishes three `CoInitializeEx` outcomes rather than a plain success/failure check: `S_OK`/`S_FALSE` mean this call owns a COM reference and must call `CoUninitialize`; `RPC_E_CHANGED_MODE` means COM was already initialized on this (tokio-worker, potentially reused) thread under a *different* concurrency model by something else in the process — no reference was acquired, so `CoUninitialize` must NOT be called, but the existing apartment is still usable so shortcut creation proceeds rather than aborting. Any other failure HRESULT aborts. Returns a human-readable log fragment (`"shortcut ok: <path>"` / `"shortcut FAILED: <path> — <windows::core::Error>"` per attempted shortcut) instead of discarding each result — the binary runs with `windows_subsystem = "windows"` (no console), so this is the only way a real user could ever see a failure.
+- **inputs**: `target_exe: &Path`
+- **outputs**: `String` (log fragment)
+- **calls**: `dirs::desktop_dir`, `CoInitializeEx`, `write_shortcut`, `CoUninitialize`
+- **called_by**: `maybe_self_install`
+- **mutates**: filesystem (Desktop + Start Menu `.lnk` files)
 
 ### `maybe_self_install`
 - **type**: function
 - **file**: `crates/hsip-api/src/main.rs`
-- **purpose**: Copies binary to a stable path on first run (macOS `~/Applications`, Linux `~/.local/bin`) so it survives Cargo target cleanup.
+- **purpose**: `#[cfg(all(windows, feature = "embed-dashboard"))]`. If not already running from `%LOCALAPPDATA%\HSIP\hsip.exe`: creates that directory, copies the current exe there, calls `create_shortcuts` (whether or not the copy succeeded, as long as the installed exe is present — the exe may be locked because HSIP is already running), launches the installed copy (only if freshly copied, to avoid spawning a second server), and exits this process. Writes `install.log` in the install directory — the only place a real user can see what happened, since there's no console — folding in `create_shortcuts`'s per-shortcut log fragment rather than a second, differently-visible reporting path.
 - **inputs**: none
 - **outputs**: none
-- **calls**: `std::env::current_exe`, `fs::copy`
-- **called_by**: `run`
-- **mutates**: filesystem
+- **calls**: `std::env::current_exe`, `fs::copy`, `create_shortcuts`, `fs::write` (install.log), `std::process::Command::spawn`, `std::process::exit`
+- **called_by**: `main`
+- **mutates**: filesystem (`%LOCALAPPDATA%\HSIP\`, install.log, shortcuts via `create_shortcuts`), spawns a child process
 
 ### `bootstrap_admin`
 - **type**: function (async)
@@ -472,12 +492,22 @@
 ### `check_replay_protection`
 - **type**: function
 - **file**: `crates/hsip-api/src/auth.rs`
-- **purpose**: Opt-in HTTP replay protection. No-op unless the caller sends both `x-hsip-timestamp` and `x-hsip-nonce`; if only one is present, rejects with 400. If both present, rejects with 401 when the timestamp is outside `REPLAY_TOLERANCE_SECS` (5 min) of server time, or when the `(key_id, nonce)` pair has already been seen within that window (checked via `DashMap::entry` for atomic check-and-insert).
+- **purpose**: Opt-in HTTP replay protection. No-op unless the caller sends both `x-hsip-timestamp` and `x-hsip-nonce`; if only one is present, rejects with 400. If both present, rejects with 401 when the timestamp is outside `replay_tolerance_secs()` of server time, or when the `(key_id, nonce)` pair has already been seen within that window (checked via `DashMap::entry` for atomic check-and-insert).
 - **inputs**: `key_id: &str`, `parts: &Parts`, `state: &AppState`
 - **outputs**: `Result<(), ApiError>`
-- **calls**: `now_ms`, `DashMap::entry`, `metrics::REPLAY_REJECTED`
+- **calls**: `now_ms`, `replay_tolerance_secs`, `DashMap::entry`, `metrics::REPLAY_REJECTED`
 - **called_by**: `TenantId::from_request_parts`
 - **mutates**: `replay_nonces` DashMap (inserts new `(key_id, nonce)` entries with an expiry timestamp)
+
+### `replay_tolerance_secs`
+- **type**: function
+- **file**: `crates/hsip-api/src/auth.rs`
+- **purpose**: Reads `HSIP_REPLAY_TOLERANCE_SECS` env var (default 300s) — was previously a hardcoded `const` with no override, unlike `rate_limit_rpm` below, found and fixed via an architectural-resilience QA pass ("what if latency increases tenfold"): a fixed window with no way to widen it would reject legitimate requests outright if real-world latency or clock skew ever exceeded it, with no mitigation short of a code change. Doc comment carries an explicit operator caution: widening this value directly widens the replay window it exists to close, so it shouldn't be treated as a casual convenience knob.
+- **inputs**: none
+- **outputs**: `i64`
+- **calls**: `std::env::var`
+- **called_by**: `check_replay_protection`
+- **mutates**: nothing
 
 ### `check_rate_limit`
 - **type**: function
@@ -566,7 +596,7 @@
 ### `run_migrations`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/db.rs`
-- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `trusted_peers` (`id`, `tenant_id`, `label`, `verify_key`, `added_at BIGINT`, `UNIQUE(tenant_id, verify_key)`) — federated trust store for `routes/trust.rs` — was documented here and in `CLAUDE.md`'s schema table as if it already existed, but this line was aspirational until it was actually added: the table itself was missing from this function since the federated-trust feature shipped, so every `/v1/trust/*` call 500'd with "no such table" on any real database. Found while building the dashboard's Trust page; fixed by actually adding the `CREATE TABLE`. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `decisions` also has a nullable `accountable_key_signature TEXT` column (same ignored-error `ALTER TABLE` pattern) — `NULL`/empty means `accountable_key` is pure caller-asserted metadata, unchanged; set means it's a base64 Ed25519 signature by `accountable_key`'s own private key, verified against `hsip_core::canonical::accountable_proof_preimage_hash` — see `routes/decisions.rs::verify_accountable_proof`. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs. `api_keys` also has a nullable `bound_client_cert_fingerprint TEXT` column (same ignored-error `ALTER TABLE` pattern) — `NULL` (the default) means the key authenticates on bearer token alone, unchanged; set (via `POST /v1/keys/:id/bind-client-cert`) means `auth.rs` additionally requires that exact TLS client-certificate fingerprint on the connection — see `mtls.rs`.
+- **purpose**: Inline SQL migrations: creates all tables (tenants, api_keys, identities, consents, messages, audit_entries, contacts, credentials, trusted_peers, uploads, anchor_identity, decision_anchors, decisions, audit_anchors, rate_limit_state) and adds missing columns idempotently. `trusted_peers` (`id`, `tenant_id`, `label`, `verify_key`, `added_at BIGINT`, `UNIQUE(tenant_id, verify_key)`) — federated trust store for `routes/trust.rs` — was documented here and in `CLAUDE.md`'s schema table as if it already existed, but this line was aspirational until it was actually added: the table itself was missing from this function since the federated-trust feature shipped, so every `/v1/trust/*` call 500'd with "no such table" on any real database. Found while building the dashboard's Trust page; fixed by actually adding the `CREATE TABLE`. `rate_limit_state` (`kind`, `state_key`, `count`, `anomaly_count`, `window_start_ms`, `updated_at`, `PRIMARY KEY (kind, state_key)`) is a periodic snapshot of the in-memory rate-limit/AI-agent-velocity DashMaps — see `rate_limit_persistence.rs`. `anchor_identity` is a singleton row holding the node-level Ed25519 key used to sign anchored Merkle roots (distinct from any tenant identity) — shared by both decision and audit-log anchoring, not decision-specific. `decision_anchors` holds one row per RFC 6962 Merkle batch of decisions (root, signature, OpenTimestamps proof/status); `audit_anchors` is the identical shape for batches of `audit_entries` (see External Anchoring in `CLAUDE.md`). `decisions` holds AI-agent decision attestations; `UNIQUE(tenant_id, prev_hash)` serializes each tenant's hash chain against concurrent inserts. `decisions` also has a nullable `accountable_key_signature TEXT` column (same ignored-error `ALTER TABLE` pattern) — `NULL`/empty means `accountable_key` is pure caller-asserted metadata, unchanged; set means it's a base64 Ed25519 signature by `accountable_key`'s own private key, verified against `hsip_core::canonical::accountable_proof_preimage_hash` — see `routes/decisions.rs::verify_accountable_proof`. `audit_entries` has nullable `prev_hash`/`entry_hash` columns (added via `ALTER TABLE ... ADD COLUMN`, ignored-error pattern for upgrades) plus a `UNIQUE(tenant_id, prev_hash)` index (`idx_audit_chain`) that serializes the audit BLAKE3 hash chain against concurrent writers the same way `decisions` does — see `audit_log.rs`. `audit_entries` also has nullable `anchor_id`/`merkle_index` columns (same ignored-error `ALTER TABLE` pattern, plus `idx_audit_anchor` index) mirroring `decisions.anchor_id`/`merkle_index` — which `audit_anchors` batch (if any) an entry's `entry_hash` was folded into. `consents` has a nullable `granted_by_key_type` column (same ignored-error `ALTER TABLE` pattern) recording which kind of key (human/service/ai_agent) authorized the grant. `api_keys` has nullable `role` ('owner'\|'member') and `is_root_admin INTEGER NOT NULL DEFAULT 0` columns (same ignored-error `ALTER TABLE` pattern), plus a one-time backfill on upgrade: the earliest-created key in each tenant becomes `'owner'` if unset, every other unset key becomes `'member'`, and the key named `admin` in the very first tenant ever created becomes `is_root_admin=1` — preserving the pre-RBAC bootstrap-admin behavior exactly across an upgrade. Fresh installs get both columns set directly by `bootstrap_admin`'s `INSERT` instead, since that row doesn't exist yet when this backfill runs. `api_keys` also has a nullable `bound_client_cert_fingerprint TEXT` column (same ignored-error `ALTER TABLE` pattern) — `NULL` (the default) means the key authenticates on bearer token alone, unchanged; set (via `POST /v1/keys/:id/bind-client-cert`) means `auth.rs` additionally requires that exact TLS client-certificate fingerprint on the connection — see `mtls.rs`. `decisions` also has a nullable `issuer_verify_key TEXT` column (same ignored-error `ALTER TABLE` pattern) — the per-transaction derived signing key's public bytes (see `hsip_core::tx_key`); `NULL` means the row predates per-transaction key derivation and was signed directly with the tenant's root identity key, which `routes::decisions::proof` falls back to for those rows. New `submitted_receipts` table (`id`, `collector_tenant_id`, `submitter_label`, `receipt_type`, `source_tenant_id`, `source_record_id`, `bundle_json`, `valid`, `submitted_at BIGINT`, `UNIQUE(collector_tenant_id, receipt_type, source_tenant_id, source_record_id)`) — a "collector" node's inbox of already-verified proof bundles submitted by other, independent HSIP instances (see `routes/receipts.rs`); the `UNIQUE` constraint makes re-submitting the same receipt to the same collector a clean `409` instead of silent duplication.
 - **inputs**: `db: &Db`
 - **outputs**: `Result<()>`
 - **calls**: `sqlx::query().execute(db)`
@@ -880,6 +910,26 @@ Second `[[bin]]` target in `hsip-api`'s `Cargo.toml` (binary name `hsip-migrate`
 - **mutates**: nothing
 
 Note: this file previously also had a `load_master_key()` reading `HSIP_MASTER_KEY` directly — it was `#[allow(dead_code)]` and never called from the real startup path (a second, real master-key-loading function lived in `main.rs` and never consulted the env var). Removed; `main.rs::load_master_key` is now the one implementation and does read `HSIP_MASTER_KEY`.
+
+### `derive_field_encryption_key`
+- **type**: function
+- **file**: `crates/hsip-api/src/key_encryption.rs`
+- **purpose**: Derives a 32-byte ChaCha20-Poly1305 key from the master key via HKDF-SHA256, using a distinct info string (`"hsip-field-encryption-v1"`) from `derive_encryption_key`'s (`"hsip-key-encryption-v1"`) — domain separation, so a field-encrypted value can never decrypt as a signing key (or vice versa) even under the same master key, and a bug specific to one call site's usage pattern can't be leveraged against the other.
+- **inputs**: `master_key: &[u8]`
+- **outputs**: `[u8; 32]`
+- **calls**: `hkdf::Hkdf::new`, `expand`
+- **called_by**: `encrypt_field`, `decrypt_field`
+- **mutates**: nothing
+
+### `encrypt_field` / `decrypt_field`
+- **type**: function
+- **file**: `crates/hsip-api/src/key_encryption.rs`
+- **purpose**: Application-level field encryption at rest for `messages.content` and `credentials.claim`/`user_token` — same nonce(12)‖ciphertext+tag Base64 wire format as `encrypt_signing_key`/`decrypt_signing_key`, but for variable-length UTF-8 strings via the domain-separated `derive_field_encryption_key`. Chosen over SQLCipher/whole-database encryption because `sqlx::Any` spans both SQLite and PostgreSQL — a SQLite-specific extension wouldn't cover Postgres deployments, and this reuses the exact same primitive already used for signing keys with zero new dependencies. Deliberately does *not* cover `audit_entries.details` — that column is hashed as part of the BLAKE3 chain (`audit_log::compute_entry_hash`) and `GET /v1/audit/verify-proof`'s pure, DB-free, caller-supplied-plaintext contract would need a "hash the plaintext, encrypt only what's persisted" redesign not attempted in this pass.
+- **inputs**: `plaintext: &str, master_key: &[u8]` / `encrypted_b64: &str, master_key: &[u8]`
+- **outputs**: `String` / `anyhow::Result<String>`
+- **calls**: `derive_field_encryption_key`, `OsRng`, `ChaCha20Poly1305::encrypt`/`decrypt`
+- **called_by**: `routes::messages::{sign, list}`, `routes::credentials::{issue, list}`
+- **mutates**: nothing
 
 ---
 
@@ -1331,7 +1381,7 @@ module-level doc comment for why.
 ### `router`
 - **type**: function
 - **file**: `crates/hsip-api/src/routes/mod.rs`
-- **purpose**: Builds the complete Axum router with all `/v1/*` routes, static file serving, and shared state. Includes `POST /v1/keys/:id/bind-client-cert` → `keys::bind_client_cert`.
+- **purpose**: Builds the complete Axum router with all `/v1/*` routes, static file serving, and shared state. Includes `POST /v1/keys/:id/bind-client-cert` → `keys::bind_client_cert`. Includes `POST /v1/receipts/submit`, `GET /v1/receipts`, `GET /v1/receipts/:id` → `receipts::{submit, list, get_one}` — registered here per the standing invariant that a handler with no `.route(...)` line compiles fine and silently 404s.
 - **inputs**: `state: AppState`
 - **outputs**: `Router`
 - **calls**: `Router::new`, `Router::nest`, all route module `router()` functions
@@ -1553,10 +1603,10 @@ module-level doc comment for why.
 ### `sign`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/messages.rs`
-- **purpose**: `POST /v1/messages/sign` — signs content with tenant's Ed25519 key, stores record, increments MESSAGES_SIGNED counter, writes audit entry.
+- **purpose**: `POST /v1/messages/sign` — signs the request's plaintext content with the tenant's Ed25519 key (signing happens before encryption, against the request body, never the database), then encrypts `content` via `key_encryption::encrypt_field` right before the `INSERT` — an attacker with database read access alone can no longer read message content in plaintext. Increments MESSAGES_SIGNED counter, writes audit entry (only ever logs `peer_verify_key`, never `content`, so no leak-into-audit-log fix was needed here the way `credentials.rs` needed one).
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<SignResponse>>`
-- **calls**: `load_signing_key`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `audit_log::record`, `metrics::MESSAGES_SIGNED.inc`
+- **calls**: `load_signing_key`, `ed25519_dalek::SigningKey::sign`, `key_encryption::encrypt_field`, `sqlx::query`, `audit_log::record`, `metrics::MESSAGES_SIGNED.inc`
 - **called_by**: Axum router
 - **mutates**: DB (`messages`, `audit_entries`)
 
@@ -1573,10 +1623,10 @@ module-level doc comment for why.
 ### `list` (messages)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/messages.rs`
-- **purpose**: `GET /v1/messages` — returns the tenant's signed message history.
+- **purpose**: `GET /v1/messages` — returns the tenant's signed message history; decrypts each row's `content` via `key_encryption::decrypt_field` after `SELECT`, before returning to the authenticated caller.
 - **inputs**: `State(state)`, `tenant`
 - **outputs**: `ApiResult<Json<Vec<MessageRecord>>>`
-- **calls**: `sqlx::query_as`
+- **calls**: `sqlx::query_as`, `key_encryption::decrypt_field`
 - **called_by**: Axum router
 - **mutates**: nothing
 
@@ -1638,10 +1688,10 @@ module-level doc comment for why.
 ### `issue`
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/credentials.rs`
-- **purpose**: `POST /v1/credentials` — creates, signs, and stores a verifiable credential; increments CREDENTIALS_ISSUED metric.
+- **purpose**: `POST /v1/credentials` — signs the plaintext canonical JSON (unaffected by encryption — reads from the request, not the DB), then encrypts `claim`/`user_token` via `key_encryption::encrypt_field` before the `INSERT`. Increments CREDENTIALS_ISSUED metric. A real leak was found and fixed here: the audit-log call previously passed the plaintext `req.claim` as the `details` argument to `audit_log::record_best_effort`, meaning the exact plaintext the column encryption had just protected was landing unencrypted in `audit_entries.details` on every issue — fixed by logging the credential ID instead, matching what `revoke` already did correctly.
 - **inputs**: `State(state)`, `tenant`, `Json(req)`
 - **outputs**: `ApiResult<Json<IssueResponse>>`
-- **calls**: `load_signing_key`, `canonical_json`, `ed25519_dalek::SigningKey::sign`, `sqlx::query`, `audit_log::record`, `metrics::CREDENTIALS_ISSUED.inc`
+- **calls**: `load_signing_key`, `canonical_json`, `ed25519_dalek::SigningKey::sign`, `key_encryption::encrypt_field`, `sqlx::query`, `audit_log::record_best_effort`, `metrics::CREDENTIALS_ISSUED.inc`
 - **called_by**: Axum router
 - **mutates**: DB (`credentials`, `audit_entries`)
 
@@ -1668,10 +1718,10 @@ module-level doc comment for why.
 ### `list` (credentials)
 - **type**: function (async)
 - **file**: `crates/hsip-api/src/routes/credentials.rs`
-- **purpose**: `GET /v1/credentials` — returns all credentials for the tenant.
+- **purpose**: `GET /v1/credentials` — returns all credentials for the tenant; decrypts `claim`/`user_token` via `key_encryption::decrypt_field` after `SELECT`.
 - **inputs**: `State(state)`, `tenant`
 - **outputs**: `ApiResult<Json<Vec<CredentialRecord>>>`
-- **calls**: `sqlx::query_as`
+- **calls**: `sqlx::query_as`, `key_encryption::decrypt_field`
 - **called_by**: Axum router
 - **mutates**: nothing
 
@@ -2694,10 +2744,10 @@ its `payload_hash`.
 ### `record`
 - **type**: function (async handler)
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: `POST /v1/decisions` — resolves the authenticated `api_keys` row, validates fields, verifies `accountable_key_signature` if supplied (rejecting the whole request with `400` before any DB write if a *claimed* signature doesn't verify — never silently records it as unverified), builds a `DecisionEnvelope` chained to the tenant's last decision (`prev_hash`), signs its `event_hash` with the tenant's Ed25519 identity, inserts it. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS` (another request extended the chain first). Writes `decision.recorded` audit entry, increments `DECISIONS_RECORDED`.
+- **purpose**: `POST /v1/decisions` — resolves the authenticated `api_keys` row, validates fields, verifies `accountable_key_signature` if supplied (rejecting the whole request with `400` before any DB write if a *claimed* signature doesn't verify — never silently records it as unverified), builds a `DecisionEnvelope` chained to the tenant's last decision (`prev_hash`). Signs `event_hash` with a fresh, single-use key derived per decision via `hsip_core::tx_key::derive_transaction_signing_key(root_seed, tenant_id, decision_id)` — **not** the tenant's static root identity key directly — derived inside the `MAX_ATTEMPTS` retry loop since each retry generates a fresh `decision_id` needing its own derived key. Persists the derived public key as `decisions.issuer_verify_key`. Retries on `UNIQUE(tenant_id, prev_hash)` conflict up to `MAX_ATTEMPTS` (another request extended the chain first). Writes `decision.recorded` audit entry via `audit_log::record_best_effort` (found via a genuinely-concurrent test, `test_concurrent_decision_writes_do_not_fork_the_chain` — the original `.await?` on this already-committed write turned a downstream audit-write failure under real contention into a confusing `500` for a decision that had, in fact, already been recorded), increments `DECISIONS_RECORDED`.
 - **inputs**: `State(state)`, `tenant: TenantId`, `headers: HeaderMap`, `Json(req): Json<RecordDecisionRequest>`
 - **outputs**: `ApiResult<Json<RecordDecisionResponse>>`
-- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `verify_accountable_proof`, `ms_to_iso`, `hash_key`, sqlx queries, `audit_log::record`, `audit_log::chain_retry_backoff`, `metrics::CHAIN_WRITE_RETRIES`
+- **calls**: `load_signing_key`, `hsip_core::canonical::event_hash`, `hsip_core::tx_key::derive_transaction_signing_key`, `verify_accountable_proof`, `ms_to_iso`, `hash_key`, sqlx queries, `audit_log::record_best_effort`, `audit_log::chain_retry_backoff`, `metrics::CHAIN_WRITE_RETRIES`
 - **called_by**: Axum router
 - **mutates**: DB (`decisions`, `audit_entries`)
 
@@ -2713,7 +2763,7 @@ its `payload_hash`.
 ### `proof`
 - **type**: function (async handler)
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: `GET /v1/decisions/:id/proof` — builds the full proof bundle. If unanchored, returns `anchored: false` with signature-only proof. If anchored, reconstructs the batch's leaf set from `decisions.anchor_id` ordered by `merkle_index`, rebuilds the `MerkleTree`, regenerates the inclusion proof, and defensively re-checks the recomputed root against the stored `decision_anchors.merkle_root`. Also re-derives `accountable_key_verified` via `verify_accountable_proof` on every call rather than trusting a stored flag.
+- **purpose**: `GET /v1/decisions/:id/proof` — builds the full proof bundle. Reads the decision's stored `issuer_verify_key` (the per-transaction derived key — see `record`), falling back to the tenant's root `identities.verify_key_b64` for `NULL` rows that predate per-transaction key derivation. If unanchored, returns `anchored: false` with signature-only proof. If anchored, reconstructs the batch's leaf set from `decisions.anchor_id` ordered by `merkle_index`, rebuilds the `MerkleTree`, regenerates the inclusion proof, and defensively re-checks the recomputed root against the stored `decision_anchors.merkle_root`. Also re-derives `accountable_key_verified` via `verify_accountable_proof` on every call rather than trusting a stored flag.
 - **inputs**: `State(state)`, `tenant: TenantId`, `Path(id)`
 - **outputs**: `ApiResult<Json<DecisionProofBundle>>`
 - **calls**: `hsip_core::merkle::MerkleTree::from_leaves`, `MerkleTree::inclusion_proof`, `verify_accountable_proof`
@@ -2924,6 +2974,54 @@ decision-specific.
 
 ---
 
+## `crates/hsip-api/src/routes/receipts.rs`
+
+Receipt collection — lets a business run HSIP purely locally on every employee's/agent's own machine and still get one centralized audit trail, without a shared database holding everyone's raw operational data. A "collector" is just an ordinary HSIP instance/tenant whose operator accepts `POST /v1/receipts/submit` calls from other, independent instances. Each submission is a self-contained proof bundle — exactly what `GET /v1/decisions/:id/proof` / `GET /v1/audit/:id/proof` already return on the *submitting* instance — never the actual decision payload or any private key material. The collector independently re-verifies every submission using the same DB-free verification logic a third party would run before ever storing it.
+
+### `SubmitReceiptRequest` / `SubmitReceiptResponse`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/receipts.rs`
+- **purpose**: Request: `submitter_label` (caller-supplied, informational only — not a verified identity claim), `receipt_type` (`"decision"` \| `"audit"`), `bundle` (the verbatim proof bundle JSON from the submitting instance's own proof endpoint). Response: `id`, `valid`, `source_tenant_id`, `source_record_id`.
+- **called_by**: `submit`
+
+### `ReceiptSummary` / `ReceiptDetail`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/receipts.rs`
+- **purpose**: `ReceiptSummary` — list-view row (no bundle body). `ReceiptDetail` — full stored record including the original `bundle` JSON.
+- **called_by**: `list`, `get_one`
+
+### `submit`
+- **type**: function (async handler)
+- **file**: `crates/hsip-api/src/routes/receipts.rs`
+- **purpose**: `POST /v1/receipts/submit` — deserializes the caller-supplied `bundle` into the exact same `VerifyDecisionRequest`/`VerifyAuditProofRequest` shape `routes::decisions::verify`/`routes::audit::verify_proof` already accept, and calls those functions **directly as ordinary async functions** (same process, not over HTTP) to independently re-verify before ever storing. A bundle that fails to deserialize, or verifies `false`, is rejected `400` and never reaches the `INSERT`. Duplicate submission (same `collector_tenant_id`/`receipt_type`/`source_tenant_id`/`source_record_id`) hits the table's `UNIQUE` constraint, mapped to a clean `409 Conflict`. Writes `receipt.submitted` audit entry via `audit_log::record_best_effort`.
+- **inputs**: `State(state)`, `tenant: TenantId`, `Json(req): Json<SubmitReceiptRequest>`
+- **outputs**: `ApiResult<Json<SubmitReceiptResponse>>`
+- **calls**: `routes::decisions::verify`, `routes::audit::verify_proof`, `sqlx::query`, `audit_log::record_best_effort`
+- **called_by**: Axum router
+- **mutates**: DB (`submitted_receipts`, `audit_entries`)
+
+### `list` (receipts)
+- **type**: function (async handler)
+- **file**: `crates/hsip-api/src/routes/receipts.rs`
+- **purpose**: `GET /v1/receipts` — summaries only, newest first, scoped to the calling collector tenant.
+- **inputs**: `State(state)`, `tenant: TenantId`
+- **outputs**: `ApiResult<Json<Vec<ReceiptSummary>>>`
+- **calls**: `sqlx::query`
+- **called_by**: Axum router
+- **mutates**: nothing
+
+### `get_one` (receipts)
+- **type**: function (async handler)
+- **file**: `crates/hsip-api/src/routes/receipts.rs`
+- **purpose**: `GET /v1/receipts/:id` — full detail including the original bundle, for a deeper audit.
+- **inputs**: `State(state)`, `tenant: TenantId`, `Path(id)`
+- **outputs**: `ApiResult<Json<ReceiptDetail>>`
+- **calls**: `sqlx::query`
+- **called_by**: Axum router
+- **mutates**: nothing
+
+---
+
 ## `crates/hsip-api/src/system_health.rs`
 
 Aggregates conditions needing a human operator's attention that the rest of
@@ -2994,7 +3092,7 @@ and `hsip status`'s health section.
 ### `Commands`
 - **type**: enum
 - **file**: `crates/hsip-cli/src/main.rs`
-- **purpose**: Top-level clap subcommand enum: Keygen, Init, Export, Import, Consent, Session, Token, Discover, Reputation, Daemon, Audit, Agent, Trust, Keys, Up, Status, Diag.
+- **purpose**: Top-level clap subcommand enum: Keygen, Init, Export, Import, Consent, Session, Token, Discover, Reputation, Daemon, Audit, Agent, Trust, Keys, Up, Status, Diag, Receipts.
 - **inputs**: none
 - **outputs**: none
 - **calls**: none
@@ -3674,6 +3772,28 @@ and `hsip status`'s health section.
 - **calls**: none
 - **called_by**: `probe_health`
 - **mutates**: nothing
+
+---
+
+## `crates/hsip-cli/src/commands/receipts.rs`
+
+Client-side half of `routes::receipts` — `hsip receipts submit`. Fetches a local decision/audit proof bundle from *this* machine's own instance, then submits it to a remote "collector" using a separate, collector-scoped bearer key.
+
+### `ReceiptsCmd`
+- **type**: enum
+- **file**: `crates/hsip-cli/src/commands/receipts.rs`
+- **purpose**: `Submit { id, r#type ("decision" default or "audit"), label, collector_url, collector_key (env `HSIP_COLLECTOR_KEY`), api_url, key }` — the two credentials (`key` for this machine's own local instance, `collector_key` for the remote collector) are deliberately distinct, since they authenticate to two different machines.
+- **called_by**: `main.rs`'s `Commands::Receipts` match arm
+
+### `submit` (receipts CLI)
+- **type**: function
+- **file**: `crates/hsip-cli/src/commands/receipts.rs`
+- **purpose**: Resolves local key via `--key`/`HSIP_API_KEY`/`util::load_admin_key()` same as every other command. `GET`s the proof bundle from `{local_base}/v1/decisions/:id/proof` or `/v1/audit/:id/proof` depending on `--type`, then `POST`s `{submitter_label, receipt_type, bundle}` to `{collector_url}/v1/receipts/submit` using the collector key. Prints the collector's confirmation (receipt ID, source tenant/record ID, verified status).
+- **inputs**: `id: String`, `receipt_type: String`, `label: String`, `collector_url: String`, `collector_key: String`, `api_url: Option<String>`, `key: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `util::load_admin_key`, `reqwest::blocking::Client`
+- **called_by**: `run`
+- **mutates**: nothing locally (network calls only)
 
 ---
 
@@ -4729,6 +4849,30 @@ formatting.
 - **outputs**: `Result<[u8; 32], serde_json::Error>`
 - **calls**: `serde_jcs::to_vec`, `sha2::Sha256::digest`
 - **called_by**: `hsip-api`'s `routes::decisions::verify_accountable_proof`; Python SDK's `HSIPClient.accountable_proof_preimage_hash` is an independent reimplementation of the same formula (confirmed byte-identical output for identical input before being trusted)
+
+---
+
+## `crates/hsip-core/src/tx_key.rs`
+
+Per-transaction signing-key derivation (HKDF-SHA256), pure — no I/O, same discipline as `merkle.rs`/`canonical.rs`. Raised directly as a design question: could decisions be signed with a key that "rotates into randomness" per transaction, impossible for an attacker to link or steal as one static master key, while still letting an authorized audit confirm every one of a tenant's transaction keys descends from that same tenant? The first framing of the idea (embedding a literal recognizable substring across otherwise-random-looking keys) was flagged before building anything — a fixed, attacker-visible substring is self-defeating (more linkable, not less, and shrinks actual entropy). The corrected approach is standard cryptographic key derivation, not tagging.
+
+### `derive_transaction_signing_key`
+- **type**: function
+- **file**: `crates/hsip-core/src/tx_key.rs`
+- **purpose**: HKDF-SHA256 with `tenant_id` as salt (domain separation between tenants) and `"hsip-tx-key-v1|" + transaction_id` as info (binds the derived key to exactly one transaction). Deterministically derives a fresh, single-use Ed25519 signing key per decision from the tenant's root seed. Two properties together: unlinkable to an outside observer (HKDF output is computationally indistinguishable from random without `root_seed` — two decisions from the same tenant produce unrelated-looking public keys on the wire), and re-derivable/verifiable by anyone holding `root_seed` (the tenant itself, or an auditor given temporary access). Does **not** make a tenant's own decisions unlinkable within HSIP's own database — `tenant_id` sits right next to every decision there regardless, for ordinary multi-tenant operation.
+- **inputs**: `root_seed: &[u8; 32]`, `tenant_id: &str`, `transaction_id: &str`
+- **outputs**: `ed25519_dalek::SigningKey`
+- **calls**: `hkdf::Hkdf::new`, `expand`
+- **called_by**: `hsip-api`'s `routes::decisions::record` (inside the `MAX_ATTEMPTS` chain-retry loop, since each retry generates a fresh `decision_id` needing its own derived key)
+
+### `verify_transaction_key_derivation`
+- **type**: function
+- **file**: `crates/hsip-core/src/tx_key.rs`
+- **purpose**: Audit-side check — re-derives the transaction key from the same inputs and compares its public bytes against a claimed verify key. This is the audit story the original design question asked for: proving a set of transaction keys all trace back to one identity, without HSIP storing any new secret to make that provable.
+- **inputs**: `root_seed: &[u8; 32]`, `tenant_id: &str`, `transaction_id: &str`, `claimed_verify_key: &[u8; 32]`
+- **outputs**: `bool`
+- **calls**: `derive_transaction_signing_key`
+- **called_by**: not yet wired into any HTTP route (available for an auditor with temporary root-seed access to run directly); covered by unit tests
 
 ---
 
