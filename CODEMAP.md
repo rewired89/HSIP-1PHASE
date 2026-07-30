@@ -3696,7 +3696,7 @@ and `hsip status`'s health section.
 ### `run` (up)
 - **type**: function (async)
 - **file**: `crates/hsip-cli/src/commands/up.rs`
-- **purpose**: `hsip up` — checks server health, starts it if down, ensures identity exists, opens dashboard in browser, prints welcome box.
+- **purpose**: `hsip up` — checks server health, starts it if down, ensures identity exists, opens dashboard in browser, prints welcome box followed by a federated-trust onboarding hint (`hsip status` to show your verify key, `hsip trust add` for peers to trust it).
 - **inputs**: `args: UpArgs`
 - **outputs**: `Result<()>`
 - **calls**: `probe_health`, `find_hsip_api_bin`, `get_identity`, `open_in_browser`, `print_start_hint`

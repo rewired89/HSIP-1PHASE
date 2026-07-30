@@ -120,6 +120,9 @@ pub fn run(args: UpArgs) -> Result<()> {
     println!("  │    hsip status                                                │");
     println!("  └───────────────────────────────────────────────────────────────┘");
     println!();
+    println!("  Share your verify key with peers: `hsip status` shows it.");
+    println!("  They run `hsip trust add <label> <key>` to trust your messages.");
+    println!();
 
     if !args.no_browser {
         open_in_browser(&base);
