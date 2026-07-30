@@ -4910,6 +4910,24 @@ Per-transaction signing-key derivation (HKDF-SHA256), pure — no I/O, same disc
 
 ---
 
+## `dashboard/src/index.jsx`
+
+### (module body — no named exports)
+- **type**: entry point
+- **file**: `dashboard/src/index.jsx`
+- **purpose**: The real React entry point — `index.html` loads `/src/index.jsx` directly (confirmed via `index.html`'s `<script type="module" src="/src/index.jsx">`). Mounts `<App />` into `#root` inside `React.StrictMode`.
+- **calls**: `ReactDOM.createRoot`, `App`
+- **called_by**: `index.html` (module script tag)
+- **mutates**: DOM (`#root`)
+
+---
+
+## `dashboard/src/main.jsx`
+
+**Dead file, not part of the running app.** Found while completing this document's coverage: this file does the same job as `index.jsx` (creates the React root and renders `<App />`) but nothing references it — `index.html` loads `index.jsx`, not this file. Almost certainly a leftover from the original Vite React template scaffold that was never deleted once the project renamed/restructured its real entry point. Safe to delete; not documented further since it isn't live code.
+
+---
+
 ## `dashboard/src/App.jsx`
 
 Navigation is a **Simple/Expert mode toggle**, not progressive disclosure — this section previously documented an earlier progressive-disclosure refactor (`SIMPLE_TABS`/`EXPERT_TABS` described as "primary"/"Advanced behind a toggle", `showAdv`, `navigateTo`) that a later UI-redesign commit reintroduced the mode split on top of, without this file being updated. Rewritten here to match what's actually in the file — see "Dashboard" in `CLAUDE.md` for the same correction and why.
@@ -5269,6 +5287,36 @@ Navigation is a **Simple/Expert mode toggle**, not progressive disclosure — th
 - **calls**: `request`, `AgentCard`, `ConnectDialog`
 - **called_by**: `App`
 - **mutates**: nothing
+
+---
+
+## `dashboard/src/data/trackers.js`
+
+Static data module, not logic — HSIP's consumer-facing tracker knowledge base, feeding `TrackerInspector.jsx`. Its own header comment says it's "sourced from `hsip-telemetry-guard/src/known_endpoints.rs`" with consumer-friendly descriptions added on top.
+
+### `RISK_LEVEL` / `CATEGORIES`
+- **type**: variable (const object / const array)
+- **file**: `dashboard/src/data/trackers.js`
+- **purpose**: `RISK_LEVEL` maps `critical`/`high`/`medium`/`low` to a display label and color pair. `CATEGORIES` is the fixed list of tracker categories used for the Tracker Inspector's filter UI (Session Recording, Ad Network, Analytics, Social, Microsoft, Crash Reporting, Data Broker, Email Tracking, Fingerprinting, plus "All").
+- **called_by**: `TrackerInspector.jsx`
+
+### `TRACKERS`
+- **type**: variable (const array)
+- **file**: `dashboard/src/data/trackers.js`
+- **purpose**: The tracker knowledge base itself — one entry per known tracker domain (`vendor`, `domain`, a plain-English one-liner, a longer `description`, `category`, `risk`, `safeToBlock`). Covers session-recording tools (Hotjar, FullStory, Microsoft Clarity, etc.), ad networks, social pixels, analytics platforms, Microsoft telemetry endpoints, data brokers, email-open trackers, and fingerprinting services. `safeToBlock: false` is used for a handful of entries (e.g. Sentry, Firebase Crashlytics, Mailchimp) where blocking could break legitimate functionality the user likely wants (crash reports, email delivery) rather than pure surveillance.
+- **called_by**: `TrackerInspector.jsx`
+
+### `TRACKER_STATS`
+- **type**: variable (const object)
+- **file**: `dashboard/src/data/trackers.js`
+- **purpose**: Derived summary counts (`total`, `critical`, `high`, `safeToBlock`) computed once from `TRACKERS` at module load, so page components don't recompute the same `.filter().length` on every render.
+- **called_by**: `TrackerInspector.jsx`
+
+### `FIRST_PARTY_BRANDS`
+- **type**: variable (const object)
+- **file**: `dashboard/src/data/trackers.js`
+- **purpose**: A separate lookup keyed by bare domain (google.com, amazon.com, netflix.com, etc.) for well-known first-party sites users commonly search for in the Tracker Inspector — these are *not* third-party trackers themselves, but the entry explains what data collection the company itself does and cross-references any `TRACKERS` entries it operates (e.g. `google.com` → `google-analytics.com`, `doubleclick.net`). Exists so a user searching "google.com" gets a real, honest answer instead of "not a tracker, nothing found."
+- **called_by**: `TrackerInspector.jsx`
 
 ---
 
@@ -5729,6 +5777,87 @@ Navigation is a **Simple/Expert mode toggle**, not progressive disclosure — th
 
 ---
 
+## `dashboard/src/pages/Decisions.jsx`
+
+Expert-mode AI Decisions page — pre-existing, not new (a stale roadmap item once claimed this was missing from the dashboard; corrected in CLAUDE.md). Already covers anchor/proof status, not just record/list.
+
+### `sha256Hex`
+- **type**: function (async)
+- **file**: `dashboard/src/pages/Decisions.jsx`
+- **purpose**: Browser-side SHA-256 via `crypto.subtle.digest` — mirrors the server-side design goal that HSIP only ever receives a hash of a decision's real content, never the content itself. Used by the "+ Connect" flow's generated code snippets, not to hash anything the dashboard itself submits.
+- **inputs**: `text: string`
+- **outputs**: `Promise<string>` (hex digest)
+- **calls**: `crypto.subtle.digest`
+- **called_by**: `Decisions`
+
+### `ConnectDialog`
+- **type**: function (React component)
+- **file**: `dashboard/src/pages/Decisions.jsx`
+- **purpose**: Registers a new `ai_agent`-type key (`POST /v1/keys`) for connecting an external trading bot / AI agent, then shows the raw key once alongside copy-paste-ready Python and curl snippets for calling `record_decision`/`POST /v1/decisions` — pre-filled with the current identity's `accountable_key` so the snippet works without edits beyond the caller's own `payload_hash`.
+- **inputs**: `apiKey: string`, `identity: object`, `onDone: function`, `onClose: function`
+- **outputs**: JSX
+- **calls**: `request` (`POST /v1/keys`)
+- **called_by**: `Decisions`
+- **mutates**: DB via API (`api_keys`)
+
+### `ProofPanel`
+- **type**: function (React component)
+- **file**: `dashboard/src/pages/Decisions.jsx`
+- **purpose**: Fetches and displays one decision's full proof bundle (`GET /v1/decisions/:id/proof`) — signature, anchor/Merkle status, `accountable_key_verified` — the UI surface for "prove this decision is real" without needing curl.
+- **inputs**: `decisionId: string`, `apiKey: string`, `onClose: function`
+- **outputs**: JSX
+- **calls**: `request` (`GET /v1/decisions/:id/proof`)
+- **called_by**: `Decisions`
+- **mutates**: nothing
+
+### `Decisions`
+- **type**: function (React component, default export)
+- **file**: `dashboard/src/pages/Decisions.jsx`
+- **purpose**: Lists recorded decisions (`GET /v1/decisions`), shows relative time via `timeAgo`, opens `ConnectDialog` to register a new agent and `ProofPanel` to inspect a specific decision's proof/anchor status.
+- **inputs**: `apiKey: string`
+- **outputs**: JSX
+- **calls**: `request`, `timeAgo`
+- **called_by**: `App` (Expert mode, `decisions` tab)
+- **mutates**: nothing directly (delegates to `ConnectDialog` for key creation)
+
+---
+
+## `dashboard/src/pages/DecisionsSimple.jsx`
+
+Simple-mode ("For Everyone") counterpart to `Decisions.jsx`, under the "AI Decisions" tab — same underlying data, presented without Expert-mode's proof/anchor detail density.
+
+### `DecisionRow`
+- **type**: function (React component)
+- **file**: `dashboard/src/pages/DecisionsSimple.jsx`
+- **purpose**: One decision's plain-language summary row (agent name, decision type, when) for the Simple-mode list — deliberately less technical than Expert mode's raw hash/signature display.
+- **inputs**: `d: object` (decision record), `apiKey: string`
+- **outputs**: JSX
+- **calls**: `request` (as needed for detail expansion)
+- **called_by**: `DecisionsSimple`
+- **mutates**: nothing
+
+### `ConnectSimpleDialog`
+- **type**: function (React component)
+- **file**: `dashboard/src/pages/DecisionsSimple.jsx`
+- **purpose**: Simple-mode's version of `Decisions.jsx`'s `ConnectDialog` — same underlying `POST /v1/keys` agent registration, plainer-language copy for a non-developer audience.
+- **inputs**: `apiKey: string`, `identity: object`, `onDone: function`, `onClose: function`
+- **outputs**: JSX
+- **calls**: `request` (`POST /v1/keys`)
+- **called_by**: `DecisionsSimple`
+- **mutates**: DB via API (`api_keys`)
+
+### `DecisionsSimple`
+- **type**: function (React component, default export)
+- **file**: `dashboard/src/pages/DecisionsSimple.jsx`
+- **purpose**: The "AI Decisions" tab in Simple ("For Everyone") mode — lists decisions via `DecisionRow`, offers the same "+ Connect" agent-registration flow as Expert mode's `Decisions.jsx` via `ConnectSimpleDialog`, without anchor/proof internals.
+- **inputs**: `apiKey: string`
+- **outputs**: JSX
+- **calls**: `request`, `timeAgo`
+- **called_by**: `App` (Simple mode, `ai-decisions` tab)
+- **mutates**: nothing directly (delegates to `ConnectSimpleDialog` for key creation)
+
+---
+
 ## `dashboard/src/pages/Trust.jsx`
 
 ### `Trust`
@@ -6114,6 +6243,26 @@ Node-level administration: master key fingerprint/rotation and root-admin list/g
 - **called_by**: content script injection
 - **mutates**: nothing
 
+
+---
+
+## `sdks/python/hsip/__init__.py`
+
+### (module body — no named functions)
+- **type**: package init
+- **file**: `sdks/python/hsip/__init__.py`
+- **purpose**: Re-exports `HSIPClient`/`HSIPError` from `client.py` so callers can `from hsip import HSIPClient` instead of `from hsip.client import HSIPClient`. Sets `__version__ = "0.1.0"`.
+- **called_by**: any consumer of the `hsip` Python package
+
+---
+
+## `sdks/python/setup.py`
+
+### (module body — no named functions)
+- **type**: packaging metadata (setuptools)
+- **file**: `sdks/python/setup.py`
+- **purpose**: `setuptools.setup()` call declaring the `hsip-sdk` package (`python_requires >= 3.8`, no cryptography dependency — deliberate, per CLAUDE.md's SDK design, so signing is left to whatever Ed25519 library the caller already uses).
+- **called_by**: `pip install`
 
 ---
 
