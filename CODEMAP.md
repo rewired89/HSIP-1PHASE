@@ -6797,3 +6797,4959 @@ Z3 formula builders for the three properties themselves (consent non-forgery, te
 - **purpose**: When a property proof's negation is satisfiable (i.e. the property doesn't hold), builds a human-readable `Counterexample` from the Z3 model that satisfied it — concrete values showing exactly how the property fails, not just a bare "unsat/sat" result.
 - **called_by**: `lib.rs`'s `Verifier::verify_*` methods (on the violated path)
 
+
+---
+
+## `crates/hsip-dns/src/lib.rs`
+
+HSIP's UDP DNS tracker-blocking resolver — a lightweight server bound to `127.0.0.1:<port>` (5300 by default) that returns NXDOMAIN for a curated tracker/ad blocklist and transparently forwards everything else to `1.1.1.1:53`. This file has a real, already-fixed security history: the upstream-forwarding path used to bind an unconnected `0.0.0.0:0` socket, `send_to` the query, then `recv_from` and relay back *whatever arrived* with no check on source address or transaction ID — classic DNS response spoofing (any attacker who could reach the ephemeral forwarding port could race the real upstream). The fix, present in the code below, is two-layered: `.connect(upstream)` on the forwarding socket (kernel-level source filtering — the OS itself refuses datagrams from any address other than the connected peer) plus `response_transaction_id_matches` as defense-in-depth against a misbehaving/compromised-but-correctly-addressed upstream.
+
+### `TRACKER_DOMAINS`
+- **type**: variable (static `&[(&str, &str, &str)]`)
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Hardcoded blocklist of `(domain_suffix, vendor, category)` tuples — Google/Meta/Microsoft/Apple analytics and ad-tech domains, session-recording tools (Hotjar, FullStory, LogRocket, etc.), and major ad networks. Deliberately excludes dual-purpose domains (`facebook.com`, `google.com`, `youtube.com` themselves) to avoid breaking normal browsing — only subdomains/services *exclusively* used for tracking are listed.
+- **called_by**: `lookup_block`, `DnsHandle::blocklist_size`
+- **mutates**: nothing (compile-time constant)
+
+### `now_ms`
+- **type**: function
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Current Unix epoch time in milliseconds, defaulting to 0 on clock error rather than panicking.
+- **outputs**: `i64`
+- **calls**: `SystemTime::now`, `duration_since`
+- **called_by**: `handle_query` (for `DnsLogEntry::timestamp_ms`)
+- **mutates**: nothing
+
+### `lookup_block`
+- **type**: function
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Case-insensitive, trailing-dot-tolerant suffix match of `hostname` against `TRACKER_DOMAINS` — matches either an exact domain or any subdomain of it (`.suffix`).
+- **inputs**: `hostname: &str`
+- **outputs**: `Option<(&'static str, &'static str)>` (vendor, category)
+- **calls**: nothing beyond stdlib string ops
+- **called_by**: `handle_query`
+- **mutates**: nothing
+
+### `parse_qname`
+- **type**: function
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Hand-rolled DNS QNAME parser starting at a byte offset — walks length-prefixed labels, follows compression pointers (`0xC0` high bits), and guards against compression-pointer loops via a `visited` `HashSet` of positions (an infinite loop here would be a trivial DoS otherwise). Returns the dotted hostname plus the offset just past QTYPE/QCLASS so the caller knows where the question section ends.
+- **inputs**: `buf: &[u8]`, `pos: usize`
+- **outputs**: `Option<(String, usize)>` — `None` on any malformed/truncated/looping input
+- **calls**: nothing beyond stdlib
+- **called_by**: `handle_query`
+- **mutates**: nothing
+
+### `build_nxdomain`
+- **type**: function
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Builds a minimal NXDOMAIN response by copying the query's transaction ID and question section verbatim, preserving the RD (recursion desired) bit and setting QR=1/RA=1/RCODE=3. Returns an empty `Vec` for any query shorter than a DNS header (12 bytes), which the caller checks before sending.
+- **inputs**: `query: &[u8]`
+- **outputs**: `Vec<u8>`
+- **calls**: nothing beyond stdlib
+- **called_by**: `handle_query`
+- **mutates**: nothing
+
+### `DnsStats`
+- **type**: struct
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Live atomic counters (`queries_total`, `blocked_total`) exposed to `hsip-api`'s `/v1/dns/status` route via the shared `DnsHandle`.
+- **called_by**: `handle_query` (increments), `hsip-api::routes::dns`
+
+### `DnsLogEntry`
+- **type**: struct
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: One recent-activity record (domain, blocked flag, vendor/category if blocked, timestamp) — serializable, surfaced via `/v1/dns/log`.
+- **called_by**: `handle_query`, `hsip-api::routes::dns`
+
+### `DnsLog`
+- **type**: struct
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Rolling circular buffer capped at 200 entries (`VecDeque` behind a `tokio::sync::RwLock`) so the recent-activity log can't grow unbounded over a long-running desktop session.
+- **calls**: `RwLock::write`
+- **called_by**: `start` (constructs), `handle_query` (pushes)
+- **mutates**: its own `entries` deque
+
+### `DnsLog::push`
+- **type**: function (async)
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Appends one entry, evicting the oldest (`pop_front`) once the buffer hits 200 — a fixed-size ring, not a growing log.
+- **inputs**: `&self`, `entry: DnsLogEntry`
+- **mutates**: `self.entries`
+
+### `DnsHandle`
+- **type**: struct
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Cloneable handle returned by `start()` — carries shared `stats`/`log` `Arc`s, the bound `port`, and a `shutdown_tx` broadcast sender used to stop the background resolver task without killing the whole process.
+- **called_by**: `hsip-api::routes::dns` (start/stop/status/log handlers), `state.rs`'s `AppState`
+
+### `DnsHandle::shutdown`
+- **type**: function
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Signals the resolver loop to exit by sending on `shutdown_tx`; the `let _ =` discards the send error, which only happens if the loop has already exited (nothing to notify).
+- **mutates**: sends on the internal broadcast channel
+
+### `DnsHandle::blocklist_size`
+- **type**: function
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Reports the total number of tracker entries — used by the dashboard/API to show "N trackers blocked" without hardcoding the count separately.
+- **outputs**: `usize`
+- **calls**: `TRACKER_DOMAINS.len()`
+
+### `start`
+- **type**: function (async)
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Binds a UDP socket on `127.0.0.1:<port>`, constructs the shared stats/log/shutdown-channel state, and spawns `resolver_loop` as a background Tokio task, returning immediately with a `DnsHandle`. Fails (propagates `io::Error`) if the port is already bound — this is what surfaces as "DNS resolver failed to start" in `routes/dns.rs`.
+- **inputs**: `port: u16`
+- **outputs**: `std::io::Result<DnsHandle>`
+- **calls**: `UdpSocket::bind`, `tokio::spawn(resolver_loop(...))`
+- **called_by**: `hsip-api::routes::dns::enable` (via `AppState`)
+- **mutates**: binds a real OS socket; spawns a task
+
+### `resolver_loop`
+- **type**: function (async)
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: The resolver's main event loop — `tokio::select!`s between a shutdown signal and incoming datagrams on the bound socket. Each received query is handed off to a freshly `tokio::spawn`ed `handle_query` task so one slow/stuck upstream lookup can't block subsequent queries.
+- **inputs**: `socket: Arc<UdpSocket>`, `stats: Arc<DnsStats>`, `log: Arc<DnsLog>`, `stop: broadcast::Receiver<()>`
+- **calls**: `socket.recv_from`, `tokio::spawn(handle_query(...))`
+- **called_by**: `start`
+- **mutates**: nothing directly (delegates to spawned tasks)
+
+### `handle_query`
+- **type**: function (async)
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: The core per-query handler and the site of the DNS-spoofing fix. Parses the QNAME, checks it against the blocklist (logs + replies NXDOMAIN + increments `blocked_total` if matched), otherwise forwards to `1.1.1.1:53`. The forwarding socket is bound on `0.0.0.0:0` (not loopback-only — a query could theoretically arrive from anywhere reachable, though in practice only loopback traffic reaches this resolver) and then **`.connect(upstream)`ed before sending** — this is the primary fix: a connected UDP socket has the OS itself silently drop any datagram whose source address doesn't match the connected peer, closing the response-spoofing window an unconnected `send_to`/`recv_from` pair left wide open. `response_transaction_id_matches` is then checked as a second, cheap layer even against the genuinely-connected peer. A 3-second timeout on the upstream `recv` prevents a silent/dead upstream from leaking the spawned task.
+- **inputs**: `socket: Arc<UdpSocket>` (the resolver's own listening socket, used to reply to the client), `stats: Arc<DnsStats>`, `log: Arc<DnsLog>`, `query: Vec<u8>`, `client: SocketAddr`, `upstream: SocketAddr`
+- **calls**: `parse_qname`, `lookup_block`, `build_nxdomain`, `DnsLog::push`, `UdpSocket::bind("0.0.0.0:0")`, `fwd.connect`, `fwd.send`, `fwd.recv` (via `tokio::time::timeout`), `response_transaction_id_matches`, `socket.send_to`
+- **called_by**: `resolver_loop` (spawned per query)
+- **mutates**: `stats` atomics, `log`'s ring buffer; sends real UDP packets
+
+### `response_transaction_id_matches`
+- **type**: function
+- **file**: `crates/hsip-dns/src/lib.rs`
+- **purpose**: Cheap defense-in-depth check that the response's first two bytes (DNS transaction ID) equal the query's — catches response confusion even from the correctly-connected upstream peer (e.g. a misbehaving or compromised resolver), on top of the `connect()`-based OS-level source filtering that's the primary defense.
+- **inputs**: `query: &[u8]`, `response: &[u8]`
+- **outputs**: `bool`
+- **called_by**: `handle_query`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/lib.rs`
+
+Crate root — declares every public module of `hsip-core`, the crypto/protocol primitives crate this project's CLAUDE.md marks "Core — do not break." Two crate-level lint allows apply workspace-wide (`clippy::doc_markdown`, `clippy::missing_const_for_fn`). Notable structure: `crypto` is declared as an inline module block (`pub mod crypto { pub mod aead; pub mod labels; pub mod nonce; }`) rather than a `crypto/mod.rs` `pub mod` line for its children — both `aead`/`labels`/`nonce` under `crypto::` and a separate top-level `nonce` module (used by `error.rs`/`hello.rs`-adjacent replay-window code) coexist as genuinely distinct types, not a re-export of one by the other. `pqc` is the only module gated behind a Cargo feature (`#[cfg(feature = "pqc")]`), which is enabled by default in `Cargo.toml` (`default = ["pqc"]`).
+- **Modules declared**: `aad`, `consent`, `consent_policy`, `error`, `hello`, `liveness`, `nonce`, `session`, `session_resumption`, `traffic_shaping`, `crypto` (with nested `aead`/`labels`/`nonce`), `canonical`, `identity`, `keystore`, `merkle`, `tx_key`, `wire`, `constant_time`, `secure_memory`, and feature-gated `pqc`.
+- **Notable omission**: `verification.rs` exists on disk in this directory but has **no `pub mod verification;` line anywhere in this file** (confirmed by grep — nothing declares it). It is not part of the compiled crate at all; see the `verification.rs` entry below for what that means in practice.
+
+---
+
+## `crates/hsip-core/src/consent.rs`
+
+Implements HSIP's original UDP-based consent request/response protocol — a requester asks to use some content (identified by a BLAKE3 CID) for a stated purpose, and a responder cryptographically signs an allow/deny decision bound to that specific request. Distinct from, and older than, `consent_policy.rs` (which evaluates *how* to decide) and the HTTP-API-level `consents` table in `hsip-api` (which is the actual persisted consent record system) — this module is the wire-level signed-message construction/validation layer for the peer-to-peer UDP flow.
+
+### `ConsentRequestFlags`
+- **type**: struct
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: Policy/reputation signals attached to a request for downstream decision-making (unknown peer, prior denial, failed-attempt count, rate-limited, suspicious). `Default` deliberately sets `unknown_peer: true` — the safe default assumption for a peer with no other flags set.
+- **called_by**: `ConsentRequestMetadata`, `consent_policy::ConsentPolicy::evaluate`
+
+### `ConsentRequestMetadata`
+- **type**: struct
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: Extended context for evaluating one request — cryptographically-derived `peer_id`, the caller-supplied (unverified) `purpose` string, a signature-verified `timestamp_ms`, and the `ConsentRequestFlags` above.
+- **called_by**: `consent_policy::ConsentPolicy::evaluate`
+
+### `ConsentRequest`
+- **type**: struct
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: The wire-format signed request: version, requester peer ID + pubkey hex, content CID, purpose, expiry/timestamp, a random 12-byte nonce, and the Ed25519 signature (all hex-encoded for JSON transport).
+- **called_by**: `create_signed_request`, `validate_request`, `create_signed_response`, `validate_response`
+
+### `ConsentResponse`
+- **type**: struct
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: The wire-format signed response, cryptographically bound to a specific request via `request_hash_hex` (a BLAKE3 hash of the request's signed-string form, not the request's own signature) — decision is `"allow"`/`"deny"`, with a TTL that must be zero for denials.
+- **called_by**: `create_signed_response`, `validate_response`
+
+### `cid_hex`
+- **type**: function
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: BLAKE3 content identifier as a hex string — how a requester names "this content" without HSIP needing to see the content itself beyond its hash, the same content-hash-only philosophy later reused by decision attestations' `payload_hash`.
+- **inputs**: `bytes: &[u8]`
+- **outputs**: `String`
+- **calls**: `blake3::hash`, `hex::encode`
+- **mutates**: nothing
+
+### `derive_peer_id`
+- **type**: function
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: Thin re-export of `identity::peer_id_from_pubkey` under a `hsip_identity_module` private alias — exists so this file's public API surface reads as `consent::derive_peer_id` without requiring every caller to import `identity` directly.
+- **inputs**: `vk: &VerifyingKey`
+- **outputs**: `String`
+- **calls**: `identity::peer_id_from_pubkey`
+- **called_by**: `create_signed_request`, `validate_request`, `create_signed_response`, `validate_response`
+- **mutates**: nothing
+
+### `serialize_request_for_signature` / `serialize_response_for_signature`
+- **type**: function (private)
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: Produce the exact pipe-delimited string that gets Ed25519-signed for a request/response — a hand-built format string (`"CONSENT_REQUEST|v=...|pid=...|..."`), not JCS/canonical-JSON like the newer `canonical.rs` decision-attestation format. Both the signer and every verifier must call the same function, which they do — this is the single source of truth for "what bytes actually got signed."
+- **inputs**: `&ConsentRequest` / `&ConsentResponse`
+- **outputs**: `String`
+- **called_by**: `create_signed_request`/`validate_request` (request); `create_signed_response`/`validate_response` (response)
+- **mutates**: nothing
+
+### `create_signed_request`
+- **type**: function
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: Builds a `ConsentRequest` (deriving the peer ID from the verify key, generating a fresh random 12-byte nonce via `OsRng`) and signs its canonical string form with the requester's Ed25519 key.
+- **inputs**: `signing_key: &SigningKey`, `verify_key: &VerifyingKey`, `content_id: String`, `usage_purpose: String`, `expiration_timestamp: u64`, `current_timestamp: u64`
+- **outputs**: `ConsentRequest`
+- **calls**: `derive_peer_id`, `OsRng::fill_bytes`, `serialize_request_for_signature`, `signing_key.sign`
+- **mutates**: nothing (returns new value)
+
+### `validate_request`
+- **type**: function
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: Full cryptographic validation of an incoming request — decodes and reconstructs the `VerifyingKey`, recomputes the expected peer ID and checks it matches the claimed one (catches a request whose `peer_id` doesn't actually derive from its own `pub_key`), then verifies the Ed25519 signature via `verify_strict` (rejects malleable/non-canonical signatures, stricter than plain `verify`).
+- **inputs**: `request: &ConsentRequest`
+- **outputs**: `Result<(), String>`
+- **calls**: `hex::decode`, `VerifyingKey::from_bytes`, `derive_peer_id`, `serialize_request_for_signature`, `verifying_key.verify_strict`
+- **mutates**: nothing
+
+### `create_signed_response`
+- **type**: function
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: Builds and signs a `ConsentResponse` bound to `original_request` via a BLAKE3 hash of the request's signed-string form — binding is by content hash of the exact bytes that were signed, not by the request's signature itself.
+- **inputs**: `signing_key: &SigningKey`, `verify_key: &VerifyingKey`, `original_request: &ConsentRequest`, `authorization_decision: &str`, `time_to_live: u64`, `current_timestamp: u64`
+- **outputs**: `Result<ConsentResponse, String>`
+- **calls**: `serialize_request_for_signature`, `blake3::hash`, `derive_peer_id`, `serialize_response_for_signature`, `signing_key.sign`
+- **mutates**: nothing
+
+### `validate_response`
+- **type**: function
+- **file**: `crates/hsip-core/src/consent.rs`
+- **purpose**: Validates a response's binding to its request (hash match), the responder's key/peer-ID consistency, that `decision` is exactly `"allow"` or `"deny"`, that a `"deny"` carries `ttl_ms == 0` (a denial with a nonzero TTL would be a logical contradiction — "denied but valid for N ms" makes no sense), and finally the Ed25519 signature via `verify_strict`.
+- **inputs**: `response: &ConsentResponse`, `original_request: &ConsentRequest`
+- **outputs**: `Result<(), String>`
+- **calls**: `serialize_request_for_signature`, `blake3::hash`, `hex::decode`, `VerifyingKey::from_bytes`, `derive_peer_id`, `serialize_response_for_signature`, `verifying_key.verify_strict`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/consent_policy.rs`
+
+Policy-based evaluation layer sitting on top of `consent.rs`'s cryptographic primitives — decides *how* to handle an already-parsed request (auto-deny, queue for human review, auto-accept, or silently reject) based on caller-supplied flags. Does not itself check prior-grant state ("AutoAccept" is documented as decided by a consent-cache layer elsewhere, not by this module).
+
+### `PolicyDecision`
+- **type**: enum
+- **file**: `crates/hsip-core/src/consent_policy.rs`
+- **purpose**: The four possible outcomes of policy evaluation — `AutoDeny`, `QueueForReview`, `AutoAccept`, `SilentReject` (the last for malformed/suspicious traffic that shouldn't even be logged as a normal denial).
+- **called_by**: `ConsentPolicy::evaluate`
+
+### `PolicyReason`
+- **type**: enum
+- **file**: `crates/hsip-core/src/consent_policy.rs`
+- **purpose**: Audit-loggable reason code paired with every `PolicyDecision` — includes structured variants (`TooManyAttempts { count }`, `CustomPolicyRule { rule_id }`) rather than a bare string, so callers can match on reason without string parsing.
+- **called_by**: `ConsentPolicy::evaluate`
+
+### `ConsentPolicy`
+- **type**: struct
+- **file**: `crates/hsip-core/src/consent_policy.rs`
+- **purpose**: User-configurable policy knobs (`deny_unknown_peers`, `max_failed_attempts`, `deny_previously_denied`). `Default` is permissive-leaning (queues unknown peers rather than denying, 5-attempt threshold, allows retry after denial) — `strict()` and `permissive()` are named presets for the two ends of that spectrum.
+- **called_by**: consumers of the consent protocol deciding how to handle an incoming request (not currently wired into `hsip-api`'s HTTP `/v1/consent/*` routes, which use their own simpler grant/revoke model — this is the peer-to-peer UDP-layer policy engine)
+
+### `ConsentPolicy::evaluate`
+- **type**: function
+- **file**: `crates/hsip-core/src/consent_policy.rs`
+- **purpose**: Ordered rule evaluation: suspicious → silent reject; rate-limited → auto-deny; too many failed attempts → auto-deny; previously-denied (if policy says so) → auto-deny; unknown peer (if policy says so) → auto-deny; otherwise unknown peer → queue for review. The ordering matters — suspicious/rate-limit checks run before the unknown-peer checks so a malicious unknown peer gets silently rejected rather than merely queued.
+- **inputs**: `&self`, `metadata: &ConsentRequestMetadata`
+- **outputs**: `(PolicyDecision, PolicyReason)`
+- **mutates**: nothing
+
+### `ConsentPolicy::strict` / `ConsentPolicy::permissive`
+- **type**: function
+- **file**: `crates/hsip-core/src/consent_policy.rs`
+- **purpose**: Named constructors for the two preset policies — `strict()` denies unknown peers outright and denies retries after 3 failed attempts; `permissive()` queues everything and tolerates 10 failed attempts before denying.
+- **outputs**: `ConsentPolicy`
+
+---
+
+## `crates/hsip-core/src/constant_time.rs`
+
+Side-channel-hardening primitives — constant-time comparisons and conditional operations meant to prevent timing attacks from leaking secret values (token comparison, key material, signature checks). `#[inline(never)]` is used deliberately on several functions specifically to stop the compiler from optimizing away the very branchless behavior these functions exist to guarantee.
+
+### `constant_time_compare`
+- **type**: function
+- **file**: `crates/hsip-core/src/constant_time.rs`
+- **purpose**: Byte-slice equality where timing depends on neither the position of the first differing byte nor the values involved — XORs every byte pair and ORs the results into one accumulator, only branching on the final aggregate. Length mismatch still short-circuits (a length difference isn't considered secret in this design).
+- **inputs**: `a: &[u8]`, `b: &[u8]`
+- **outputs**: `bool`
+- **called_by**: `constant_time_compare_str`
+- **mutates**: nothing
+
+### `constant_time_compare_str`
+- **type**: function
+- **file**: `crates/hsip-core/src/constant_time.rs`
+- **purpose**: String-typed wrapper over `constant_time_compare`, for tokens/session IDs/API keys.
+- **inputs**: `a: &str`, `b: &str`
+- **outputs**: `bool`
+- **calls**: `constant_time_compare`
+- **mutates**: nothing
+
+### `constant_time_select`
+- **type**: function
+- **file**: `crates/hsip-core/src/constant_time.rs`
+- **purpose**: Branchless `if choice { a } else { b }` for a single byte, via a bitmask derived from `choice` (`0xFF`/`0x00`) rather than a conditional jump.
+- **inputs**: `choice: bool`, `a: u8`, `b: u8`
+- **outputs**: `u8`
+- **called_by**: `constant_time_conditional_copy`
+- **mutates**: nothing
+
+### `constant_time_conditional_copy`
+- **type**: function
+- **file**: `crates/hsip-core/src/constant_time.rs`
+- **purpose**: Copies `src` into `dst` only if `choice` is true, but always reads `src` and writes `dst` regardless — the point is that memory-access *pattern* doesn't leak `choice` even though the result does depend on it. Panics (`assert_eq!`) if the two slices' lengths differ.
+- **inputs**: `choice: bool`, `dst: &mut [u8]`, `src: &[u8]`
+- **calls**: `constant_time_select`
+- **mutates**: `dst`
+
+### `verify_signature_ct`
+- **type**: function
+- **file**: `crates/hsip-core/src/constant_time.rs`
+- **purpose**: Thin wrapper over `ed25519_dalek`'s `VerifyingKey::verify` — the doc comment notes ed25519-dalek's own verification is already constant-time, so this mostly exists to give this crate's callers one uniform, local error type (`SignatureError`) rather than depending directly on `ed25519_dalek`'s.
+- **inputs**: `public_key: &[u8; 32]`, `message: &[u8]`, `signature: &[u8; 64]`
+- **outputs**: `Result<(), SignatureError>`
+- **calls**: `VerifyingKey::from_bytes`, `Verifier::verify`
+- **mutates**: nothing
+
+### `constant_time_less_than_u64` / `constant_time_equal_u64`
+- **type**: function
+- **file**: `crates/hsip-core/src/constant_time.rs`
+- **purpose**: Constant-time `<` and `==` for `u64` — the less-than check uses `overflowing_sub`'s borrow flag rather than a comparison operator; equality XORs and checks for zero, same pattern as `constant_time_compare`.
+- **inputs**: `a: u64`, `b: u64`
+- **outputs**: `bool`
+- **mutates**: nothing
+
+### `secure_zero`
+- **type**: function
+- **file**: `crates/hsip-core/src/constant_time.rs`
+- **purpose**: Zeros a byte buffer using `std::ptr::write_volatile` per byte plus a `SeqCst` compiler fence, specifically to defeat dead-store elimination — a plain `for b in data { *b = 0 }` can be optimized away entirely if the compiler proves `data` is never read again, which is exactly the case right before a key/password goes out of scope.
+- **inputs**: `data: &mut [u8]`
+- **calls**: `std::ptr::write_volatile`, `std::sync::atomic::compiler_fence`
+- **mutates**: `data` (zeroes it)
+
+### `SignatureError`
+- **type**: enum
+- **file**: `crates/hsip-core/src/constant_time.rs`
+- **purpose**: Local error type (`InvalidPublicKey`/`InvalidSignature`/`VerificationFailed`) for `verify_signature_ct`, implementing `Display`/`std::error::Error`. Distinct from `hsip_core::error::HsipErrorCode` (the numeric wire-level codes) and unrelated to `ed25519_dalek::SignatureError` despite the same name.
+- **called_by**: `verify_signature_ct`
+
+---
+
+## `crates/hsip-core/src/crypto/mod.rs`
+
+Thin module-declaration file for `hsip_core::crypto` — declares `aead`, `labels`, `nonce` as children and re-exports all three under a `primitives` sub-module (`pub use super::{aead,labels,nonce}` with `#[doc(inline)]`) purely as a documentation/ergonomics convenience; `crypto::primitives::aead` and `crypto::aead` refer to the same module either way. Contains an empty `#[cfg(test)] mod crypto_tests {}` placeholder with no actual tests — the real tests for this module tree live in the top-level `tests/aad_labels.rs` and `tests/nonce_integrity.rs` integration tests plus each child file's own `#[cfg(test)]` block.
+
+---
+
+## `crates/hsip-core/src/crypto/aead.rs`
+
+### `PacketKind`
+- **type**: enum
+- **file**: `crates/hsip-core/src/crypto/aead.rs`
+- **purpose**: Which of the three wire roles (`Hello`, `E1`, `E2` — the consent-handshake message stages) an AEAD operation is for; used purely to select the right AAD label, never serialized onto the wire itself.
+- **called_by**: `encrypt`, `decrypt`
+
+### `aad` (private)
+- **type**: function
+- **file**: `crates/hsip-core/src/crypto/aead.rs`
+- **purpose**: Maps a `PacketKind` to its canonical 36-byte AAD via `labels::aad_for` — the one place that binds "which packet role" to "which label constant."
+- **inputs**: `kind: PacketKind`
+- **outputs**: `[u8; 36]`
+- **calls**: `labels::aad_for`
+- **called_by**: `encrypt`, `decrypt`
+- **mutates**: nothing
+
+### `encrypt`
+- **type**: function
+- **file**: `crates/hsip-core/src/crypto/aead.rs`
+- **purpose**: ChaCha20-Poly1305 encryption authenticating the canonical per-`PacketKind` AAD — domain-separates ciphertexts by wire role so a Hello-stage ciphertext can never be replayed/reinterpreted as an E1/E2 one even under key reuse across roles. Avoids `GenericArray`'s deprecated `from_slice`/`clone_from_slice` helpers in favor of array `.into()`.
+- **inputs**: `kind: PacketKind`, `key: &[u8; 32]`, `nonce: &[u8; 12]`, `plaintext: &[u8]`
+- **outputs**: `Result<Vec<u8>, String>`
+- **calls**: `ChaCha20Poly1305::new`, `aad`, `aead.encrypt`
+- **called_by**: `hsip-net`'s handshake/session code (per its own imports of `crypto::aead`)
+- **mutates**: nothing
+
+### `decrypt`
+- **type**: function
+- **file**: `crates/hsip-core/src/crypto/aead.rs`
+- **purpose**: Inverse of `encrypt` — decrypts and authenticates against the same per-`PacketKind` AAD; a ciphertext produced under a different `PacketKind` (or a tampered AAD/ciphertext) fails authentication rather than silently decrypting into garbage.
+- **inputs**: `kind: PacketKind`, `key: &[u8; 32]`, `nonce: &[u8; 12]`, `ciphertext: &[u8]`
+- **outputs**: `Result<Vec<u8>, String>`
+- **calls**: `ChaCha20Poly1305::new`, `aad`, `aead.decrypt`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/crypto/labels.rs`
+
+Canonical AAD-construction constants — every ChaCha20-Poly1305 operation across the HSIP wire protocol (not the `hsip-api` HTTP layer, which has its own separate `key_encryption.rs`/field-encryption AAD scheme) must build its AAD through `aad_for` to get proper domain separation.
+
+### `PROTOCOL_ID` / `PROTOCOL_VERSION` / `CIPHERSUITE`
+- **type**: variable (const)
+- **file**: `crates/hsip-core/src/crypto/labels.rs`
+- **purpose**: Fixed identity bytes baked into every AAD — `b"HSIP"`, `0x0002` (current wire version — bumping this intentionally breaks compatibility with older peers), and `b"CHACHA20-POLY1305"`. Binds every ciphertext to "this exact protocol, this exact version, this exact cipher," preventing cross-version or cross-cipher confusion attacks.
+- **called_by**: `aad_for`
+
+### `AAD_LABEL_HELLO` / `AAD_LABEL_E1` / `AAD_LABEL_E2`
+- **type**: variable (const)
+- **file**: `crates/hsip-core/src/crypto/labels.rs`
+- **purpose**: Per-message-role labels distinguishing the three consent-handshake stages within the AAD.
+- **called_by**: `crypto::aead::aad` (via `PacketKind` matching)
+
+### `aad_for`
+- **type**: function
+- **file**: `crates/hsip-core/src/crypto/labels.rs`
+- **purpose**: Builds the canonical fixed-layout 36-byte AAD: `[PROTOCOL_ID(4) | VERSION_LE(2) | CIPHERSUITE padded to 18 | LABEL padded to 12]`. Both the ciphersuite and label fields are truncated (`.min(...)`) rather than validated-and-rejected if they exceed their padded width — silently accepting an oversized label would truncate it rather than erroring, worth noting if a longer label is ever introduced.
+- **inputs**: `label: &[u8]`
+- **outputs**: `[u8; 36]`
+- **called_by**: `crypto::aead::aad`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/crypto/nonce.rs`
+
+A distinct nonce abstraction from the top-level `hsip_core::nonce` module (used by `error.rs`'s `NonceError`/replay-window checks) — this one is `[session_id: u32 BE | counter: u64 BE]`-structured and used by `hsip-net`'s UDP layer for per-session monotonic nonce generation/verification, not by the HTTP API or the consent protocol.
+
+### `Nonce`
+- **type**: struct
+- **file**: `crates/hsip-core/src/crypto/nonce.rs`
+- **purpose**: A 12-byte ChaCha20-Poly1305 nonce with structured accessors — first 4 bytes are a `session_id`, last 8 are a `counter`, both big-endian. Deterministic and collision-resistant for a given `(session_id, counter)` pair as long as counters never repeat within a session.
+- **called_by**: `NonceGen::next_nonce`
+
+### `NonceGen`
+- **type**: struct
+- **file**: `crates/hsip-core/src/crypto/nonce.rs`
+- **purpose**: Monotonic nonce generator for one session — holds a fixed `session_id` and an ever-incrementing `counter`. `next_nonce` panics (`expect`) on `u64` counter overflow rather than silently wrapping, since a wrapped counter would mean nonce reuse under the same key (catastrophic for ChaCha20-Poly1305).
+- **called_by**: `hsip-net`'s per-session encryption path (per its import of `crypto::nonce`)
+
+### `NonceTracker`
+- **type**: struct
+- **file**: `crates/hsip-core/src/crypto/nonce.rs`
+- **purpose**: Receiver-side replay/reordering guard — tracks the highest `(session_id, counter)` seen and rejects anything not strictly increasing within the same session. A session-ID change resets tracking, but the *first* counter of a new session must still be `>= 1` (never `0`), same rule as a brand-new tracker's first-ever nonce.
+- **inputs** (for `accept`): `&mut self`, `nonce: &Nonce`
+- **outputs** (for `accept`): `Result<(), &'static str>`
+- **called_by**: `hsip-net`'s UDP receive path (anti-replay enforcement)
+- **mutates**: `self.last_session`, `self.last_counter`
+
+---
+
+## `crates/hsip-core/src/error.rs`
+
+### `HsipErrorCode`
+- **type**: enum (`#[repr(u16)]`)
+- **file**: `crates/hsip-core/src/error.rs`
+- **purpose**: Stable numeric error codes meant to go on the wire, into logs, or into CLI output — deliberately namespaced by leading digit (1xxx handshake/HELLO, 2xxx nonce/replay, 3xxx session/crypto, 9xxx generic) so a numeric code alone hints at the failure category without needing the string description.
+- **calls** (via its `From` impls): none itself; `description()` is a pure match
+- **called_by**: anything converting a `HelloError`/`NonceError`/`SessionError` into a single unified code for logging/wire transport
+- **mutates**: nothing
+
+### `HsipErrorCode::as_u16` / `description`
+- **type**: function
+- **file**: `crates/hsip-core/src/error.rs`
+- **purpose**: `as_u16` is the raw wire value; `description` is the fixed human-readable string per variant — used together by the `Display` impl (`"{code} ({description})"`).
+- **mutates**: nothing
+
+### `From<HelloError> for HsipErrorCode` / `From<NonceError> for HsipErrorCode` / `From<SessionError> for HsipErrorCode`
+- **type**: function
+- **file**: `crates/hsip-core/src/error.rs`
+- **purpose**: One-way mappings from each subsystem's own rich error enum down to a flat numeric code — e.g. every `SessionError::Crypto(_)` variant, regardless of its internal `&'static str` detail, collapses to the single `SessionCryptoFailure` code. This is an intentional information loss: the numeric code is for cross-boundary signaling (wire/logs), the original typed error is for in-process handling.
+- **inputs**: `HelloError` / `NonceError` / `SessionError`
+- **outputs**: `HsipErrorCode`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/hello.rs`
+
+The HSIP HELLO message — the first thing two peers exchange over UDP, before any consent negotiation. Establishes protocol version, a capability bitmask, the sender's identity, and a timestamp, all Ed25519-signed.
+
+### `PeerId`
+- **type**: struct
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: Minimal 32-byte peer identifier for the HELLO handshake — directly the Ed25519 verifying-key bytes (`from_verifying_key` is a straight copy, not a hash like `identity::peer_id_from_pubkey`'s BLAKE3-derived string form). Two different "peer ID" concepts coexist in this crate deliberately: this raw-key one for the binary HELLO wire format, and the Base32-hash one in `identity.rs` for human-facing display.
+- **called_by**: `HelloMessage::new`, `HelloMessage::with_capabilities`, `session_resumption.rs`'s `TicketPayload`
+
+### `HSIP_VERSION_1`
+- **type**: variable (const `u8`)
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: The only currently-supported wire protocol version; `SignedHello::verify` rejects anything else as `UnsupportedVersion` — this is HSIP's downgrade-protection mechanism for the HELLO handshake.
+- **called_by**: `HelloMessage::new`, `SignedHello::verify`
+
+### `CAP_ENCRYPTED_SESSIONS` / `CAP_CONSENT_LAYER` / `CAP_REPLAY_GUARD` / `CAP_NONCE_WINDOW` / `CAP_SESSION_RESUMPTION` / `CAP_HYBRID_PQC`
+- **type**: variable (const `u32`, bit flags)
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: Bitmask capability flags a peer advertises in its HELLO. `CAP_HYBRID_PQC` (bit 16, a deliberately high bit leaving room between it and the low classical-capability bits) signals support for the hybrid X25519+ML-KEM-768 / Ed25519+ML-DSA-65 post-quantum scheme in `pqc.rs`.
+- **called_by**: `HelloCapabilities::default_local`
+
+### `HelloCapabilities`
+- **type**: struct
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: Type-safe wrapper around the raw `u32` capability bitmask with helper methods for checking/intersecting capabilities. `default_local()` conditionally includes `CAP_HYBRID_PQC` via the compile-time `PQC_CAP_BIT` constant, which is `0` when the crate is built without the `pqc` feature — so a non-PQC build never advertises PQC support even accidentally.
+- **called_by**: `HelloMessage`, `session_resumption.rs`'s `TicketPayload`
+
+### `HelloCapabilities::supports` / `intersect` / `any_common`
+- **type**: function
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: `supports` checks a single bit; `intersect` ANDs two capability sets (used for negotiation); `any_common` is a boolean "did negotiation produce anything" check, used by `SignedHello::negotiated_capabilities` to detect a hard failure (zero common capabilities) versus a successful but reduced negotiation.
+- **mutates**: nothing (all `const fn`)
+
+### `HelloMessage`
+- **type**: struct
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: The unsigned HELLO body — protocol version, capabilities, `PeerId`, and a millisecond timestamp. This is exactly what gets signed via `to_sig_bytes`, never anything else.
+- **called_by**: `SignedHello::sign`
+
+### `HelloMessage::to_sig_bytes` (private)
+- **type**: function
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: Deterministic fixed-layout byte serialization for signing: `[version:1][capabilities:4 LE][peer_id:32][timestamp_ms:8 LE]` (45 bytes total) — a hand-rolled binary format, not JSON/JCS, since this is a low-level UDP handshake message where minimizing bytes-on-the-wire matters more than human readability.
+- **outputs**: `[u8; 45]`
+- **called_by**: `SignedHello::sign`, `SignedHello::verify`
+- **mutates**: nothing
+
+### `SignedHello`
+- **type**: struct
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: A `HelloMessage` plus its Ed25519 `Signature`. Deliberately does **not** derive `Serialize`/`Deserialize` (noted in a doc comment) specifically to avoid needing serde support on `ed25519_dalek::Signature` — wire encoding for this type is handled at a lower level than serde.
+- **called_by**: `hsip-net`'s handshake code
+
+### `HelloError`
+- **type**: enum
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: `UnsupportedVersion(u8)` / `BadSignature` / `NoCommonCapabilities` / `BadTimestamp` — the four ways a HELLO can fail validation. Maps into `HsipErrorCode` via `error.rs`'s `From` impl for cross-module numeric-code reporting.
+- **called_by**: `SignedHello::verify`, `SignedHello::negotiated_capabilities`
+
+### `SignedHello::sign`
+- **type**: function
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: Signs a `HelloMessage`'s deterministic byte form with the sender's Ed25519 key. Caller is responsible (per the doc comment) for ensuring `hello.peer_id` is actually consistent with `signing_key` — this function does not verify that itself.
+- **inputs**: `hello: HelloMessage`, `signing_key: &SigningKey`
+- **outputs**: `SignedHello`
+- **calls**: `HelloMessage::to_sig_bytes`, `signing_key.sign`
+- **mutates**: nothing
+
+### `SignedHello::verify`
+- **type**: function
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: Three-step validation in order: protocol version match (downgrade protection), timestamp within `max_skew_ms` of `now_ms` (both too-old and too-far-future are rejected — `ts + max_skew_ms < now_ms || ts > now_ms + max_skew_ms`), then Ed25519 signature verification. Any failure short-circuits to the corresponding `HelloError` variant without checking the remaining steps.
+- **inputs**: `&self`, `verifying_key: &VerifyingKey`, `now_ms: u64`, `max_skew_ms: u64`
+- **outputs**: `Result<(), HelloError>`
+- **calls**: `HelloMessage::to_sig_bytes`, `verifying_key.verify`
+- **called_by**: `hsip-net`'s handshake receive path
+- **mutates**: nothing
+
+### `SignedHello::negotiated_capabilities`
+- **type**: function
+- **file**: `crates/hsip-core/src/hello.rs`
+- **purpose**: Intersects the remote peer's advertised capabilities (from an already-`verify()`ed `SignedHello`) with the caller's own `local_caps`, erroring `NoCommonCapabilities` if the result is empty — meant to be called only after `verify()` has already succeeded, per the doc comment.
+- **inputs**: `&self`, `local_caps: HelloCapabilities`
+- **outputs**: `Result<HelloCapabilities, HelloError>`
+- **calls**: `HelloCapabilities::intersect`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/identity.rs`
+
+### `peer_id_from_pubkey`
+- **type**: function
+- **file**: `crates/hsip-core/src/identity.rs`
+- **purpose**: Derives a human-facing PeerID as the first 26 Base32 (`BASE32_NOPAD`) characters of `blake3(public_key_bytes)`. Distinct from `hello.rs::PeerId`, which is the raw 32-byte verifying key itself used in the binary wire format — this one is a shorter, display-friendly, one-way-hashed identifier (you cannot recover the public key from it, unlike `hello::PeerId`).
+- **inputs**: `verifying_key: &VerifyingKey`
+- **outputs**: `String`
+- **calls**: `compute_blake3_hash`, `BASE32_NOPAD.encode`
+- **called_by**: `consent::derive_peer_id`
+- **mutates**: nothing
+
+### `compute_blake3_hash` (private)
+- **type**: function
+- **file**: `crates/hsip-core/src/identity.rs`
+- **purpose**: Thin wrapper over `blake3::Hasher` producing a fixed 32-byte digest.
+- **inputs**: `data: &[u8]`
+- **outputs**: `[u8; 32]`
+- **called_by**: `peer_id_from_pubkey`
+- **mutates**: nothing
+
+### `generate_keypair`
+- **type**: function
+- **file**: `crates/hsip-core/src/identity.rs`
+- **purpose**: Fresh Ed25519 keypair from `OsRng` — the standard entry point for creating a new HSIP identity anywhere in the crate/downstream crates that need one outside of `hsip-api`'s own DB-persisted identity flow (which has its own key-generation call site in `hsip-api::identity`).
+- **outputs**: `(SigningKey, VerifyingKey)`
+- **calls**: `SigningKey::generate`
+- **mutates**: nothing
+
+### `sk_to_hex` / `vk_to_hex`
+- **type**: function
+- **file**: `crates/hsip-core/src/identity.rs`
+- **purpose**: Lowercase-hex encoding of a signing/verifying key's raw 32 bytes. The doc comment on `sk_to_hex` explicitly flags that production systems should use secure storage (PKCS#8/encrypted keystore) rather than a bare hex string — this function itself makes no attempt at that; see `keystore.rs` for the (still-plaintext-private-key, dev-mode) storage layer that actually persists keys to disk.
+- **inputs**: `&SigningKey` / `&VerifyingKey`
+- **outputs**: `String`
+- **calls**: `hex::encode`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/keystore.rs`
+
+Local on-disk keypair persistence to a JSON file under the OS config directory (`~/.config/HSIP/keystore.json` on Linux, platform-equivalent elsewhere via the `dirs` crate). Explicitly documented in this file's own comments as **dev-mode**: the private key is stored in plaintext hex inside the JSON, with only Unix file-permission hardening (`0o600`) as protection — this is a different, older mechanism from `hsip-api`'s `key_encryption.rs`, which actually encrypts the signing key at rest with ChaCha20-Poly1305 under a master key. Not to be confused with that production path.
+
+### `KeyPairStorage` (private)
+- **type**: struct
+- **file**: `crates/hsip-core/src/keystore.rs`
+- **purpose**: The on-disk JSON shape — just `pub_hex`/`priv_hex` hex strings, no encryption, no KDF, no salt.
+- **called_by**: `save_keypair`, `load_keypair`
+
+### `keystore_file_location` (private)
+- **type**: function
+- **file**: `crates/hsip-core/src/keystore.rs`
+- **purpose**: Resolves `<config_dir>/HSIP/keystore.json`, falling back to the current directory (`"."`) if the OS config directory can't be determined, and creates the `HSIP` directory if missing (best-effort — `let _ =` on `create_dir_all`).
+- **outputs**: `PathBuf`
+- **calls**: `dirs::config_dir`, `fs::create_dir_all`
+- **called_by**: `save_keypair`, `load_keypair`
+- **mutates**: filesystem (creates a directory)
+
+### `save_keypair`
+- **type**: function
+- **file**: `crates/hsip-core/src/keystore.rs`
+- **purpose**: Serializes both keys to hex, writes pretty-printed JSON to the keystore file, and — Unix only — tightens the file's permissions to `0o600` immediately after creation via `apply_unix_file_permissions`. No equivalent hardening exists for Windows in this file (unlike `hsip-api`'s master-key file, which this project's CLAUDE.md flags as needing `0o600` explicitly on Unix but has no Windows ACL equivalent documented either).
+- **inputs**: `signing_key: &SigningKey`, `verifying_key: &VerifyingKey`
+- **outputs**: `Result<(), String>`
+- **calls**: `serde_json::to_string_pretty`, `fs::File::create`, `apply_unix_file_permissions` (cfg(unix)), `file_handle.write_all`
+- **mutates**: filesystem (writes/overwrites the keystore file)
+
+### `apply_unix_file_permissions` (private, `#[cfg(unix)]`)
+- **type**: function
+- **file**: `crates/hsip-core/src/keystore.rs`
+- **purpose**: Sets mode `0o600` on the just-written keystore file. Best-effort: both the metadata read and the `set_permissions` call silently swallow errors (`if let Ok(...)`, `let _ =`) rather than propagating a failure — a permissions-hardening step that can silently no-op is a real, if minor, gap relative to the explicit-and-checked hardening this project's CLAUDE.md later mandated for the `hsip-api` master-key file.
+- **inputs**: `path: &PathBuf`
+- **calls**: `fs::File::open`, `metadata.permissions`, `fs::set_permissions`
+- **called_by**: `save_keypair`
+- **mutates**: filesystem (file permission bits)
+
+### `load_keypair`
+- **type**: function
+- **file**: `crates/hsip-core/src/keystore.rs`
+- **purpose**: Reads and parses the keystore JSON, reconstructs the `SigningKey` from the 32-byte private key seed, derives the `VerifyingKey` from it, and cross-checks that the derived public key matches the stored `pub_hex` — catching a corrupted/hand-edited keystore file where the two no longer agree, rather than silently trusting the stored public key.
+- **outputs**: `Result<(SigningKey, VerifyingKey), String>`
+- **calls**: `fs::File::open`, `serde_json::from_str`, `hex::decode`, `SigningKey::from_bytes`, `signing_key.verifying_key`
+- **mutates**: nothing (read-only)
+
+---
+
+## `crates/hsip-core/src/liveness.rs`
+
+Pure keepalive/timeout decision logic for HSIP sessions — deliberately does not send or receive any packets itself (per its own module doc comment); it only answers "should I ping now" and "is this session dead," leaving the actual PING/PONG framing and socket I/O to `hsip-net`.
+
+### `KeepaliveConfig`
+- **type**: struct
+- **file**: `crates/hsip-core/src/liveness.rs`
+- **purpose**: Tunable thresholds — `idle_after_ms` (15s default) before pinging starts, `ping_interval_ms` (5s) between pings once idle, `max_missed_pings` (3) before declaring death, and a `hard_timeout_ms` (60s) absolute ceiling that kills a session regardless of ping history.
+- **called_by**: `KeepaliveState::should_send_ping`, `KeepaliveState::is_dead`, `evaluate_liveness`
+
+### `KeepaliveState`
+- **type**: struct
+- **file**: `crates/hsip-core/src/liveness.rs`
+- **purpose**: Per-session mutable liveness tracking — last RX/TX/ping timestamps and a missed-ping counter. `on_data_received`/`on_pong_received` both reset `missed_pings` to 0 (any sign of life clears the counter, not just an explicit pong), while `on_ping_sent` increments it optimistically (assumes the ping will go unanswered until proven otherwise by a subsequent `on_pong_received`/`on_data_received`).
+- **called_by**: `evaluate_liveness`, `hsip-net`'s session-management loop
+
+### `KeepaliveState::should_send_ping`
+- **type**: function
+- **file**: `crates/hsip-core/src/liveness.rs`
+- **purpose**: True only if the session has been idle (no RX) for at least `idle_after_ms`, AND either no ping has ever been sent or at least `ping_interval_ms` has elapsed since the last one — prevents ping-spamming an idle-but-not-yet-ping-threshold session.
+- **inputs**: `&self`, `cfg: &KeepaliveConfig`, `now_ms: u64`
+- **outputs**: `bool`
+- **mutates**: nothing
+
+### `KeepaliveState::is_dead`
+- **type**: function
+- **file**: `crates/hsip-core/src/liveness.rs`
+- **purpose**: True if either the missed-ping count has hit the configured max, OR the hard timeout has elapsed since the last RX regardless of ping history — the hard timeout is a backstop that kills a session even if, for whatever reason, no pings were ever attempted.
+- **inputs**: `&self`, `cfg: &KeepaliveConfig`, `now_ms: u64`
+- **outputs**: `bool`
+- **mutates**: nothing
+
+### `evaluate_liveness`
+- **type**: function
+- **file**: `crates/hsip-core/src/liveness.rs`
+- **purpose**: Convenience wrapper bundling both `should_send_ping` and `is_dead` checks into one `LivenessStatus` value for a single call site to consume.
+- **inputs**: `cfg: &KeepaliveConfig`, `state: &KeepaliveState`, `now_ms: u64`
+- **outputs**: `LivenessStatus`
+- **calls**: `KeepaliveState::should_send_ping`, `KeepaliveState::is_dead`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/pqc.rs`
+
+Hybrid classical+post-quantum cryptography — X25519+ML-KEM-768-style KEM and Ed25519+ML-DSA-65-style signatures, gated entirely behind `#![cfg(feature = "pqc")]` (enabled by default in `hsip-core`'s `Cargo.toml`). **Note on naming**: the actual dependencies used are `pqcrypto-kyber`'s `kyber768` and `pqcrypto-dilithium`'s `dilithium3` — Kyber-768 and Dilithium3 are the pre-standardization names for what NIST finalized as ML-KEM-768 (FIPS 203) and (a close relative of) ML-DSA-65 (FIPS 204); this module's own doc comments and this project's CLAUDE.md refer to them by the NIST names throughout, so the two naming schemes should be read as referring to the same algorithm family in this codebase, not two different things. The hybrid design's stated rationale: security holds even if *either* the classical or the post-quantum half is broken.
+
+### `HYBRID_KEM_LABEL` / `HYBRID_SIG_LABEL`
+- **type**: variable (const `&[u8]`)
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Domain-separation labels for the hybrid constructions, fed into HKDF when combining classical and PQ shared secrets.
+- **called_by**: `combine_shared_secrets`
+
+### `PqcError`
+- **type**: enum
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Unified error type across both the KEM and signature halves — covers keygen/encapsulate/decapsulate/sign/verify failures plus format errors and `SecretConsumed` (the one-time-use X25519 ephemeral secret being reused).
+- **called_by**: every fallible function in this module
+
+### `HybridKemKeypair`
+- **type**: struct
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Holds an X25519 `EphemeralSecret` (wrapped in `Option` so it can be `.take()`n and consumed exactly once) plus a full static Kyber-768 keypair. `is_consumed()` reports whether the X25519 half has already been used in a decapsulation.
+- **called_by**: `hybrid_decapsulate`
+
+### `HybridKemKeypair::generate`
+- **type**: function
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Generates both the X25519 ephemeral and the Kyber-768 static keypair fresh from `OsRng`.
+- **outputs**: `Self`
+- **calls**: `EphemeralSecret::random_from_rng`, `kyber768::keypair`
+- **mutates**: nothing (constructs new state)
+
+### `HybridKemKeypair::x25519_public_bytes` / `kyber_pk_bytes` / `public_bytes`
+- **type**: function
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Accessors for the two public-key halves individually, and `public_bytes()` for the concatenated wire form (`X25519(32) || Kyber-768 PK(1184)` = 1216 bytes total).
+- **outputs**: `[u8; 32]` / `Vec<u8>` / `Vec<u8>`
+- **mutates**: nothing
+
+### `HybridCiphertext`
+- **type**: struct
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Wire-format hybrid KEM ciphertext — 32-byte X25519 ephemeral public key concatenated with the 1088-byte Kyber-768 ciphertext (`SIZE = 1120`). `from_bytes` checks `bytes.len() < Self::SIZE` but doesn't reject *extra* trailing bytes beyond that length — a caller passing an oversized buffer wouldn't get an error, just a truncated parse.
+- **called_by**: `hybrid_encapsulate`, `hybrid_decapsulate`
+
+### `hybrid_encapsulate`
+- **type**: function
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Encapsulates to a peer's hybrid public key — fresh X25519 ephemeral Diffie-Hellman plus Kyber-768 encapsulation, combined via `combine_shared_secrets`. Rejects a malformed-length Kyber public key upfront before doing any classical crypto work.
+- **inputs**: `peer_x25519_pub: &[u8; 32]`, `peer_kyber_pk: &[u8]`
+- **outputs**: `Result<(HybridCiphertext, [u8; 32]), PqcError>`
+- **calls**: `EphemeralSecret::random_from_rng`, `x_eph.diffie_hellman`, `kyber768::PublicKey::from_bytes`, `kyber768::encapsulate`, `combine_shared_secrets`
+- **mutates**: nothing (produces new values)
+
+### `hybrid_decapsulate`
+- **type**: function
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Decapsulates a `HybridCiphertext` using our own keypair — `.take()`s the `Option<EphemeralSecret>` so a second call on the same keypair fails with `SecretConsumed` rather than silently reusing (and thus compromising) the same ephemeral secret twice.
+- **inputs**: `our_keypair: &mut HybridKemKeypair`, `ciphertext: &HybridCiphertext`
+- **outputs**: `Result<[u8; 32], PqcError>`
+- **calls**: `x_secret.diffie_hellman`, `kyber768::Ciphertext::from_bytes`, `kyber768::decapsulate`, `combine_shared_secrets`
+- **mutates**: `our_keypair.x25519_secret` (consumes it to `None`)
+
+### `combine_shared_secrets` (private)
+- **type**: function
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Concatenates the X25519 and Kyber shared secrets as HKDF-SHA256 input keying material, expands under `HYBRID_KEM_LABEL`, and explicitly `zeroize()`s the concatenated IKM buffer afterward — the intermediate combined-but-unexpanded secret material doesn't linger in memory any longer than needed.
+- **inputs**: `x_shared: &[u8]`, `kyber_shared: &[u8]`
+- **outputs**: `Result<[u8; 32], PqcError>`
+- **calls**: `Hkdf::<Sha256>::new`, `hk.expand`, `ikm.zeroize`
+- **called_by**: `hybrid_encapsulate`, `hybrid_decapsulate`
+- **mutates**: nothing lasting (zeroizes its own local buffer)
+
+### `HybridSignature`
+- **type**: struct
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Concatenated Ed25519 (64 bytes) + Dilithium3 (3293 bytes) signature, `SIZE = 3357`.
+- **called_by**: `HybridSigningKeypair::sign`, `HybridVerifyingKey::verify`
+
+### `HybridSigningKeypair`
+- **type**: struct
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Holds both a full Ed25519 keypair and a full Dilithium3 keypair together — unlike the KEM side, both signing secrets are static/reusable (no ephemeral consumption model), since signing keys aren't supposed to be single-use the way a KEM ephemeral is.
+- **called_by**: callers needing to produce hybrid signatures (e.g. `hsip-net` if/when PQC signing is wired in beyond capability negotiation)
+
+### `HybridSigningKeypair::sign`
+- **type**: function
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Produces both an Ed25519 signature and a Dilithium3 detached signature over the same message, packaged as one `HybridSignature` — both halves must later verify for the overall signature to be considered valid.
+- **inputs**: `&self`, `message: &[u8]`
+- **outputs**: `HybridSignature`
+- **calls**: `self.ed25519_sk.sign`, `dilithium3::detached_sign`
+- **mutates**: nothing
+
+### `HybridVerifyingKey`
+- **type**: struct
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: The public counterpart to `HybridSigningKeypair` — Ed25519 verifying key + Dilithium3 public key, `SIZE = 1984` bytes serialized form.
+- **called_by**: signature verification call sites
+
+### `HybridVerifyingKey::verify`
+- **type**: function
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: Requires **both** the Ed25519 and Dilithium3 signatures to independently verify against the same message — the hybrid security property (an attacker must break both algorithms, not just one) is enforced here at the verification step, not just claimed by the data layout.
+- **inputs**: `&self`, `message: &[u8]`, `signature: &HybridSignature`
+- **outputs**: `Result<(), PqcError>`
+- **calls**: `self.ed25519_vk.verify`, `dilithium3::verify_detached_signature`
+- **mutates**: nothing
+
+### `PqcCapabilities`
+- **type**: struct
+- **file**: `crates/hsip-core/src/pqc.rs`
+- **purpose**: A 2-bit capability flag pair (`mlkem768`, `mldsa65`) for protocol negotiation, encodable to/from a single byte. `NONE`/`FULL` are named constants for the two extremes; `intersect` ANDs two peers' capabilities together the same way `hello::HelloCapabilities::intersect` does for the broader capability bitmask.
+- **called_by**: PQC-aware handshake negotiation (not the same bitmask as `hello::CAP_HYBRID_PQC` — this is a separate, finer-grained per-algorithm negotiation used once PQC itself is already known to be supported)
+
+---
+
+## `crates/hsip-core/src/secure_memory.rs`
+
+Zeroize-on-drop wrappers for sensitive in-memory data, defending against memory dumps, swap-file exposure, cold-boot attacks, and memory-reuse leaks of stale secrets.
+
+### `SecureBytes`
+- **type**: struct
+- **file**: `crates/hsip-core/src/secure_memory.rs`
+- **purpose**: A `Vec<u8>` wrapper that zeroizes its contents on `Drop`. `Deref`/`DerefMut` to `[u8]` make it usable mostly like a plain byte slice; the custom `Debug` impl prints only `"SecureBytes([REDACTED N bytes])"`, so an accidental `{:?}` logging call can't leak the secret. `into_vec()` deliberately bypasses the zeroize-on-drop (via `mem::take` + `mem::forget`) when the caller is explicitly taking ownership and will handle zeroizing themselves — this is a real, callable escape hatch from the safety guarantee, worth knowing before assuming every `SecureBytes` is unconditionally protected end-to-end.
+- **called_by**: anywhere in this crate/downstream crates holding raw secret bytes that need this in-memory hygiene (not currently used by `hsip-api`'s own key-encryption path, which manages zeroing differently via `key_encryption.rs`)
+
+### `SecureKey<const N: usize>`
+- **type**: struct
+- **file**: `crates/hsip-core/src/secure_memory.rs`
+- **purpose**: Same zeroize-on-drop/redacted-`Debug` pattern as `SecureBytes` but for fixed-size arrays (Ed25519/ChaCha20 keys). `from_slice` panics via `assert_eq!` on a length mismatch rather than returning a `Result` — a deliberate fail-fast choice for what should always be a compile-time-known-size operation.
+- **called_by**: callers holding fixed-size key material
+
+### `SecureString`
+- **type**: struct
+- **file**: `crates/hsip-core/src/secure_memory.rs`
+- **purpose**: Zeroize-on-drop wrapper for `String`-typed secrets (passwords, tokens). Uses `unsafe { self.data.as_bytes_mut() }` to zero the underlying `String` buffer directly, since `String` has no safe mutable-byte-access API — this is sound only because the zeroed bytes are never read back as UTF-8 afterward (the value is being destroyed, not reused).
+- **called_by**: callers holding password/token-like secrets as owned strings
+
+### `try_lock_memory`
+- **type**: function (three `#[cfg]`-gated variants: `unix`, `windows`, neither)
+- **file**: `crates/hsip-core/src/secure_memory.rs`
+- **purpose**: Best-effort request to the OS to pin the given memory range so it's never swapped to disk — `mlock` on Unix, `VirtualLock` on Windows, an unconditional `Err` stub on anything else. Explicitly advisory: the doc comment notes this typically requires elevated privileges and the OS may still swap under memory pressure regardless of a success return; callers are expected to continue without memory locking on failure rather than treating it as fatal.
+- **inputs**: `ptr: *const u8`, `len: usize`
+- **outputs**: `Result<(), String>`
+- **calls**: `libc::mlock` (unix) / `winapi::um::memoryapi::VirtualLock` (windows)
+- **mutates**: OS-level memory paging behavior for the given range (best-effort)
+
+---
+
+## `crates/hsip-core/src/session.rs`
+
+Two layers in one file: low-level counter-nonce AEAD helpers (`seal_with_counter`/`open_with_counter`) for callers who want to manage nonces themselves, and a higher-level `ManagedSession` that owns nonce generation, enforces a rekey policy, and can wire in a consent-revocation check.
+
+### `MAX_SESSION_AGE` / `MAX_PACKETS_BEFORE_REKEY` / `MAX_NONCE_COUNTER`
+- **type**: variable (const)
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Rekey-policy thresholds — 1 hour of session age, 100,000 packets, or (independently) `u64::MAX - 1` nonce-counter headroom before `SessionNonceSalt::derive` refuses to hand out another nonce. The `- 1` on the nonce ceiling leaves one value of margin rather than running exactly up to the type's maximum.
+- **called_by**: `ManagedSession::check_limits`, `SessionNonceSalt::derive`
+
+### `SessionError`
+- **type**: enum
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: `NonceMismatch{expected,got}` / `Crypto(&'static str)` / `NonceExhausted` / `RekeyRequired` / `ConsentRevoked` — every failure mode a session's encrypt/decrypt/rekey path can hit. Maps into `HsipErrorCode` via `error.rs`.
+- **called_by**: `seal_with_counter`, `open_with_counter`, every `ManagedSession` method
+
+### `AeadMeta`
+- **type**: struct
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Tiny carrier for a caller-supplied monotonic `nonce_counter`, used by the low-level `seal_with_counter`/`open_with_counter` pair. The doc comment is explicit that this pair does **not** enforce monotonicity itself — the caller must guarantee the counter never repeats under a given key; `ManagedSession` (below) is the version that actually enforces this.
+- **called_by**: `seal_with_counter`, `open_with_counter`
+
+### `nonce_from_counter` (private)
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Builds a 12-byte nonce as `[0,0,0,0 | counter_be(8)]` — the low-level counter-only layout, distinct from `ManagedSession`'s salted layout below.
+- **inputs**: `counter: u64`
+- **outputs**: `Nonce`
+- **called_by**: `seal_with_counter`, `open_with_counter`
+- **mutates**: nothing
+
+### `seal_with_counter` / `open_with_counter`
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Bare ChaCha20-Poly1305 seal/open using a counter-derived nonce with no AAD and no policy enforcement beyond `open_with_counter`'s explicit check that the supplied `AeadMeta.nonce_counter` equals the caller's `expected_counter` (catching a caller passing mismatched metadata, though not preventing nonce reuse by itself — that's the caller's job per `AeadMeta`'s doc comment).
+- **inputs**: `key_bytes: &[u8; 32]`, `meta: &AeadMeta` (+ `expected_counter: u64` for open), `plaintext`/`ciphertext: &[u8]`
+- **outputs**: `Result<Vec<u8>, SessionError>` / `Result<(u8, Vec<u8>), SessionError>` (the `u8` tag is a placeholder always `0`, reserved for future framing)
+- **calls**: `nonce_from_counter`, `ChaCha20Poly1305::encrypt`/`decrypt`
+- **mutates**: nothing
+
+### `SessionNonceSalt` (private)
+- **type**: struct
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Per-session 4-byte random salt combined with an 8-byte counter to derive nonces (`[salt(4) | counter_be(8)]`) — unlike the bare counter layout above, this makes nonce collisions across *different* sessions using the same key vanishingly unlikely even if their counters happen to overlap, since each session has its own salt.
+- **called_by**: `ManagedSession`
+
+### `SessionNonceSalt::derive`
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Builds the salted nonce for a given counter, refusing (`NonceExhausted`) once the counter would exceed `MAX_NONCE_COUNTER`.
+- **inputs**: `&self`, `counter: u64`
+- **outputs**: `Result<Nonce, SessionError>`
+- **called_by**: `ManagedSession::encrypt`, `ManagedSession::decrypt`
+- **mutates**: nothing
+
+### `ManagedSession`
+- **type**: struct
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: The safe, policy-enforcing session wrapper — owns the AEAD cipher, the salted nonce state, session start time, packets-sent count, and an optional `consent_check` closure (`Box<dyn Fn() -> bool + Send + Sync>`) that gets consulted before *every* encrypt/decrypt. This is what gives HSIP's consent model teeth at the crypto layer: if the closure starts returning `false` (consent revoked), the session immediately refuses further encrypt/decrypt with `ConsentRevoked`, mid-session, with no separate close/teardown step required. Does not perform the handshake itself — only manages AEAD usage safely once a key is already established.
+- **called_by**: `hsip-net`'s per-connection session management
+
+### `ManagedSession::new`
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Constructs a session from an already-derived 32-byte AEAD key and a 4-byte per-session nonce salt (both expected to come from the handshake), with `consent_check` initially unset.
+- **inputs**: `key_bytes: &[u8; 32]`, `nonce_salt: [u8; 4]`
+- **outputs**: `Self`
+- **calls**: `ChaCha20Poly1305::new`, `SessionNonceSalt::new`
+- **mutates**: nothing (constructs new state)
+
+### `ManagedSession::with_consent_check` / `attach_consent_check`
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Builder-style (`with_consent_check`, consumes and returns `self`) and mutate-in-place (`attach_consent_check`) ways to install the revocation-check closure — the two exist so a caller can either set it up during construction or bolt it onto an already-running session (e.g. once a consent record becomes available after the session started).
+- **mutates**: `self.consent_check`
+
+### `ManagedSession::check_limits` (private)
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Runs before every encrypt/decrypt: consent check first (cheapest, and the one with the most time-sensitive consequence if skipped), then session age vs. `MAX_SESSION_AGE`, then packet count vs. `MAX_PACKETS_BEFORE_REKEY` — any failure short-circuits the whole operation before any crypto work happens.
+- **inputs**: `&self`
+- **outputs**: `Result<(), SessionError>`
+- **called_by**: `encrypt`, `decrypt`
+- **mutates**: nothing
+
+### `ManagedSession::encrypt` / `decrypt`
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: `encrypt` runs policy checks, derives the next salted nonce from the current `packets_sent` counter, encrypts, and only then increments the counter — deliberately *after* a successful encrypt, so a failed encrypt doesn't burn a nonce value. `decrypt` takes an explicit `counter` from the caller (the sender's counter at time of encryption) rather than tracking its own — the receiver doesn't maintain a parallel counter, it trusts the wire-carried value (paired with whatever anti-replay mechanism sits above this, e.g. `crypto::nonce::NonceTracker`, to actually prevent counter reuse from an attacker).
+- **inputs**: `&mut self` (encrypt) / `&self` (decrypt), `plaintext`/`ciphertext: &[u8]`, `aad: &[u8]`, (+`counter: u64` for decrypt)
+- **outputs**: `Result<(u64, Vec<u8>), SessionError>` / `Result<Vec<u8>, SessionError>`
+- **calls**: `check_limits`, `SessionNonceSalt::derive`, `cipher.encrypt`/`decrypt`
+- **mutates**: `self.packets_sent` (encrypt only, after success)
+
+### `ManagedSession::encrypt_with_shaping` / `decrypt_with_shaping`
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Wrap `encrypt`/`decrypt` with `traffic_shaping::add_padding`/`remove_padding` and (on the send side) `apply_timing_jitter` — the recommended path for privacy-sensitive traffic, per the doc comment, since it normalizes packet size and timing to resist traffic analysis.
+- **calls**: `traffic_shaping::add_padding`/`remove_padding`, `traffic_shaping::apply_timing_jitter`, `self.encrypt`/`decrypt`
+- **mutates**: same as `encrypt`/`decrypt`
+
+### `ManagedSession::stats`
+- **type**: function
+- **file**: `crates/hsip-core/src/session.rs`
+- **purpose**: Exposes `(elapsed, packets_sent)` for monitoring/logging call sites.
+- **outputs**: `(Duration, u64)`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/session_resumption.rs`
+
+Encrypted, self-contained session-resumption tickets — a peer that already completed a full HELLO+consent handshake can reconnect later without re-negotiating consent, by presenting a ticket the server previously issued. Fresh X25519/ChaCha20 keys are still generated per actual connection (per the file's own top comment) — the ticket only vouches for identity/capabilities/validity window, it isn't a session-key cache.
+
+### `TicketEncryptionKey`
+- **type**: struct
+- **file**: `crates/hsip-core/src/session_resumption.rs`
+- **purpose**: Wraps the server-side static 32-byte key used to encrypt/decrypt every ticket — must persist across server restarts, or every ticket issued before a restart becomes permanently unredeemable.
+- **called_by**: `issue_resumption_ticket`, `validate_resumption_ticket`
+
+### `TicketPolicy`
+- **type**: struct
+- **file**: `crates/hsip-core/src/session_resumption.rs`
+- **purpose**: Caps ticket validity duration (`max_validity_duration_ms`, default 60,000ms = 1 minute) — a deliberately short default window, consistent with tickets being a short-lived resumption aid rather than a long-lived credential.
+- **called_by**: `issue_resumption_ticket`
+
+### `TicketPayload`
+- **type**: struct
+- **file**: `crates/hsip-core/src/session_resumption.rs`
+- **purpose**: The decrypted ticket contents — `peer_id`, negotiated `caps`, `issued_at_ms`, `expires_at_ms`. Serialized to a fixed 52-byte binary layout (`PAYLOAD_SIZE = 32+4+8+8`), not JSON, since this is the ciphertext's plaintext and every byte counts toward the ticket's wire size.
+- **called_by**: `issue_resumption_ticket`, `validate_resumption_ticket`
+
+### `TicketError`
+- **type**: enum
+- **file**: `crates/hsip-core/src/session_resumption.rs`
+- **purpose**: `ExcessiveLifetime` (requested validity exceeds policy) / `InsufficientLength` (ticket too short to even contain a valid format) / `AuthenticationFailure` (AEAD tag check failed — covers both tampering and a wrong key) / `TicketExpired` / `FutureTicket` (issued-at is after the current time — signals possible clock skew rather than assuming benign).
+- **called_by**: `issue_resumption_ticket`, `validate_resumption_ticket`
+
+### `TICKET_LABEL`
+- **type**: variable (const `&[u8]`)
+- **file**: `crates/hsip-core/src/session_resumption.rs`
+- **purpose**: `b"HSIP-TICKET-V1"` — the AEAD associated data binding every ticket ciphertext to this specific purpose/version, so a ticket ciphertext can't be confused with (or replayed as) some other AEAD use of the same key.
+- **called_by**: `issue_resumption_ticket`, `validate_resumption_ticket`
+
+### `serialize_payload` / `deserialize_payload` (private)
+- **type**: function
+- **file**: `crates/hsip-core/src/session_resumption.rs`
+- **purpose**: Fixed-offset binary (de)serialization of `TicketPayload` to/from the 52-byte plaintext layout described in the module's top comment.
+- **called_by**: `issue_resumption_ticket` / `validate_resumption_ticket`
+- **mutates**: nothing
+
+### `issue_resumption_ticket`
+- **type**: function
+- **file**: `crates/hsip-core/src/session_resumption.rs`
+- **purpose**: Validates the requested `lifetime_ms` against policy, builds the payload, encrypts it in place with a fresh random 12-byte nonce (`encrypt_in_place` — reuses the plaintext buffer for the ciphertext rather than allocating separately), and returns `nonce || ciphertext+tag` as the opaque ticket blob.
+- **inputs**: `key: &TicketEncryptionKey`, `policy: &TicketPolicy`, `peer_id: PeerId`, `caps: HelloCapabilities`, `current_time_ms: u64`, `lifetime_ms: u64`
+- **outputs**: `Result<Vec<u8>, TicketError>`
+- **calls**: `serialize_payload`, `ChaCha20Poly1305::new`, `OsRng::fill_bytes`, `cipher.encrypt_in_place`
+- **mutates**: nothing (returns new bytes)
+
+### `validate_resumption_ticket`
+- **type**: function
+- **file**: `crates/hsip-core/src/session_resumption.rs`
+- **purpose**: Length-checks the ticket (`>= 12 + 52 + 16` bytes for nonce+payload+AEAD tag), decrypts+authenticates it, re-validates the decrypted length exactly equals `PAYLOAD_SIZE`, then checks temporal validity — rejecting both a ticket used before its own `issued_at_ms` (`FutureTicket`, a clock-skew signal) and one used after `expires_at_ms` (`TicketExpired`). The `_policy` parameter is accepted but unused in this function (the lifetime cap was already enforced at issuance time, not at validation time).
+- **inputs**: `key: &TicketEncryptionKey`, `_policy: &TicketPolicy`, `ticket_data: &[u8]`, `current_time_ms: u64`
+- **outputs**: `Result<TicketPayload, TicketError>`
+- **calls**: `ChaCha20Poly1305::new`, `cipher.decrypt_in_place`, `deserialize_payload`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/traffic_shaping.rs`
+
+Metadata-protection helpers — padding plaintext to fixed target sizes and adding timing jitter, to resist traffic-analysis attacks that infer content from packet size/timing patterns rather than breaking the encryption itself.
+
+### `PAD_TARGETS`
+- **type**: variable (const `&[usize]`)
+- **file**: `crates/hsip-core/src/traffic_shaping.rs`
+- **purpose**: The three MTU-safe bucket sizes (512/1024/1200 bytes) every padded packet is rounded up to — chosen to avoid IP fragmentation while still giving an observer only 3 possible packet-length buckets to distinguish, rather than the plaintext's exact length.
+- **called_by**: `add_padding`
+
+### `add_padding`
+- **type**: function
+- **file**: `crates/hsip-core/src/traffic_shaping.rs`
+- **purpose**: Pads `plaintext` up to the next `PAD_TARGETS` bucket large enough to hold it plus a 1-byte ISO-7816-4-style marker (`0x80`) and a 2-byte big-endian padding length — random (not zero) padding bytes, so the padding itself doesn't look distinctively patterned on the wire. Falls back to the largest bucket (1200) if the input is already too large for any listed target, which quietly becomes a no-op-sized ceiling rather than an error for oversized input.
+- **inputs**: `plaintext: &[u8]`
+- **outputs**: `Vec<u8>`
+- **called_by**: `session::ManagedSession::encrypt_with_shaping`
+- **mutates**: nothing
+
+### `remove_padding`
+- **type**: function
+- **file**: `crates/hsip-core/src/traffic_shaping.rs`
+- **purpose**: Inverse of `add_padding` — reads the trailing 2-byte length, locates the data/padding boundary, and verifies the `0x80` marker byte at that boundary before trusting the recovered plaintext; any inconsistency (too-short input, an implausible padding length, or a missing marker) is rejected rather than silently returning corrupted data.
+- **inputs**: `padded: &[u8]`
+- **outputs**: `Result<Vec<u8>, &'static str>`
+- **called_by**: `session::ManagedSession::decrypt_with_shaping`
+- **mutates**: nothing
+
+### `apply_timing_jitter`
+- **type**: function
+- **file**: `crates/hsip-core/src/traffic_shaping.rs`
+- **purpose**: Blocks the current thread for a random 50–200ms delay before a packet is sent, to decorrelate send timing from the underlying event that triggered it. Uses `std::thread::sleep` — on an async/Tokio call path (as in `ManagedSession::encrypt_with_shaping`) this blocks the executor thread rather than yielding, a real operational tradeoff worth knowing if this is ever called from a shared async runtime under load.
+- **mutates**: blocks the calling thread (real wall-clock delay)
+
+### `TrafficShapingConfig`
+- **type**: struct
+- **file**: `crates/hsip-core/src/traffic_shaping.rs`
+- **purpose**: Toggles for padding/jitter/cover-traffic, with padding and jitter **on** by default and cover traffic **off** by default (bandwidth overhead is opt-in). `from_env()` reads `HSIP_DISABLE_PADDING`/`HSIP_DISABLE_TIMING_JITTER`/`HSIP_ENABLE_COVER_TRAFFIC`/`HSIP_COVER_TRAFFIC_INTERVAL_MS` — note the inverted sense of the first two (presence of the env var *disables* a default-on feature) versus the last two (presence *enables* a default-off one).
+- **called_by**: wherever traffic-shaping config is read at startup (not wired into `hsip-api`'s own config loading as of this file — this is `hsip-net`/session-layer configuration, separate from `hsip-api`'s `config.rs`)
+
+### `TrafficShapingConfig::print_banner`
+- **type**: function
+- **file**: `crates/hsip-core/src/traffic_shaping.rs`
+- **purpose**: Prints a human-readable startup summary of the active shaping configuration directly to stdout via `println!` — a diagnostic/CLI convenience, not a `tracing`-instrumented log line like the rest of this codebase typically uses.
+- **mutates**: stdout
+
+---
+
+## `crates/hsip-core/src/verification.rs`
+
+**This file is not part of the compiled `hsip-core` crate.** `lib.rs` declares every other module in this assignment via `pub mod ...;` but has no `pub mod verification;` (or private `mod verification;`) line anywhere — confirmed by grepping the whole `src/` tree for `mod verification`, which returns nothing. The file also references a `"verification"` Cargo feature (`#[cfg(feature = "verification")]`) that doesn't exist in `hsip-core`'s `Cargo.toml` at all (only `pqc` is a real feature there), and calls `hsip_verify::{Verifier, VerificationConfig}` — `hsip-verify` is a real, separate workspace crate (the Z3-based formal-verification crate this project's CLAUDE.md describes at length), but `hsip-core`'s own `Cargo.toml` does not depend on it. In short: this looks like an early draft or an abandoned integration point for wiring `hsip-verify`'s formal checks into `hsip-core` itself, left on disk but never connected — the actual integration this project ended up with is `hsip-verify` as its own independent workspace member (see CLAUDE.md's "Including hsip-verify in the Build"), not through this file. Read the code below as "what this file would do if it were ever wired in," not as live, exercised behavior.
+
+### `initialize_with_verification`
+- **type**: function (two variants: `#[cfg(feature = "verification")]` real impl, `#[cfg(not(...))]` stub — but see above, neither is ever compiled since the module itself is undeclared)
+- **file**: `crates/hsip-core/src/verification.rs`
+- **purpose**: Intended entry point to run `hsip-verify`'s Z3-backed checks (consent non-forgery, temporal consistency, identity binding) once at startup and report pass/fail, printing violated-property names to stderr on failure. The stub variant (for builds without the feature) unconditionally returns `true` with a warning printed, so verification failure would never block startup even if this were wired in and the feature were off.
+- **inputs**: `verbose: bool`
+- **outputs**: `bool`
+- **calls** (real variant): `hsip_verify::Verifier::new`, `verifier.verify_all`
+- **mutates**: nothing (would print to stdout/stderr)
+
+### `quick_verification_check`
+- **type**: function (same two-variant split as above)
+- **file**: `crates/hsip-core/src/verification.rs`
+- **purpose**: A faster/quieter variant (2s timeout instead of 5s, no counterexample generation, silent) intended for a lighter-weight check than full startup verification. Same caveat as above — not part of the compiled crate.
+- **outputs**: `bool`
+- **calls** (real variant): `hsip_verify::Verifier::new`, `verifier.verify_all`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-core/src/wire/mod.rs`
+
+### `MAX_HELLO_SIZE` / `MAX_CONSENT_REQUEST_SIZE` / `MAX_CONSENT_RESPONSE_SIZE` / `MAX_CONTROL_FRAME_SIZE`
+- **type**: variable (const `usize`)
+- **file**: `crates/hsip-core/src/wire/mod.rs`
+- **purpose**: Fixed upper bounds (1024 / 2048 / 2048 / 4096 bytes) for the corresponding message types on the wire — a receiver checking incoming packet length against these before attempting to parse gets a cheap first line of defense against oversized/malformed input, though this module itself doesn't enforce them (they're just the published constants; enforcement is the caller's, e.g. `hsip-net`'s job).
+- **called_by**: `hsip-net`'s packet-size validation (per naming convention, not confirmed by this file directly)
+
+---
+
+## `crates/hsip-core/src/wire/prefix.rs`
+
+### `HSIP_MAGIC` / `HSIP_VER` / `PREFIX_LEN`
+- **type**: variable (const)
+- **file**: `crates/hsip-core/src/wire/prefix.rs`
+- **purpose**: The fixed 6-byte prefix (`b"HSIP"` + big-endian `u16` version `0x0002`) every HSIP UDP packet must start with — the doc comment notes `HSIP_VER` must be kept matching "your current wire version," i.e. this constant and `crypto::labels::PROTOCOL_VERSION` (also `0x0002`) are two independently-maintained copies of the same logical version number in different modules, not derived from one shared source — a version bump would need updating both.
+- **called_by**: `write_prefix`, `check_prefix`
+
+### `write_prefix`
+- **type**: function
+- **file**: `crates/hsip-core/src/wire/prefix.rs`
+- **purpose**: Appends the 6-byte magic+version prefix to an outgoing packet buffer — always called before the rest of a packet's bytes are written.
+- **inputs**: `buf: &mut Vec<u8>`
+- **calls**: nothing beyond stdlib
+- **called_by**: outgoing-packet construction in `hsip-net`
+- **mutates**: `buf` (appends bytes)
+
+### `check_prefix`
+- **type**: function
+- **file**: `crates/hsip-core/src/wire/prefix.rs`
+- **purpose**: Cheap first-pass validation letting a receiver quickly reject any packet that isn't HSIP at all (wrong magic) or is from an incompatible wire version, before spending any effort parsing it further — exactly the kind of fast-reject check `hsip-dns`-style resolvers or `hsip-net`'s UDP receive loop would want at the very top of packet handling.
+- **inputs**: `pkt: &[u8]`
+- **outputs**: `bool`
+- **called_by**: incoming-packet validation in `hsip-net`
+- **mutates**: nothing
+
+---
+## `crates/hsip-net/src/lib.rs`
+
+Crate root for `hsip-net` — HSIP's UDP-based peer-to-peer protocol implementation (handshake, consent request/response, control-plane messaging), separate from `hsip-api`'s HTTP server. Per `CLAUDE.md`, this crate is "supporting, not actively integrated" into the main product surface (the CLI's `hsip-cli` binary is the only real consumer, via a handful of demo/handshake subcommands) — most of its modules exist as hardening layers of varying integration status. Re-exports its modules three ways: directly (`pub mod X`), and grouped under `protocol`/`transport`/`security` facade modules that just `pub use` the same items under a more descriptive namespace — no additional logic lives in the facades themselves.
+
+### `protocol` / `transport` / `security`
+- **type**: module (facade, re-export only)
+- **file**: `crates/hsip-net/src/lib.rs`
+- **purpose**: Purely organizational re-export modules — `protocol` re-exports `handshake_io`/`hello`, `transport` re-exports `udp`, `security` re-exports `connection_guard`/`consent_cache`/`guard`/`input_validator`/`rate_limiter`/`tls_wrapper`. Let callers write `hsip_net::security::guard::Guard` instead of `hsip_net::guard::Guard` if they prefer the grouped naming; both paths resolve to the same items.
+- **calls**: nothing
+- **called_by**: nothing internally — a convenience surface for external callers
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-net/src/config.rs`
+
+### `NetConfig`
+- **type**: struct
+- **file**: `crates/hsip-net/src/config.rs`
+- **purpose**: Deserializable config struct for the network layer — optional identity path override, UDP listen address (default `127.0.0.1:9100`), and a debug flag. Distinct from `hsip-api`'s `Config` (server mode/desktop mode) — this is `hsip-net`'s own, much smaller config surface, read from `~/.hsip/config.toml` (or `$HSIP_HOME/config.toml`) if present.
+- **calls**: none
+- **called_by**: `NetConfig::load` (constructs it via `toml::from_str`), CLI code that wants network defaults
+- **mutates**: nothing
+
+### `NetConfig::default_path`
+- **type**: function
+- **file**: `crates/hsip-net/src/config.rs`
+- **purpose**: Resolves the config file location — `$HSIP_HOME/config.toml` if that env var is set, else `~/.hsip/config.toml`. Falls back to `.` as the home directory if `dirs::home_dir()` fails (e.g. no `$HOME` set), rather than panicking.
+- **outputs**: `PathBuf`
+- **calls**: `std::env::var`, `dirs::home_dir`
+- **called_by**: `NetConfig::load`
+- **mutates**: nothing
+
+### `NetConfig::load`
+- **type**: function
+- **file**: `crates/hsip-net/src/config.rs`
+- **purpose**: Loads config from the resolved path if it exists; returns `NetConfig::default()` on any failure (missing file, unreadable, or malformed TOML) rather than propagating an error — a fully optional, best-effort config load, never a hard startup dependency.
+- **outputs**: `Self`
+- **calls**: `Self::default_path`, `fs::read_to_string`, `toml::from_str`
+- **called_by**: CLI/net setup code wanting network defaults
+- **mutates**: nothing (reads filesystem only)
+
+### `NetConfig::debug_banner`
+- **type**: function
+- **file**: `crates/hsip-net/src/config.rs`
+- **purpose**: Prints a one-line `[ConfigDebug]` summary of the loaded config to stderr — a debug/diagnostic aid, not gated on the `debug` flag itself (caller decides when to invoke it).
+- **calls**: `eprintln!`
+- **called_by**: CLI diagnostic paths
+- **mutates**: stderr (prints)
+
+---
+
+## `crates/hsip-net/src/connection_guard.rs`
+
+The module's own doc comment states plainly: **"STATUS: NOT CURRENTLY INTEGRATED."** This is a from-scratch connection-limiting/bandwidth-tracking layer (max concurrent connections, idle timeout, bandwidth-per-connection) built as a candidate replacement/complement for `guard.rs`, but never wired into `udp.rs` or any protocol handler — `guard.rs`'s `Guard` is the module that's actually live. Kept for potential future use; every item below is fully implemented and unit-tested but has zero real callers in this workspace outside its own test module.
+
+### `ConnectionLimits`
+- **type**: struct
+- **file**: `crates/hsip-net/src/connection_guard.rs`
+- **purpose**: Configuration for `ConnectionTracker` — max total concurrent connections (default 1000), idle timeout (5 min), handshake timeout (10s), I/O timeout (30s), max bandwidth per connection (10 MB/s).
+- **calls**: none
+- **called_by**: `ConnectionTracker::new` (unused elsewhere in the workspace)
+- **mutates**: nothing
+
+### `ConnectionTracker`
+- **type**: struct
+- **file**: `crates/hsip-net/src/connection_guard.rs`
+- **purpose**: Global, `Clone`-able (via internal `Arc` sharing) tracker of active connection count and cumulative bytes sent/received, gating new connections against `ConnectionLimits::max_total_connections`.
+- **calls**: none directly (atomics)
+- **called_by**: nothing in production code — only its own `#[cfg(test)]` module
+- **mutates**: its own `AtomicUsize`/`AtomicU64` counters
+
+### `ConnectionTracker::try_acquire`
+- **type**: function
+- **file**: `crates/hsip-net/src/connection_guard.rs`
+- **purpose**: Attempts to claim one connection slot; returns `ConnectionError::TooManyConnections` if `active_connections >= max_total_connections`, otherwise increments the counter and returns an RAII `ConnectionGuard` that releases the slot on `Drop`.
+- **outputs**: `Result<ConnectionGuard, ConnectionError>`
+- **calls**: `AtomicUsize::load`/`fetch_add`
+- **called_by**: test module only (not integrated)
+- **mutates**: `active_connections` counter
+
+### `ConnectionTracker::stats` / `ConnectionTracker::release`
+- **type**: function
+- **file**: `crates/hsip-net/src/connection_guard.rs`
+- **purpose**: `stats()` snapshots current counters into a `ConnectionStats`; `release()` (private, called only from `ConnectionGuard::drop`) decrements the active-connection count.
+- **outputs**: `ConnectionStats` / `()`
+- **calls**: atomic loads
+- **called_by**: `ConnectionGuard::drop` (release)
+- **mutates**: `active_connections` (release)
+
+### `ConnectionGuard`
+- **type**: struct
+- **file**: `crates/hsip-net/src/connection_guard.rs`
+- **purpose**: RAII handle for one acquired connection slot — tracks its own creation time, last-activity time, and bytes sent/received; releases its slot from the shared `ConnectionTracker` automatically on `Drop`, so a guard going out of scope (normal return or panic unwind) can't leak a slot.
+- **calls**: none
+- **called_by**: `ConnectionTracker::try_acquire` (constructs), unused elsewhere
+- **mutates**: its own last-activity/bytes counters; on drop, the tracker's active-connection count
+
+### `ConnectionGuard::is_idle` / `touch` / `record_sent` / `record_received` / `check_bandwidth` / `age`
+- **type**: function
+- **file**: `crates/hsip-net/src/connection_guard.rs`
+- **purpose**: Per-connection bookkeeping helpers — `is_idle` compares time since last activity to a caller-supplied timeout; `touch` refreshes the activity timestamp; `record_sent`/`record_received` add to both this connection's and the tracker's global byte counters (and implicitly `touch()`); `check_bandwidth` computes bytes/sec since connection creation (skips the check in the first second to avoid a divide-by-near-zero false positive) and flags `ConnectionError::BandwidthExceeded` if over `ConnectionLimits::max_bandwidth_per_conn`; `age` returns elapsed time since creation.
+- **outputs**: `bool` / `()` / `()` / `()` / `Result<(), ConnectionError>` / `Duration`
+- **calls**: `Instant::now`, atomic ops
+- **called_by**: none in production code (unintegrated module)
+- **mutates**: last-activity timestamp, byte counters (sent/received variants)
+
+### `ConnectionError`
+- **type**: enum
+- **file**: `crates/hsip-net/src/connection_guard.rs`
+- **purpose**: `TooManyConnections` | `BandwidthExceeded` | `Timeout` — error type for this module's checks, with a `Display`/`Error` impl.
+- **called_by**: `ConnectionTracker::try_acquire`, `ConnectionGuard::check_bandwidth`
+
+---
+
+## `crates/hsip-net/src/consent_cache.rs`
+
+### `ConsentCache`
+- **type**: struct
+- **file**: `crates/hsip-net/src/consent_cache.rs`
+- **purpose**: In-memory `HashMap<String, Instant>` mapping a requester ID to when its cached "allow" decision expires, backing instant consent revocation for live sessions. Not thread-safe on its own — `SharedConsentCache` below is the version actually used across threads/sessions.
+- **calls**: none
+- **called_by**: `SharedConsentCache` (wraps one behind a lock)
+- **mutates**: its own `allow_until` map
+
+### `ConsentCache::new` / `is_allowed` / `insert_allow` / `revoke`
+- **type**: function
+- **file**: `crates/hsip-net/src/consent_cache.rs`
+- **purpose**: `new(ttl_ms)` sets the cache's TTL for future allow entries. `is_allowed(requester)` returns `true` only if a non-expired entry exists — an expired entry is lazily evicted on lookup rather than by a background sweep. `insert_allow(requester)` (re)inserts an allow entry expiring `ttl_ms` from now. `revoke(requester)` removes the entry outright; the doc comment notes this is what makes revocation "instant" — any session with `attach_consent_check` wired to this peer will see the next `encrypt`/`decrypt` call fail with `SessionError::ConsentRevoked` rather than waiting for a stale allow to time out naturally.
+- **inputs**: `requester: &str` (empty string is treated as never-allowed / no-op on insert/revoke, not an error)
+- **outputs**: `bool` (is_allowed) / `()` (others)
+- **calls**: `Instant::now`, `HashMap` ops
+- **called_by**: `SharedConsentCache`'s matching methods
+- **mutates**: `allow_until` map
+
+### `SharedConsentCache`
+- **type**: struct
+- **file**: `crates/hsip-net/src/consent_cache.rs`
+- **purpose**: `Clone`-able, `Arc<RwLock<ConsentCache>>`-backed wrapper so the same consent cache can be shared across the control-plane loop in `udp.rs` and any per-session consent-check closures it hands out — every clone points at the same underlying cache.
+- **calls**: `ConsentCache::new`
+- **called_by**: `udp.rs::listen_control` (constructs one with a 5-minute TTL)
+- **mutates**: nothing itself (delegates to the inner lock)
+
+### `SharedConsentCache::is_allowed` / `insert_allow` / `revoke`
+- **type**: function
+- **file**: `crates/hsip-net/src/consent_cache.rs`
+- **purpose**: Thread-safe pass-throughs to the same-named `ConsentCache` methods, taking the `RwLock` write guard even for the read-like `is_allowed` (since it performs lazy eviction on miss/expiry, it's a mutating operation, not a pure read).
+- **inputs**: `peer_id: &str`
+- **outputs**: `bool` (is_allowed) / `()` (others)
+- **calls**: `RwLock::write`, `ConsentCache::{is_allowed,insert_allow,revoke}`
+- **called_by**: `udp.rs::handle_control_message` (insert_allow on a granted consent request), `create_check_callback`'s closure (is_allowed)
+- **mutates**: the shared inner `ConsentCache`
+
+### `SharedConsentCache::create_check_callback`
+- **type**: function
+- **file**: `crates/hsip-net/src/consent_cache.rs`
+- **purpose**: Builds a `Fn() -> bool + Send + Sync + 'static` closure bound to one `peer_id`, capturing a clone of the cache — meant to be handed to `ManagedSession::attach_consent_check` so every encrypt/decrypt on that session re-checks live consent state rather than a one-time snapshot from handshake time.
+- **inputs**: `peer_id: String`
+- **outputs**: `impl Fn() -> bool + Send + Sync + 'static`
+- **calls**: `self.clone()`, `ConsentCache::is_allowed` (via the returned closure)
+- **called_by**: `udp.rs::handle_control_message` (once per session direction, rx and tx, when a consent request is granted)
+- **mutates**: nothing itself; the returned closure reads (and lazily mutates via eviction) the shared cache when invoked
+
+---
+
+## `crates/hsip-net/src/guard.rs`
+
+This is the **actively integrated** rate-limiting/abuse-tracking layer, wired directly into `udp.rs`'s control-plane loop — unlike `connection_guard.rs`/`rate_limiter.rs`, which document themselves as unintegrated alternatives. `Guard` combines several independent per-IP sliding-window counters (E1 handshakes/5s, bad signatures/min, control frames/min, consent requests/min), a static IP blocklist ("tracker wall") loaded from disk, frame-size ceilings, and a peer "pinning" mechanism (auto-allow for a configured number of minutes after a consent grant).
+
+### `GuardCfg` (alias: `GuardConfig`)
+- **type**: struct
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: All tunables for `Guard` — enable flag, pin duration, per-window rate limits (E1/5s, bad-sig/min, control-frame/min, consent-request/min), and max accepted sizes for control frames/HELLO/consent request/consent response, pulled from `hsip_core::wire`'s size constants by default. `GuardConfig` is kept as a type alias for back-compat with older call sites that used that name.
+- **calls**: none
+- **called_by**: `Guard::new`, `udp.rs::listen_control`
+- **mutates**: nothing
+
+### `WindowCounter`
+- **type**: struct (private)
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: A single sliding-window rate counter — a `VecDeque<Instant>` of hit timestamps, evicted from the front whenever they age out of `window`. `hit()` records a new timestamp, evicts stale ones, and errors if the resulting in-window count exceeds `limit`. One `WindowCounter` is created lazily per IP per counter-kind (E1, bad-sig, control, consent-request) inside `Guard`'s `HashMap`s.
+- **calls**: `Instant::now`, `VecDeque` ops
+- **called_by**: `Guard::on_e1`/`on_bad_sig`/`on_control`/`on_consent_request`
+- **mutates**: its own `times` deque
+
+### `Guard`
+- **type**: struct
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: The live abuse-prevention state machine for the UDP control plane — per-IP `WindowCounter`s for four event kinds, a set of currently-pinned (auto-trusted) peer IDs with expiry times, aggregate block-event/blocked-IP stats (persisted to `~/.hsip/guard_stats.json` on every new block), and a static IP blocklist ("tracker wall") loaded once at construction from `~/.hsip/tracker_blocklist.txt`.
+- **calls**: `load_blocklist` (at construction)
+- **called_by**: `udp.rs::listen_control` (one `Guard` per control-plane listener instance)
+- **mutates**: its own counters/sets; `~/.hsip/guard_stats.json` on disk (via `mark_blocked`)
+
+### `Guard::new`
+- **type**: function
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: Constructs a fresh `Guard` from a `GuardCfg`, loading the static tracker-IP blocklist from disk at this point (not re-read afterward — a blocklist change requires restarting the listener to take effect).
+- **inputs**: `cfg: GuardCfg`
+- **outputs**: `Self`
+- **calls**: `load_blocklist`
+- **called_by**: `udp.rs::listen_control`
+- **mutates**: nothing (reads the blocklist file)
+
+### `Guard::debug_banner`
+- **type**: function
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: Prints a one-line summary of the active config (all rate limits, size ceilings, padding sizes) plus a note if the tracker wall is non-empty — a startup diagnostic, kept under this name specifically because `udp.rs` calls it by that name (back-compat comment in source).
+- **calls**: `eprintln!`
+- **called_by**: `udp.rs::listen_control`
+- **mutates**: stderr
+
+### `Guard::is_blocklisted` / `mark_blocked` / `blocked_stats`
+- **type**: function
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: `is_blocklisted` checks the static tracker-wall set. `mark_blocked` (private) increments the in-memory block counters and immediately persists a `GuardStats` snapshot to `~/.hsip/guard_stats.json` — called from every one of the `on_*`/`validate_*` methods below whenever they reject a request, so the stats file is always current after any block, not batched. `blocked_stats` exposes the current `(blocked_events, blocked_ips.len())` tuple to in-process callers (e.g. a status command).
+- **outputs**: `bool` / `()` / `(u64, usize)`
+- **calls**: `persist_stats`
+- **called_by**: every `on_*`/`validate_*` method below (mark_blocked); external status/diagnostic code (blocked_stats)
+- **mutates**: `blocked_events`/`blocked_ips` fields; `~/.hsip/guard_stats.json`
+
+### `Guard::on_control_frame` / `on_control` / `on_e1` / `on_bad_sig` / `on_consent_request`
+- **type**: function
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: The five rate/size gates the control-plane loop calls on every relevant inbound event. `on_control_frame` layers a `max_frame_len` size check on top of `on_control`'s rate check. Each checks the tracker-wall blocklist first (immediate reject + `mark_blocked`, logged to stderr), then hits the appropriate per-IP `WindowCounter`, marking the IP blocked on overflow. All are no-ops (always `Ok(())`) when `cfg.enable` is false.
+- **inputs**: `ip: IpAddr`, plus `len: usize` for the size-checked variants
+- **outputs**: `Result<(), String>`
+- **calls**: `is_blocklisted`, `mark_blocked`, `WindowCounter::hit`
+- **called_by**: `udp.rs::receive_e1_initiation` (on_e1), `udp.rs::process_control_messages` (on_control_frame), `udp.rs::evaluate_consent_request` (on_bad_sig) — `on_consent_request` is defined but not currently called from `udp.rs` (no per-request rate gate wired into `evaluate_consent_request` beyond the bad-sig check)
+- **mutates**: the relevant per-IP `WindowCounter`; blocked-stats state on rejection
+
+### `Guard::pin` / `is_pinned`
+- **type**: function
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: `pin` marks a peer ID as trusted for `cfg.pin_minutes` minutes (called after a consent grant). `is_pinned` checks — and opportunistically garbage-collects — whether a pin is still live; an expired pin is removed from both `pinned`/`pin_until` maps on the check that discovers it, rather than by a background sweep.
+- **inputs**: `peer_id: &str`
+- **outputs**: `()` / `bool`
+- **calls**: `Instant::now`
+- **called_by**: `udp.rs::evaluate_consent_request` (pin, on an "allow" decision); nothing currently calls `is_pinned` from `udp.rs` — it's exposed but not wired into the control-message-handling rate/trust logic yet
+- **mutates**: `pinned`/`pin_until` maps
+
+### `Guard::validate_consent_response_size` / `validate_hello_size`
+- **type**: function
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: Pure size-ceiling checks (no rate window) for consent responses and HELLO messages — meant to run before expensive downstream work (e.g. signature verification) so an oversized message is rejected cheaply.
+- **inputs**: `ip: IpAddr`, `len: usize`
+- **outputs**: `Result<(), String>`
+- **calls**: `mark_blocked` (on rejection)
+- **called_by**: not currently called from `udp.rs`'s control loop (`hello.rs`'s HELLO handling doesn't invoke `Guard` at all) — defined and tested but not yet wired into the live message path
+- **mutates**: blocked-stats state on rejection
+
+### `stats_path` / `persist_stats` / `blocklist_path` / `load_blocklist`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/guard.rs`
+- **purpose**: Filesystem helpers — `stats_path`/`blocklist_path` resolve `~/.hsip/guard_stats.json` and `~/.hsip/tracker_blocklist.txt` respectively (via `dirs::home_dir()`, `None` if unavailable). `persist_stats` best-effort writes the stats JSON (creates the parent dir, silently no-ops on any I/O error — `let _ = ...`). `load_blocklist` reads the blocklist file line-by-line, skipping blank lines and `#`-comments, parsing each remaining line as an `IpAddr` and silently skipping unparseable ones.
+- **calls**: `fs::create_dir_all`, `fs::write`/`fs::read_to_string`, `IpAddr::parse`
+- **called_by**: `Guard::mark_blocked` (persist_stats), `Guard::new` (load_blocklist)
+- **mutates**: `~/.hsip/guard_stats.json` (persist_stats); reads (not writes) the blocklist file
+
+---
+
+## `crates/hsip-net/src/handshake_io.rs`
+
+A tiny demo/diagnostic module — not the real cryptographic handshake (that's `udp.rs`'s `InitiatorHandshake`/`ResponderHandshake`). Backs the `hsip-cli` `handshake-listen`/`handshake-connect` demo subcommands (`crates/hsip-cli/src/commands/handshake.rs`) for manually exercising basic UDP connectivity with a fixed, unsigned payload.
+
+### `recv_and_verify_hello`
+- **type**: function
+- **file**: `crates/hsip-net/src/handshake_io.rs`
+- **purpose**: Binds a UDP socket and blocks forever waiting for exactly one inbound datagram, then prints who it came from and how large it was. Despite the name, performs **no actual verification** — it doesn't check the payload's contents, format, or any signature; "verify" here just means "received something and printed it."
+- **inputs**: `bind_addr: &str`
+- **outputs**: `std::io::Result<()>`
+- **calls**: `UdpSocket::bind`, `UdpSocket::recv_from`
+- **called_by**: `hsip-cli`'s `handshake-listen` command (`commands/handshake.rs`)
+- **mutates**: nothing (network I/O only, no state)
+
+### `send_hello`
+- **type**: function
+- **file**: `crates/hsip-net/src/handshake_io.rs`
+- **purpose**: Sends a single fixed, unsigned demo payload (`b"HSIP_DEMO_HELLO_v1"`) to the given address from an ephemeral socket — a connectivity smoke-test, not a real HELLO (compare `hello.rs::build_hello`, which produces a signed, structured `Hello`).
+- **inputs**: `dest_addr: &str`
+- **outputs**: `std::io::Result<()>`
+- **calls**: `UdpSocket::bind`, `UdpSocket::send_to`
+- **called_by**: `hsip-cli`'s `handshake-connect` command (`commands/handshake.rs`)
+- **mutates**: nothing (network I/O only)
+
+---
+
+## `crates/hsip-net/src/hello.rs`
+
+Builds and verifies the real, cryptographically signed `Hello` peer-discovery message — distinct from `handshake_io.rs`'s unsigned demo payload and from `udp.rs`'s `TAG_E1`/`TAG_E2` ephemeral-key handshake. A `Hello` announces a peer's identity, public key, and capability list, self-signed with that peer's long-term Ed25519 identity key.
+
+### `Hello`
+- **type**: struct
+- **file**: `crates/hsip-net/src/hello.rs`
+- **purpose**: Wire format for a signed peer-announcement message: message type tag, base32 peer ID, hex-encoded Ed25519 public key, a capability string list (e.g. `"consent=1"`), a millisecond timestamp, a base64 nonce, and a hex-encoded signature over all of the above.
+- **calls**: none
+- **called_by**: `build_hello` (constructs), `verify_hello` (validates), `udp.rs::hello::send_hello_with_retry`/`listen_hello`
+- **mutates**: nothing
+
+### `detect_local_capabilities`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/hello.rs`
+- **purpose**: Returns a hardcoded capability list (`pqc=0`, `dtn=1`, `mesh=1`, `sat=0`, `consent=1`) — not actually probed from runtime feature flags, just a fixed announcement of what this build supports.
+- **outputs**: `Vec<String>`
+- **called_by**: `build_hello`
+- **mutates**: nothing
+
+### `generate_signature_payload`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/hello.rs`
+- **purpose**: Builds the canonical `"HELLO|peer_id|pubkey_hex|caps_joined|ts|nonce"` string that gets signed (by the sender) and reconstructed-and-checked (by the verifier) — the single source of truth for what bytes actually get signed, called identically from both `build_hello` and `verify_hello` so the two can never drift apart.
+- **inputs**: `peer_identity: &str`, `pubkey_encoded: &str`, `capability_list: &[String]`, `timestamp: u64`, `nonce_encoded: &str`
+- **outputs**: `String`
+- **called_by**: `build_hello`, `verify_hello`
+- **mutates**: nothing
+
+### `build_hello`
+- **type**: function
+- **file**: `crates/hsip-net/src/hello.rs`
+- **purpose**: Constructs a fully signed `Hello` for the given identity keypair — derives the peer ID from the verifying key, generates a fresh 12-byte random nonce (`OsRng`), assembles the canonical signing payload, and Ed25519-signs it.
+- **inputs**: `signing_key: &SigningKey`, `verifying_key: &VerifyingKey`, `current_timestamp_ms: u64`
+- **outputs**: `Hello`
+- **calls**: `peer_id_from_pubkey`, `generate_signature_payload`, `SigningKey::sign`
+- **called_by**: `udp.rs::hello::send_hello_with_retry`
+- **mutates**: nothing (reads OS RNG)
+
+### `verify_hello`
+- **type**: function
+- **file**: `crates/hsip-net/src/hello.rs`
+- **purpose**: Independently validates a received `Hello`: decodes and reconstructs the `VerifyingKey` from `pub_key_hex`, checks that the claimed `peer_id` actually derives from that key (binding check — a `Hello` can't claim someone else's peer ID while using its own key), rebuilds the canonical signing payload, and verifies the Ed25519 signature via `verify_strict` (rejects malleable/non-canonical signatures, not just `verify`'s looser check).
+- **inputs**: `hello_msg: &Hello`
+- **outputs**: `Result<(), String>`
+- **calls**: `hex::decode`, `VerifyingKey::from_bytes`, `peer_id_from_pubkey`, `generate_signature_payload`, `VerifyingKey::verify_strict`
+- **called_by**: intended verifier of a received `Hello` — not currently called from `udp.rs::hello::listen_hello` (which only strips the wire prefix and prints the raw JSON, doesn't parse/verify it as a `Hello`); available for callers that do want to validate one
+- **mutates**: nothing (pure verification)
+
+---
+
+## `crates/hsip-net/src/input_validator.rs`
+
+Pure input-sanitization helpers for the UDP protocol layer — size/format/character-class checks meant to run before any expensive processing (crypto, parsing) on network-supplied strings. All functions are pure and side-effect-free.
+
+### `MAX_MESSAGE_SIZE` / `MAX_CONSENT_PURPOSE_LENGTH` / `MAX_DESTINATION_LENGTH` / `MAX_PEER_ID_LENGTH` / `MAX_SIGNATURE_LENGTH` / `MAX_PUBLIC_KEY_LENGTH` / `MAX_NONCE_LENGTH`
+- **type**: variable (constant)
+- **file**: `crates/hsip-net/src/input_validator.rs`
+- **purpose**: Fixed upper bounds (1100 bytes for messages, 512 for a consent purpose string, 253 for a destination/domain, 64 for a peer ID, 128 for a signature, 64 for a public key, 32 for a nonce) used by the `validate_*` functions below to reject oversized inputs before further processing — sized to stay comfortably under typical UDP MTU limits.
+- **called_by**: the corresponding `validate_*` function in this file
+
+### `ValidationError`
+- **type**: enum
+- **file**: `crates/hsip-net/src/input_validator.rs`
+- **purpose**: `TooLarge`/`InvalidFormat`/`InvalidCharacters`/`Empty`, each carrying the offending field's name — a uniform, field-labeled error shape for every validator in this module, with a `Display`/`Error` impl.
+- **called_by**: every `validate_*` function
+
+### `validate_destination`
+- **type**: function
+- **file**: `crates/hsip-net/src/input_validator.rs`
+- **purpose**: Accepts either a parseable IP address (any format `std::net::IpAddr` understands, including IPv6) or a domain-name-shaped string (alphanumeric/`.`/`-`/`:` only, not starting or ending with `.`/`-`). Rejects empty, oversized, or malformed values.
+- **inputs**: `dest: &str`
+- **outputs**: `Result<(), ValidationError>`
+- **calls**: `str::parse::<IpAddr>`
+- **called_by**: intended for any protocol handler accepting a caller-supplied destination (no current call site found in this workspace — available for callers that add one)
+- **mutates**: nothing
+
+### `validate_peer_id`
+- **type**: function
+- **file**: `crates/hsip-net/src/input_validator.rs`
+- **purpose**: Checks a peer ID is non-empty, within `MAX_PEER_ID_LENGTH`, and composed only of valid Base32 characters (`A`-`Z`, `2`-`7` — note this matches `hsip_core::identity`'s base32-derived peer ID format).
+- **inputs**: `peer_id: &str`
+- **outputs**: `Result<(), ValidationError>`
+- **mutates**: nothing
+
+### `validate_hex_string`
+- **type**: function
+- **file**: `crates/hsip-net/src/input_validator.rs`
+- **purpose**: Generic hex-string validator (used for signatures, public keys, etc.) — non-empty, within a caller-supplied max length, all-hex-digit, and even length (hex encodes whole bytes, so an odd-length string can't be decoded).
+- **inputs**: `hex: &str`, `max_len: usize`, `field_name: &str`
+- **outputs**: `Result<(), ValidationError>`
+- **mutates**: nothing
+
+### `validate_message_size`
+- **type**: function
+- **file**: `crates/hsip-net/src/input_validator.rs`
+- **purpose**: Rejects a zero-length or over-`MAX_MESSAGE_SIZE` message.
+- **inputs**: `size: usize`
+- **outputs**: `Result<(), ValidationError>`
+- **mutates**: nothing
+
+### `sanitize_for_log`
+- **type**: function
+- **file**: `crates/hsip-net/src/input_validator.rs`
+- **purpose**: Strips control characters (except newline/tab) from a string and truncates to 256 chars before it's written to a log — prevents a malicious peer from injecting terminal escape sequences or forging fake log lines via crafted input, and bounds log-line size.
+- **inputs**: `s: &str`
+- **outputs**: `String`
+- **mutates**: nothing
+- **called_by**: no current call site in this workspace found — a hardening helper available to any code logging peer-supplied strings
+
+### `validate_nonce`
+- **type**: function
+- **file**: `crates/hsip-net/src/input_validator.rs`
+- **purpose**: Checks a nonce is non-empty, within `MAX_NONCE_LENGTH`, and composed of alphanumeric or base64 characters (`+`/`/`/`=`).
+- **inputs**: `nonce: &str`
+- **outputs**: `Result<(), ValidationError>`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-net/src/rate_limiter.rs`
+
+Like `connection_guard.rs`, this module's doc comment states **"STATUS: NOT CURRENTLY INTEGRATED"** — a token-bucket-based rate limiter with connection-count tracking and a 3-strikes IP ban, fully implemented and tested but not called from `udp.rs` or anywhere else in the workspace. `guard.rs`'s sliding-window `Guard` is the module actually wired into the live control-plane path.
+
+### `RateLimitConfig`
+- **type**: struct
+- **file**: `crates/hsip-net/src/rate_limiter.rs`
+- **purpose**: Tunables for `RateLimiter` — requests/sec (default 100), burst capacity (200 tokens), ban duration (5 min) after repeated violations, and max connections per IP (10).
+- **called_by**: `RateLimiter::new` (unused elsewhere)
+
+### `TokenBucket` (private)
+- **type**: struct
+- **file**: `crates/hsip-net/src/rate_limiter.rs`
+- **purpose**: Classic token-bucket per IP — refills continuously based on elapsed time (`tokens += elapsed_secs * rate`, capped at `burst_capacity`), tracks a violation count, and bans the IP (sets `banned_until`) once violations reach 3.
+- **calls**: `Instant::now`
+- **called_by**: `RateLimiter::check_request`
+- **mutates**: its own `tokens`/`last_refill`/`violations`/`banned_until` fields
+
+### `TokenBucket::refill` / `is_banned` / `try_consume`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/rate_limiter.rs`
+- **purpose**: `refill` updates the token count based on elapsed time since last refill. `is_banned` checks whether `banned_until` is still in the future. `try_consume` is banned-check → refill → consume-one-token-or-record-violation, printing a stderr line and setting a 5-minute (configurable) ban once 3 violations accumulate.
+- **outputs**: `()` / `bool` / `bool`
+- **calls**: `Instant::now`
+- **called_by**: `RateLimiter::check_request` (try_consume, which calls the other two internally)
+- **mutates**: bucket fields; prints to stderr on ban
+
+### `RateLimiter`
+- **type**: struct
+- **file**: `crates/hsip-net/src/rate_limiter.rs`
+- **purpose**: Per-IP `HashMap<IpAddr, TokenBucket>` (behind an `Arc<RwLock<_>>`) for request-rate limiting, plus a separate per-IP connection counter for `check_connection`/`release_connection`. Not integrated into any live listener in this workspace — see module-level status note above.
+- **calls**: none
+- **called_by**: nothing in production code — only its own `#[cfg(test)]` module
+- **mutates**: its `buckets`/`connections` maps
+
+### `RateLimiter::check_request` / `check_connection` / `release_connection` / `cleanup`
+- **type**: function
+- **file**: `crates/hsip-net/src/rate_limiter.rs`
+- **purpose**: `check_request` looks up (or creates) an IP's bucket and applies `try_consume`. `check_connection`/`release_connection` are a simple per-IP counter gated at `max_connections_per_ip`, incrementing/decrementing (and removing the entry once it hits zero). `cleanup` (meant to be called periodically by an external caller — nothing in this workspace does) prunes buckets untouched for 5+ minutes (unless still banned) and zero-count connection entries.
+- **inputs**: `ip: IpAddr`
+- **outputs**: `Result<(), RateLimitError>` (check_request/check_connection) / `()` (release_connection, cleanup)
+- **calls**: `TokenBucket::try_consume`/`is_banned`
+- **called_by**: nothing in production code (unintegrated)
+- **mutates**: `buckets`/`connections` maps
+
+### `RateLimitError`
+- **type**: enum
+- **file**: `crates/hsip-net/src/rate_limiter.rs`
+- **purpose**: `RateExceeded` | `Banned` | `TooManyConnections`, with `Display`/`Error` impls.
+- **called_by**: `RateLimiter`'s check methods
+
+---
+
+## `crates/hsip-net/src/tls_wrapper.rs`
+
+**Important caveat found while reading this file, not documented anywhere in its own comments:** despite the module doc comment's claims about TLS 1.3, MITM protection, and downgrade-attack resistance, `TlsStream::connect`'s actual implementation performs **no real TLS handshake at all** — it opens a plain `TcpStream` and wraps it in `MockTlsStream`, whose `peer_certificate_valid()` unconditionally returns `true` and which reads/writes the raw, unencrypted TCP bytes straight through. The module comment itself flags this: `MockTlsStream`'s doc says "replace with rustls in production." As it stands, any code that actually used this module for a "TLS-wrapped" connection would get zero cryptographic protection while believing certificate verification succeeded. Not currently called from anywhere in this workspace (grep found no call sites outside its own test module) — a stub/placeholder API surface, not a wired-in security layer.
+
+### `TlsConfig`
+- **type**: struct
+- **file**: `crates/hsip-net/src/tls_wrapper.rs`
+- **purpose**: Declared TLS policy — minimum version (defaults to `Tls13`), allowed cipher suites, whether to verify certificates (default `true`), connect timeout (10s), and whether to require perfect forward secrecy (default `true`). None of these fields are actually enforced by `TlsStream::connect`'s real (mock) implementation beyond `connect_timeout`.
+- **called_by**: `TlsStream::connect`
+
+### `TlsVersion` / `CipherSuite`
+- **type**: enum
+- **file**: `crates/hsip-net/src/tls_wrapper.rs`
+- **purpose**: `TlsVersion` (`Tls12`/`Tls13`, ordered). `CipherSuite` lists three TLS 1.3 AEAD suites (AES-256-GCM/SHA-384, ChaCha20-Poly1305/SHA-256, AES-128-GCM/SHA-256) — declarative labels only; no cipher is actually negotiated since no real TLS handshake occurs.
+- **called_by**: `TlsConfig::default`, `TlsStream`
+
+### `TlsStream`
+- **type**: struct
+- **file**: `crates/hsip-net/src/tls_wrapper.rs`
+- **purpose**: Wraps a boxed `TlsStreamTrait` object (currently always `MockTlsStream` — see caveat above) along with the peer address and (claimed, not negotiated) cipher suite. Implements `Read`/`Write` by delegating to the inner stream.
+- **calls**: inner stream's `read`/`write`
+- **called_by**: none in this workspace outside its own tests
+
+### `TlsStream::connect`
+- **type**: function
+- **file**: `crates/hsip-net/src/tls_wrapper.rs`
+- **purpose**: Validates hostname (non-empty, ≤253 chars) and port (non-zero), opens a real `TcpStream::connect_timeout`, sets 30s read/write timeouts, then wraps it in `MockTlsStream` — **no TLS handshake happens here** (see module-level caveat). Returns `Self` with `cipher_suite` hardcoded to `Tls13Chacha20Poly1305Sha256` regardless of what actually happened on the wire.
+- **inputs**: `host: &str`, `port: u16`, `config: &TlsConfig`
+- **outputs**: `Result<Self, TlsError>`
+- **calls**: `TcpStream::connect_timeout`, `MockTlsStream::new`
+- **called_by**: none in this workspace outside its own tests
+- **mutates**: opens a real OS-level TCP connection
+
+### `TlsStream::cipher_suite` / `peer_address` / `is_tls13` / `verify_peer`
+- **type**: function
+- **file**: `crates/hsip-net/src/tls_wrapper.rs`
+- **purpose**: Simple accessors. `verify_peer` calls the inner stream's `peer_certificate_valid()`, which for `MockTlsStream` always returns `true` — so `verify_peer()` can never actually fail against the current implementation, regardless of `TlsConfig::verify_certificates`.
+- **outputs**: `Option<CipherSuite>` / `&str` / `bool` / `Result<(), TlsError>`
+- **called_by**: none in this workspace outside its own tests
+
+### `MockTlsStream`
+- **type**: struct (private)
+- **file**: `crates/hsip-net/src/tls_wrapper.rs`
+- **purpose**: The placeholder "TLS" stream — just a raw `TcpStream` underneath. `peer_certificate_valid()` is hardcoded `true`; `Read`/`Write` pass straight through to the plain TCP socket with zero encryption. Its own doc comment says to "replace with rustls in production," confirming this was always meant to be swapped out, not a finished feature.
+- **calls**: `TcpStream::read`/`write`/`flush`
+- **called_by**: `TlsStream::connect` (the only constructor path)
+- **mutates**: the underlying TCP stream
+
+### `TlsError`
+- **type**: enum
+- **file**: `crates/hsip-net/src/tls_wrapper.rs`
+- **purpose**: `InvalidHostname` | `InvalidPort` | `ConnectionFailed` | `HandshakeFailed` | `CertificateVerificationFailed` | `UnsupportedVersion` | `WeakCipherSuite` — several of these variants (`HandshakeFailed`, `UnsupportedVersion`, `WeakCipherSuite`) are declared but never actually produced anywhere in this file, since no real handshake/cipher-negotiation logic exists yet to fail in those ways.
+- **called_by**: `TlsStream::connect`, `TlsStream::verify_peer`
+
+---
+
+## `crates/hsip-net/src/udp.rs`
+
+The real, live UDP transport and control-plane protocol — the one module in this crate genuinely wired end-to-end and used by `hsip-cli`. Implements an X25519 ephemeral-key handshake (`TAG_E1`/`TAG_E2`), ChaCha20-Poly1305-backed encrypted control messages (`TAG_D`) carrying the consent-request/response protocol from `hsip-core::consent`, integration with `guard.rs`'s `Guard` for abuse prevention, `consent_cache.rs`'s `SharedConsentCache` for instant revocation, and optional reputation-based filtering (`hsip-reputation`) plus decoy traffic (`HSIP_DECOY_ADDR`) for basic traffic-analysis resistance. Also re-exports a small `hello` submodule (distinct from top-level `hello.rs`) providing signed-HELLO send/listen helpers used directly by `hsip-cli`.
+
+### `hello::listen_hello`
+- **type**: function
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Binds a blocking UDP socket and loops forever, printing any inbound packet that has a valid HSIP wire prefix (stripping the prefix and printing the rest as a lossy UTF-8 string) — does **not** parse it into a `Hello` struct or call `hello.rs::verify_hello`, so a malicious peer's unsigned/invalid payload is printed identically to a real signed `Hello`. Purely a debug/demo listener.
+- **inputs**: `addr: &str`
+- **outputs**: `Result<()>`
+- **calls**: `UdpSocket::bind`, `hsip_core::wire::prefix::check_prefix`
+- **called_by**: `hsip-cli`'s hello-listen command (`main.rs`)
+- **mutates**: nothing (network I/O only)
+
+### `hello::send_hello` / `hello::send_hello_with_retry`
+- **type**: function
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Builds a real signed `Hello` (via the top-level `hello.rs::build_hello`), wraps it with the HSIP wire prefix, and sends it via UDP with exponential-backoff retry (0ms/1s/2s/4s, 3 retries by default → ~7s total timeout) — meant for UDP's inherent unreliability, unlike `handshake_io.rs::send_hello`'s single unsigned demo send. Rejects the packet outright if it exceeds `hsip_core::wire::MAX_HELLO_SIZE` (MTU-safety), before ever attempting to send.
+- **inputs**: `sk: &SigningKey`, `vk: &VerifyingKey`, `to: &str`, `now_ms: u64`, (send_hello_with_retry adds) `max_retries: u32`
+- **outputs**: `Result<()>`
+- **calls**: `hello::build_hello` (top-level module), `hsip_core::wire::prefix::write_prefix`, `UdpSocket::send_to`
+- **called_by**: `hsip-cli`'s hello-connect command (`main.rs`)
+- **mutates**: nothing (network I/O; sleeps between retries)
+
+### `random_salt` / `derive_session_key_from_shared` / `hsip_consent_label`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Crypto helpers underpinning session setup. `random_salt` generates a 4-byte `OsRng` salt for `ManagedSession::new`. `derive_session_key_from_shared` runs HKDF-SHA256 over an X25519 shared secret, using the peer label's bytes as the HKDF `info` parameter, to produce the actual AEAD session key. `hsip_consent_label` returns the fixed `b"CONSENTv1"` label used to domain-separate this protocol's derived keys from any other use of the same shared secret.
+- **calls**: `Hkdf::<Sha256>::new`/`expand`, `OsRng::fill_bytes`
+- **called_by**: `InitiatorHandshake::complete_exchange`, `ResponderHandshake::finalize_sessions`
+- **mutates**: nothing (random_salt reads OS RNG)
+
+### `InitiatorHandshake` / `ResponderHandshake`
+- **type**: struct (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: The two sides of the ephemeral X25519 key exchange. `InitiatorHandshake` generates its own ephemeral keypair, builds the `TAG_E1` packet to send first, and later completes the exchange once it receives the responder's `TAG_E2` public key, producing one `ManagedSession`. `ResponderHandshake` is constructed directly from a received E1 key, computes the shared secret immediately, builds the `TAG_E2` reply packet, and produces two independent sessions (`rx_session`/`tx_session`) from the same shared secret — separate session objects for each direction, both derived under the same `CONSENTv1` label (direction is distinguished by which socket/rekey state each side actually uses it for, not by a different label).
+- **calls**: `Ephemeral::generate`/`into_shared`, `derive_session_key_from_shared`, `ManagedSession::new`
+- **called_by**: `perform_client_exchange` (Initiator), `listen_control` (Responder)
+- **mutates**: nothing (constructs new session state)
+
+### `spawn_decoy_if_env`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: If `HSIP_DECOY_ADDR` is set, spawns a background thread that binds a UDP socket and, for every inbound packet, replies after a small pseudo-random delay with a malformed-looking HSIP-prefixed packet (tag `0xFF`, padded to a variable length derived from the input size and a rolling counter) — basic traffic-analysis resistance, making a passive observer's job of distinguishing real control traffic from noise slightly harder. No-op if the env var is unset or empty.
+- **calls**: `UdpSocket::bind`, `std::thread::spawn`, `hsip_core::wire::prefix::write_prefix`
+- **called_by**: `listen_control`
+- **mutates**: spawns a detached background thread; opens a UDP socket
+
+### `listen_control`
+- **type**: function
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: The main server-side entry point for the control plane — sets up `Guard`, `PolicyCfg` (reputation enforcement config from env), a `SharedConsentCache` (5-minute TTL), binds the listening socket, optionally spawns the decoy responder, waits for exactly one E1 handshake (single-peer-at-a-time design — see gotcha below), completes the responder handshake, loads this node's own signing identity (via `hsip_core::keystore::load_keypair`), then hands off to `process_control_messages` for the actual message loop.
+- **inputs**: `addr: &str`
+- **outputs**: `Result<()>`
+- **calls**: `Guard::new`/`debug_banner`, `PolicyCfg::from_env`/`print_banner`, `SharedConsentCache::new`, `UdpSocket::bind`, `spawn_decoy_if_env`, `receive_e1_initiation`, `ResponderHandshake::from_received_e1`/`build_e2_packet`/`finalize_sessions`, `hsip_core::keystore::load_keypair`, `process_control_messages`
+- **called_by**: `hsip-cli`'s control-listen command
+- **mutates**: binds a socket; loads identity from disk; spawns the decoy thread if configured
+
+### `receive_e1_initiation`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Blocks (polling with a 1ms sleep on `WouldBlock`) until an inbound datagram matches the E1 frame shape (correct wire prefix, `TAG_E1`, long enough to contain a 32-byte key), silently discarding anything else (malformed frames, non-E1 tags) rather than erroring — an attacker sending garbage just gets ignored, not rate-limited itself at this stage beyond `guard.on_e1` being called once a valid-shaped E1 is seen.
+- **inputs**: `sock: &UdpSocket`, `guard: &mut Guard`
+- **outputs**: `Result<(SocketAddr, XPublicKey)>`
+- **calls**: `UdpSocket::recv_from`, `hsip_core::wire::prefix::check_prefix`, `Guard::on_e1`
+- **called_by**: `listen_control`
+- **mutates**: `guard`'s E1 rate-window state
+
+### `process_control_messages`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: The main receive loop after handshake completion — for every inbound `TAG_D` frame, runs it through `guard.on_control_frame` (size + rate check), decrypts it via the rx session, and dispatches to `handle_control_message`. Non-control frames are silently ignored; `WouldBlock` triggers a 5ms sleep; a genuine socket error other than the Windows `WSAECONNRESET` special-case propagates and ends the loop. Marked `#[allow(clippy::too_many_arguments)]` per this codebase's documented precedent (mirrors `hsip-net`'s own `udp.rs::handle_control_message` and the workspace-wide clippy cleanup noted in `CLAUDE.md`).
+- **inputs**: `sock: &UdpSocket`, `rx_session: &mut ManagedSession`, `tx_session: &mut ManagedSession`, `guard: &mut Guard`, `policy: &PolicyCfg`, `signing_key: &SigningKey`, `verifying_key: &VerifyingKey`, `consent_cache: &SharedConsentCache`
+- **outputs**: `Result<()>` (never returns on the happy path — runs until an unrecoverable I/O error)
+- **calls**: `Guard::on_control_frame`, `decrypt_control_frame`, `handle_control_message`
+- **called_by**: `listen_control`
+- **mutates**: session/guard state indirectly via the functions it calls; loops forever
+
+### `decrypt_control_frame`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Parses a `TAG_D` frame's 8-byte big-endian counter and ciphertext, then decrypts via `ManagedSession::decrypt` with the fixed `AAD_LABEL_E2` associated data. Returns `None` (not an error) on a decrypt failure or a `RekeyRequired` result — the latter is explicitly logged as "not implemented," meaning this protocol has no working rekey mechanism yet and a session needing one will simply have its messages silently dropped from that point on.
+- **inputs**: `raw_frame: &[u8]`, `session: &mut ManagedSession`, `aad: &[u8]`
+- **outputs**: `Option<Vec<u8>>`
+- **calls**: `ManagedSession::decrypt`
+- **called_by**: `process_control_messages`
+- **mutates**: session's internal replay/counter state (via `decrypt`)
+
+### `handle_control_message`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Dispatches a decrypted plaintext by trying to parse it as (in order) a `ConsentRequest`, then a `ConsentResponse`, then falling back to printing it as raw JSON if neither matches. For a `ConsentRequest`: evaluates the decision via `evaluate_consent_request`, and if granted, wires up **instant revocation** by attaching a `SharedConsentCache`-backed check callback to both the rx and tx sessions (so a later `revoke()` call on that peer ID immediately breaks encrypt/decrypt on this exact session, not just future new sessions) before signing and sending back a `ConsentResponse`. For a `ConsentResponse`, only logs it — no further protocol action (the client side that requested it handles interpretation separately). `#[allow(clippy::too_many_arguments)]`, same reasoning as `process_control_messages`.
+- **inputs**: `plaintext: Vec<u8>`, `peer_addr: SocketAddr`, `sock: &UdpSocket`, `rx_session/tx_session: &mut ManagedSession`, `guard: &mut Guard`, `policy: &PolicyCfg`, `reputation_store: &mut Option<Store>`, `signing_key: &SigningKey`, `verifying_key: &VerifyingKey`, `aad: &[u8]`, `consent_cache: &SharedConsentCache`
+- **outputs**: `Result<()>`
+- **calls**: `evaluate_consent_request`, `SharedConsentCache::create_check_callback`/`insert_allow`, `ManagedSession::attach_consent_check`, `build_response_with_decision`, `send_encrypted_response`
+- **called_by**: `process_control_messages`
+- **mutates**: attaches consent-check closures to both sessions; inserts into the shared consent cache; sends a UDP response
+
+### `evaluate_consent_request`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Decides `"allow"` or `"deny"` for an inbound `ConsentRequest`. First checks the request's own embedded signature via `hsip_core::consent::validate_request` (invalid → deny, and flags the sender's IP via `guard.on_bad_sig`). If still allowed and reputation enforcement is on (`HSIP_ENFORCE_REP=1`), an empty requester ID is auto-denied, otherwise a `hsip_reputation::store::Store` is lazily opened (from `~/.hsip/reputation.log`) and the requester's score checked against `HSIP_REP_THRESHOLD` (default -6) — below threshold denies. A granted decision also pins the requester in `Guard` for future auto-trust.
+- **inputs**: `request: &ConsentRequest`, `peer_addr: SocketAddr`, `guard: &mut Guard`, `policy: &PolicyCfg`, `reputation_store: &mut Option<Store>`
+- **outputs**: `Result<String>` (`"allow"` or `"deny"`)
+- **calls**: `hsip_core::consent::validate_request`, `Guard::on_bad_sig`/`pin`, `hsip_reputation::store::Store::open`/`compute_score`
+- **called_by**: `handle_control_message`
+- **mutates**: `guard`'s bad-sig window / pin state; lazily opens and reads the reputation store (first call per loop iteration only — the `Option` caches it across messages within one `process_control_messages` invocation)
+
+### `send_encrypted_response`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Serializes a `ConsentResponse` to JSON, encrypts it via the tx session, frames it with the wire prefix + `TAG_D` + big-endian counter, and sends it — errors from `sock.send_to` are explicitly swallowed (`.ok()`), so a failed reply send is silent from this function's perspective (the caller has no way to detect it failed).
+- **inputs**: `sock: &UdpSocket`, `session: &mut ManagedSession`, `response: &ConsentResponse`, `dest: SocketAddr`, `aad: &[u8]`
+- **outputs**: `Result<()>`
+- **calls**: `ManagedSession::encrypt`, `hsip_core::wire::prefix::write_prefix`
+- **called_by**: `handle_control_message`
+- **mutates**: tx session's internal counter/replay state; sends a UDP packet
+
+### `send_consent_request` / `send_consent_response`
+- **type**: function
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Public client-side entry points — serialize the given `ConsentRequest`/`ConsentResponse` to JSON and hand it to `perform_client_exchange`, which does a full fresh handshake per call (no session reuse across separate `send_consent_request`/`send_consent_response` invocations).
+- **inputs**: `to: &str`, `req: &ConsentRequest` / `resp: &ConsentResponse`
+- **outputs**: `Result<()>`
+- **calls**: `perform_client_exchange`
+- **called_by**: `hsip-cli`'s consent-request/consent-response commands (`main.rs`)
+- **mutates**: nothing directly (delegates)
+
+### `perform_client_exchange`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Full client-side round trip for one payload: binds an ephemeral socket (2s read timeout), sends E1, blocks for the E2 reply, completes the handshake into one session, encrypts the payload, and sends it as a `TAG_D` frame — a single fire-and-forget send with no acknowledgment that the server actually processed it (the caller only knows the local send succeeded, not that a response arrived, since this function returns before any reply is awaited).
+- **inputs**: `server_addr: &str`, `payload: &[u8]`
+- **outputs**: `Result<()>`
+- **calls**: `InitiatorHandshake::new`/`build_e1_packet`/`complete_exchange`, `receive_e2_response`, `ManagedSession::encrypt`
+- **called_by**: `send_consent_request`, `send_consent_response`
+- **mutates**: nothing beyond the ephemeral session/socket it creates
+
+### `receive_e2_response`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Reads one datagram and validates it's a well-formed `TAG_E2` frame (correct prefix, minimum length, correct tag byte), extracting the responder's X25519 public key. Errors (rather than silently retrying) on any malformed frame — unlike the server-side `receive_e1_initiation`, which silently discards bad input and keeps waiting.
+- **inputs**: `sock: &UdpSocket`
+- **outputs**: `Result<XPublicKey>`
+- **calls**: `UdpSocket::recv_from`, `hsip_core::wire::prefix::check_prefix`
+- **called_by**: `perform_client_exchange`
+- **mutates**: nothing
+
+### `is_windows_connection_reset`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Checks whether an I/O error's raw OS error code is `10054` (`WSAECONNRESET`) — a Windows-specific quirk where a previous ICMP port-unreachable response can cause a subsequent unrelated `recv_from` to fail spuriously on a connectionless UDP socket. Both `spawn_decoy_if_env`'s loop and `process_control_messages` special-case this by continuing the loop instead of treating it as a fatal error.
+- **inputs**: `e: &std::io::Error`
+- **outputs**: `bool`
+- **called_by**: `spawn_decoy_if_env`, `process_control_messages`
+- **mutates**: nothing
+
+### `build_response_with_decision`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Constructs and self-signs a `ConsentResponse`: hashes the original request (SHA-256) to bind the response to it, fills in the responder's peer ID/pubkey, sets a TTL, then signs the response with `sig_hex` temporarily cleared (so the signature never signs over itself) before restoring the computed signature into the final struct.
+- **inputs**: `sk: &SigningKey`, `vk: &VerifyingKey`, `req: &ConsentRequest`, `decision: String`, `ttl_ms: u64`
+- **outputs**: `Result<ConsentResponse>`
+- **calls**: `Sha256::update`/`finalize`, `peer_id_from_pubkey`, `vk_to_hex`, `SigningKey::sign`, `current_timestamp_ms`
+- **called_by**: `handle_control_message`
+- **mutates**: nothing
+
+### `current_timestamp_ms`
+- **type**: function (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Returns the current Unix time in milliseconds. Panics (via `.unwrap()`) if system time is set before the Unix epoch — an accepted, extremely unlikely edge case, not defensively handled.
+- **outputs**: `u64`
+- **called_by**: `build_response_with_decision`
+- **mutates**: nothing
+
+### `PolicyCfg`
+- **type**: struct (private)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Reputation-enforcement config read from env at startup: `HSIP_ENFORCE_REP=1` enables score-based filtering of consent requesters, `HSIP_REP_THRESHOLD` sets the minimum acceptable score (default -6), and the reputation log path is fixed at `~/.hsip/reputation.log`.
+- **calls**: `std::env::var`, `dirs::home_dir`
+- **called_by**: `listen_control` (constructs via `from_env`), `evaluate_consent_request` (reads)
+- **mutates**: nothing
+
+### `PolicyCfg::from_env` / `print_banner`
+- **type**: function
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: `from_env` reads the three env-derived fields above. `print_banner` logs a one-line summary to stderr, plus a separate note if `HSIP_REQUIRE_VALID_SIG=1` is set (though nothing in this file currently reads that variable beyond the banner text itself — it's not wired into `evaluate_consent_request`'s actual signature-checking logic, which always validates the request signature regardless of this flag).
+- **outputs**: `Self` / `()`
+- **called_by**: `listen_control`
+- **mutates**: stderr (print_banner)
+
+### `TAG_E1` / `TAG_E2` / `TAG_D`
+- **type**: variable (constant)
+- **file**: `crates/hsip-net/src/udp.rs`
+- **purpose**: Single-byte wire-protocol frame tags — `0xE1` initial ephemeral key exchange, `0xE2` responder's ephemeral key reply, `0xD0` an encrypted data/control frame. Every frame on this UDP transport is prefixed with the shared HSIP wire prefix (`hsip_core::wire::prefix`) followed by one of these tag bytes.
+- **called_by**: every packet-building/parsing function in this file
+
+---
+
+## `crates/hsip-auth/src/lib.rs`
+
+Crate root for `hsip-auth` — a small, standalone device-identity and JWT-like-token module distinct from `hsip-api`'s tenant/API-key auth system. Per `CLAUDE.md`, this is a "supporting crate, not actively integrated" into the main HTTP product — its real consumer is `hsip-cli`, which uses it for a device-local identity (separate from the HSIP HTTP server's own tenant identity) and for issuing short-lived consent tokens. `keystore` is also re-exported under the alias `key_storage`. A private `auth_internal` module contains a single reserved, unused placeholder function (`_reserved_for_auth_expansion`) with no current purpose — literally a no-op stub for future use.
+
+### `key_storage`
+- **type**: module (re-export alias)
+- **file**: `crates/hsip-auth/src/lib.rs`
+- **purpose**: `#[doc(inline)] pub use keystore as key_storage` — lets callers refer to this module by either name; no distinct behavior.
+- **called_by**: nothing found using the `key_storage` alias in this workspace (all call sites use `hsip_auth::keystore` or the crate's own `crate::keystore` directly)
+
+---
+
+## `crates/hsip-auth/src/identity.rs`
+
+Manages a single device-local Ed25519 identity persisted via `keystore.rs` — this is **not** the same identity as `hsip-core::identity`/`hsip-api`'s tenant identities; it's a separate keypair used specifically by this crate's token-issuance flow and by `hsip-cli`'s device-identity-related subcommands.
+
+### `ensure_device_identity`
+- **type**: function
+- **file**: `crates/hsip-auth/src/identity.rs`
+- **purpose**: Loads the existing device identity from `keystore::load()` if present; on any load failure (most commonly "file doesn't exist yet"), generates a brand-new Ed25519 keypair and persists it via `keystore::save`. The "on any error, just create a new one" behavior means a corrupted (not just missing) key file would also silently be overwritten with a fresh identity rather than surfacing the corruption as a distinct error.
+- **outputs**: `Result<(SigningKey, VerifyingKey)>`
+- **calls**: `keystore::load`, `create_and_store_new_identity` → `keystore::save`
+- **called_by**: `peer_id_b64`, `public_key_hex`, `tokens::issue_consent`, `hsip-cli`'s `main.rs` (`auth_identity::peer_id_b64` call sites)
+- **mutates**: writes `~/.hsip/id_auth.json` the first time it's called with no existing key
+
+### `create_and_store_new_identity`
+- **type**: function (private)
+- **file**: `crates/hsip-auth/src/identity.rs`
+- **purpose**: Generates a fresh Ed25519 keypair via `OsRng` and immediately persists it to disk.
+- **outputs**: `Result<(SigningKey, VerifyingKey)>`
+- **calls**: `SigningKey::generate`, `keystore::save`
+- **called_by**: `ensure_device_identity`
+- **mutates**: writes `~/.hsip/id_auth.json`
+
+### `peer_id_b64`
+- **type**: function
+- **file**: `crates/hsip-auth/src/identity.rs`
+- **purpose**: Returns this device's identity public key, standard-base64-encoded — note this is a different encoding (standard base64) from `hsip-core::identity::peer_id_from_pubkey`'s base32 peer-ID format used elsewhere in the workspace (e.g. `hello.rs`'s `Hello.peer_id`), so a `hsip-auth` peer ID and an `hsip-core`/`hsip-net` peer ID for the same underlying key are not interchangeable strings.
+- **outputs**: `Result<String>`
+- **calls**: `ensure_device_identity`
+- **called_by**: `hsip-cli`'s `main.rs` (device-identity display/status commands)
+- **mutates**: nothing directly (may trigger identity creation via `ensure_device_identity`)
+
+### `public_key_hex`
+- **type**: function
+- **file**: `crates/hsip-auth/src/identity.rs`
+- **purpose**: Returns this device's identity public key, hex-encoded — used as the JWT `kid` (key ID) header field in `tokens.rs::issue_consent`.
+- **outputs**: `Result<String>`
+- **calls**: `ensure_device_identity`
+- **called_by**: `tokens::issue_consent`
+- **mutates**: nothing directly (may trigger identity creation)
+
+---
+
+## `crates/hsip-auth/src/keystore.rs`
+
+Raw filesystem persistence for the `hsip-auth` device identity — a **plaintext** JSON key file, distinct from and much simpler than `hsip-api`'s `key_encryption.rs` (which encrypts signing keys at rest with ChaCha20-Poly1305 + HKDF from a master key). This module has no encryption at all: the raw 32-byte Ed25519 seed is written to disk as a hex string in `~/.hsip/id_auth.json` with no access-control or permission-mode hardening (no `0o600` chmod call, unlike the invariant `CLAUDE.md` documents for `hsip-api`'s master-key/admin-key files) — a real gap if this crate's identity is ever depended on for anything security-sensitive in production use, though its current integration is limited (see crate-level note above).
+
+### `path`
+- **type**: function (private)
+- **file**: `crates/hsip-auth/src/keystore.rs`
+- **purpose**: Resolves the fixed identity file location, `~/.hsip/id_auth.json`. Uses `dirs::home_dir().expect("home")` — will panic outright if no home directory can be determined, unlike `hsip-net::config.rs`'s equivalent path resolution, which falls back to `.` instead of panicking.
+- **outputs**: `PathBuf`
+- **called_by**: `load`, `save`
+- **mutates**: nothing
+
+### `load`
+- **type**: function
+- **file**: `crates/hsip-auth/src/keystore.rs`
+- **purpose**: Reads and parses `~/.hsip/id_auth.json`, extracts the `sk_hex` field, decodes it as hex into a 32-byte seed, and reconstructs both the `SigningKey` and its `VerifyingKey`. Fails (propagates via `?`) if the file doesn't exist, isn't valid JSON, or is missing `sk_hex` — this is the failure path `identity::ensure_device_identity` catches to trigger fresh-key generation.
+- **outputs**: `Result<(SigningKey, VerifyingKey)>`
+- **calls**: `fs::read_to_string`, `serde_json::from_str`, `hex::decode`, `SigningKey::from_bytes`
+- **called_by**: `identity::ensure_device_identity`
+- **mutates**: nothing (read-only)
+
+### `save`
+- **type**: function
+- **file**: `crates/hsip-auth/src/keystore.rs`
+- **purpose**: Writes the signing key's seed and verifying key, both hex-encoded, plus a literal `"note": "HSIP auth identity (device-local). KEEP PRIVATE."` reminder string, as pretty-printed JSON to `~/.hsip/id_auth.json` — creating the parent directory first if needed (best-effort, `.ok()`-swallowed). Sets **no explicit file permissions** — writes with whatever the process umask allows, the same class of gap `CLAUDE.md`'s Key Invariants section documents (and requires `0o600` for) on `hsip-api`'s master-key file, but that fix was never applied here.
+- **inputs**: `sk: &SigningKey`, `vk: &VerifyingKey`
+- **outputs**: `Result<()>`
+- **calls**: `fs::create_dir_all`, `fs::write`, `serde_json::to_string_pretty`
+- **called_by**: `identity::create_and_store_new_identity`
+- **mutates**: writes `~/.hsip/id_auth.json` (world-readable under a typical default umask — see caveat above)
+
+---
+
+## `crates/hsip-auth/src/tokens.rs`
+
+Issues a compact, hand-rolled JWT-like token (`base64url(header).base64url(payload).base64url(signature)`) signed with the `hsip-auth` device identity's Ed25519 key, for scoped, time-limited "consent" tokens. **Notably, this module only issues tokens — there is no corresponding `verify`/`decode` function in this file** (or found elsewhere in this crate); whatever consumes these tokens must implement its own verification against the device's known public key. Also distinct from `hsip-api`'s own JWT usage (`hsip-cli/src/identity.rs`'s `identity-serve` broker, referenced in `CLAUDE.md`'s Security Self-Review section) — this is `hsip-auth`'s own, separate token format.
+
+### `JwsHeader` / `Claims` (private)
+- **type**: struct
+- **file**: `crates/hsip-auth/src/tokens.rs`
+- **purpose**: `JwsHeader` — fixed `alg: "EdDSA"`, `typ: "JWT"`, and a `kid` set to the device's hex public key. `Claims` — standard-shaped JWT claims (`iss` fixed to `"hsip-device"`, `sub` fixed to `"device"`, caller-supplied `aud`, `iat`/`exp` Unix timestamps, and a caller-supplied `scopes` list).
+- **called_by**: `issue_consent`
+
+### `issue_consent`
+- **type**: function
+- **file**: `crates/hsip-auth/src/tokens.rs`
+- **purpose**: Builds and signs one of these tokens: resolves (or creates) the device identity, sets `iat`=now and `exp`=now+`ttl_secs`, base64url-encodes (no padding) the header and claims JSON, Ed25519-signs the `"{header}.{claims}"` string, and returns the three-part dot-joined token. Computes a SHA-256 digest of the signing input (`_digest`) but never uses or returns it — dead computation left in, per its own comment, as "not strictly needed for EdDSA, but ok to leave out" (i.e., a leftover from an earlier design, harmless but wasted work on every call).
+- **inputs**: `scopes: &[&str]`, `ttl_secs: u64`, `aud: &str`
+- **outputs**: `Result<String>`
+- **calls**: `identity::ensure_device_identity`, `identity::public_key_hex`, `SigningKey::sign`, `base64` URL_SAFE_NO_PAD encoding
+- **called_by**: `hsip-cli`'s `main.rs` (issues a consent token for a caller-specified audience/scope, e.g. around line 2193)
+- **mutates**: nothing directly (may trigger device-identity creation via `ensure_device_identity`)
+
+---
+## `crates/hsip-intercept/src/lib.rs`
+
+Crate root for `hsip-intercept`, HSIP's cross-platform "Private DM Intercept" system: it watches for the user about to send a message through a traditional platform (Instagram, Gmail, WhatsApp, etc.) via OS-level accessibility/window events, matches the event against known UI patterns, and offers to route the message through HSIP's own consent-based protocol instead. Declares the always-compiled modules (`config`, `error`, `event`, `overlay`, `patterns`, `privacy`, `router`) plus one `#[cfg(target_os = "...")]`-gated platform module (`windows`/`android`/`linux`/`macos`) that supplies the concrete `EventMonitor`/`InterceptOverlay` implementations `InterceptCoordinator::new` wires together. The module doc's "Platform Support" table claims Windows and Android are "production-ready" — reading the actual platform source (see the `android/` and `windows/` sections below) shows this is not accurate for Android (every Android type is an `unimplemented!()` stub) and only partially accurate for Windows (event detection and UI creation are real, but recipient extraction/messenger-window opening are still placeholders).
+
+### `InterceptCoordinator`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/lib.rs`
+- **purpose**: Main coordinator/owner of the whole intercept pipeline for one process: holds the platform `EventMonitor`, the `PatternMatcher`, the platform `InterceptOverlay`, the `HSIPRouter`, and the receiving half of the event channel. One instance drives the entire "detect → match → prompt → route" loop for the life of the process.
+- **calls**: n/a (struct definition)
+- **called_by**: whatever binary embeds this crate (no in-crate caller — this is the library's top-level entry point)
+- **mutates**: n/a
+
+### `InterceptCoordinator::new`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/lib.rs`
+- **purpose**: Constructs a fully-wired `InterceptCoordinator` for the current platform. Creates the event channel, picks the platform-specific `EventMonitor`/`InterceptOverlay` implementation via `#[cfg(target_os = "...")]` blocks, loads (or builds default) the pattern database, and creates the `HSIPRouter`. On a platform that is none of windows/android/linux/macos (e.g. FreeBSD, WASM), returns `InterceptError::UnsupportedPlatform` instead of compiling a stub — there's no generic no-op fallback.
+- **inputs**: `config: InterceptConfig`
+- **outputs**: `Result<Self>`
+- **calls**: `{windows,android,linux,macos}::{...}EventMonitor::new`, `PatternMatcher::load_from_config`, `{windows,android,linux,macos}::{...}Overlay::new`, `HSIPRouter::new`
+- **called_by**: crate consumer (binary embedding hsip-intercept)
+- **mutates**: nothing (pure construction; the platform monitor/overlay constructors themselves may touch OS state, e.g. registering a window class)
+
+### `InterceptCoordinator::run`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/lib.rs`
+- **purpose**: The main event loop. Starts the platform event monitor, then loops forever draining `event_rx` and dispatching each `MessagingEvent` to `handle_event`, logging (not propagating) any per-event error so one bad event can't kill the whole loop.
+- **inputs**: `mut self`
+- **outputs**: `Result<()>`
+- **calls**: `self.event_monitor.start()`, `self.handle_event`
+- **called_by**: crate consumer, once coordinator construction succeeds
+- **mutates**: `self.event_monitor`'s running state; consumes `self.event_rx`
+
+### `InterceptCoordinator::handle_event`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/lib.rs`
+- **purpose**: Per-event pipeline: optionally sleeps for a random jitter (`privacy::add_timing_jitter`) if `config.privacy.timing_obfuscation` is set, then runs the event through `PatternMatcher::match_event`, and if a pattern matched *and* its confidence clears `config.min_confidence`, shows the intercept overlay. A match below the confidence threshold is logged and dropped rather than shown.
+- **inputs**: `event: MessagingEvent`
+- **outputs**: `Result<()>`
+- **calls**: `privacy::add_timing_jitter`, `self.pattern_matcher.match_event`, `self.show_intercept_overlay`
+- **called_by**: `run`
+- **mutates**: nothing directly (may trigger the overlay/router side effects transitively)
+
+### `InterceptCoordinator::show_intercept_overlay`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/lib.rs`
+- **purpose**: Extracts a recipient hint, shows the platform overlay, and acts on the returned `UserChoice`: `SendPrivately` opens the HSIP messenger via `self.router`; `Continue` is a no-op; `DisableForApp(platform)` persists that platform as disabled by mutating and saving `self.config`.
+- **inputs**: `event: &MessagingEvent`, `_pattern: &TriggerPattern` (unused beyond logging context at the call site)
+- **outputs**: `Result<()>`
+- **calls**: `self.extract_recipient`, `self.overlay.show`, `self.router.open_messenger`, `self.config.disable_platform`, `self.config.save`
+- **called_by**: `handle_event`
+- **mutates**: `self.config` (on `DisableForApp`) and the on-disk config file (`InterceptConfig::save`)
+
+### `InterceptCoordinator::extract_recipient`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/lib.rs`
+- **purpose**: Best-effort recipient extraction. Checks `event.metadata["recipient"]` first (set directly by some event monitors), then falls back to a platform-specific extractor (`windows::extract_recipient_from_window`, `android::extract_recipient_from_view`, etc.). Linux and macOS don't actually have a case wired here despite both exposing an `extract_recipient_from_window` function in their own modules — on those two targets this always falls through to `None` unless the event's own metadata already carried a `"recipient"` key.
+- **inputs**: `event: &MessagingEvent`
+- **outputs**: `Option<String>`
+- **calls**: `windows::extract_recipient_from_window`, `android::extract_recipient_from_view`
+- **called_by**: `show_intercept_overlay`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-intercept/src/config.rs`
+
+`InterceptConfig` and its nested settings structs — the persisted, user-editable configuration for the whole intercept system. Serialized as JSON to a per-user config directory.
+
+### `InterceptConfig`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Top-level configuration: global enable flag, confidence threshold, per-platform enable/disable sets, pattern DB path, and the three nested config groups (`privacy`, `overlay`, `messenger`). `Default` is deliberately opt-in (`enabled: false`) with a curated starter set of `enabled_platforms` (Instagram, Facebook, WhatsApp, Gmail).
+- **calls**: n/a
+- **called_by**: `InterceptCoordinator::new`, every platform `EventMonitor`/`Overlay` constructor
+- **mutates**: n/a
+
+### `PrivacyConfig`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Privacy-enhancing feature toggles: timing obfuscation (on by default, 50–500ms jitter range), message padding (off by default — adds overhead), metadata stripping (on by default), and a `cover_traffic` flag reserved for a not-yet-implemented future feature (see `privacy::start_cover_traffic`).
+- **calls**: n/a
+- **called_by**: `InterceptCoordinator::handle_event` (`timing_obfuscation` check)
+- **mutates**: n/a
+
+### `OverlayConfig`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Overlay presentation settings — screen `position`, auto-dismiss `timeout_seconds` (0 = never), whether to show the first-run tutorial, and light/dark/system `theme`. Consumed directly by each platform's overlay implementation (e.g. `WindowsOverlay::calculate_overlay_position`, `LinuxOverlay`/`MacOSOverlay`'s notification timeout).
+- **calls**: n/a
+- **called_by**: platform overlay implementations
+- **mutates**: n/a
+
+### `OverlayPosition`
+- **type**: enum
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Screen corner (or center) to anchor the overlay: `TopRight` (default), `TopLeft`, `BottomRight`, `BottomLeft`, `Center`. Only actually affects layout on Windows (`WindowsOverlay::calculate_overlay_position`) — the Linux/macOS overlays are OS desktop notifications, which don't take an on-screen position.
+- **called_by**: `windows::overlay::WindowsOverlay::calculate_overlay_position`
+
+### `OverlayTheme`
+- **type**: enum
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: `Light`/`Dark`/`System` theme selector for the overlay. Declared and defaulted (`System`) but not read by any current platform overlay implementation — theming is not actually wired into rendering yet.
+
+### `MessengerConfig`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Settings for the (mostly unimplemented) HSIP Messenger window: auto-open on intercept, default consent duration, offline message queueing and its max size. None of the messenger-window stubs (`windows::open_messenger_window`, `android::open_messenger_activity`) currently read these fields — they're forward-declared for the messenger feature this crate's `router.rs` is a stub for.
+
+### `InterceptConfig::load`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Reads and JSON-deserializes a config file from an explicit path. Wraps the read I/O error in `InterceptError::Config`; a deserialization failure surfaces as `InterceptError::Json` via `?`'s `From` conversion.
+- **inputs**: `path: &PathBuf`
+- **outputs**: `Result<Self>`
+- **calls**: `std::fs::read_to_string`, `serde_json::from_str`
+- **mutates**: nothing (read-only)
+
+### `InterceptConfig::save`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Serializes `self` as pretty JSON and writes it to the path returned by `get_config_path` (not the path `load` was originally read from — `save` always targets the canonical per-user config directory, so loading from a custom path and saving doesn't round-trip to the same file).
+- **inputs**: `&self`
+- **outputs**: `Result<()>`
+- **calls**: `self.get_config_path`, `serde_json::to_string_pretty`, `std::fs::write`
+- **called_by**: `InterceptCoordinator::show_intercept_overlay` (on `DisableForApp`)
+- **mutates**: filesystem (`<config_dir>/hsip/intercept_config.json`)
+
+### `InterceptConfig::get_config_path`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Computes `<platform config dir>/hsip/intercept_config.json`, creating the `hsip` directory if missing (errors from `create_dir_all` are silently discarded via `.ok()` — a failure to create the directory only surfaces later when `save`'s `fs::write` itself fails).
+- **outputs**: `PathBuf`
+- **calls**: `dirs::config_dir`, `std::fs::create_dir_all`
+- **called_by**: `save`
+- **mutates**: filesystem (creates the config directory as a side effect)
+
+### `InterceptConfig::is_platform_enabled`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: A platform counts as enabled only if the system is globally `enabled`, the platform is in `enabled_platforms`, and it is *not* also in `disabled_platforms` — the disabled set always wins over the enabled set, so `enable_platform` has to explicitly remove from `disabled_platforms` to actually re-enable something a user had turned off.
+- **inputs**: `platform: PlatformType`
+- **outputs**: `bool`
+- **called_by**: every platform event monitor's `poll_once`/`handle_window_change` (gates whether a detected messaging window is worth turning into a `MessagingEvent`)
+- **mutates**: nothing
+
+### `InterceptConfig::disable_platform`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Adds a platform to `disabled_platforms` (doesn't touch `enabled_platforms`).
+- **inputs**: `&mut self`, `platform: PlatformType`
+- **called_by**: `InterceptCoordinator::show_intercept_overlay` (`DisableForApp` case)
+- **mutates**: `self.disabled_platforms`
+
+### `InterceptConfig::enable_platform`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/config.rs`
+- **purpose**: Removes a platform from `disabled_platforms` and adds it to `enabled_platforms` — the pairing needed because `is_platform_enabled` treats `disabled_platforms` membership as an override.
+- **inputs**: `&mut self`, `platform: PlatformType`
+- **mutates**: `self.disabled_platforms`, `self.enabled_platforms`
+
+---
+
+## `crates/hsip-intercept/src/error.rs`
+
+### `Result`
+- **type**: variable (type alias)
+- **file**: `crates/hsip-intercept/src/error.rs`
+- **purpose**: `std::result::Result<T, InterceptError>` — the crate-wide result type used by every public fallible function in `hsip-intercept`.
+
+### `InterceptError`
+- **type**: enum
+- **file**: `crates/hsip-intercept/src/error.rs`
+- **purpose**: Crate-wide error type, one variant per subsystem (`EventMonitor`, `PatternMatch`, `Overlay`, `Router`, `Config`, `Permission`, `UnsupportedPlatform`, plus `#[from]` conversions for `std::io::Error` and `serde_json::Error`, an opaque `HSIPCore(String)`, and a catch-all `#[error(transparent)] Other(#[from] anyhow::Error)`). Built with `thiserror` so each variant gets a `Display` message and the `#[from]` variants participate in `?`-based error propagation automatically.
+- **called_by**: every fallible function across this crate
+
+---
+
+## `crates/hsip-intercept/src/event.rs`
+
+Shared event vocabulary and the `EventMonitor` trait every platform implements.
+
+### `PlatformType`
+- **type**: enum
+- **file**: `crates/hsip-intercept/src/event.rs`
+- **purpose**: The set of messaging platforms/apps this crate recognizes (Instagram, Facebook, WhatsApp, Gmail, Outlook, Slack, Discord, Telegram, Signal, Messenger, Twitter, LinkedIn, Unknown). `Copy + Eq + Hash` so it can be used as a `HashSet`/`HashMap` key (see `InterceptConfig`'s platform sets and `PatternMatcher`'s cache).
+- **calls**: n/a
+
+### `PlatformType::from_process_name`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/event.rs`
+- **purpose**: Classifies a platform from a process/package name via a fixed, case-insensitive `contains` chain (checked in enum declaration order — e.g. "facebook" or "fb" maps to `Facebook`, "x.com" maps to `Twitter`). Falls back to `Unknown` if nothing matches. This is the one, shared platform-classification heuristic every platform's event monitor (`linux`, `macos`, `windows`) reuses instead of writing its own.
+- **inputs**: `name: &str`
+- **outputs**: `PlatformType`
+- **called_by**: `linux::event_monitor::LinuxEventMonitor::poll_once`, `macos::event_monitor::MacOSEventMonitor::poll_once`, `windows::event_monitor::WindowsEventMonitor::handle_window_change`/`start`'s inline polling loop
+- **mutates**: nothing
+
+### `MessagingEvent`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/event.rs`
+- **purpose**: The normalized, cross-platform representation of one detected UI event: platform, event type, UTC timestamp, process name, optional window title, a free-form `metadata` map (class name, resource ID, etc. — platform-specific keys), and a `confidence` score (0.0–1.0) that the pattern matcher and coordinator both use to decide whether to actually intercept.
+- **calls**: n/a
+- **called_by**: constructed by every platform event monitor, consumed by `PatternMatcher::match_event`, `InterceptCoordinator::handle_event`, `OverlayContent::from_event`
+
+### `EventType`
+- **type**: enum
+- **file**: `crates/hsip-intercept/src/event.rs`
+- **purpose**: The kind of OS-level UI event observed: `Click`, `Focus`, `WindowChange`, `ValueChange`, `Custom`. In practice every current platform implementation only ever emits `WindowChange` (all four poll active-window/frontmost-app state on a timer) — `Click`/`Focus`/`ValueChange` are declared for a finer-grained accessibility-event backend that isn't implemented yet.
+
+### `EventMonitor`
+- **type**: trait (async)
+- **file**: `crates/hsip-intercept/src/event.rs`
+- **purpose**: The abstraction every platform's concrete monitor implements (`start`/`stop`/`is_running`/`event_sender`). `InterceptCoordinator` holds one as `Box<dyn EventMonitor>`, so it never needs `#[cfg(target_os)]` logic of its own beyond the initial construction.
+- **called_by**: `InterceptCoordinator::run` (`start`), implemented by `LinuxEventMonitor`, `MacOSEventMonitor`, `WindowsEventMonitor`, and the always-`unimplemented!()` `AndroidEventMonitor`
+
+### `MessagingEvent::new`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/event.rs`
+- **purpose**: Constructs a `MessagingEvent` with a fresh UTC timestamp, empty metadata, no window title, and a default confidence of `0.5` — callers then chain the `with_*` builder methods to fill in the rest.
+- **inputs**: `platform: PlatformType`, `event_type: EventType`, `process_name: String`
+- **outputs**: `Self`
+
+### `MessagingEvent::with_metadata` / `with_window_title` / `with_confidence`
+- **type**: function (builder methods)
+- **file**: `crates/hsip-intercept/src/event.rs`
+- **purpose**: Consuming builder methods that insert a metadata key/value, set the window title, or set the confidence score (clamped to `[0.0, 1.0]` in `with_confidence` — the only one of the three that validates its input). Each returns `Self` for chaining.
+- **inputs**: varies (`impl Into<String>` pairs, or `f64`)
+- **outputs**: `Self`
+- **called_by**: every platform event monitor's event-construction code
+
+---
+
+## `crates/hsip-intercept/src/overlay.rs`
+
+The overlay abstraction and its shared, platform-independent content builder.
+
+### `UserChoice`
+- **type**: enum
+- **file**: `crates/hsip-intercept/src/overlay.rs`
+- **purpose**: What the user decided when shown the intercept prompt: `SendPrivately` (route via HSIP), `Continue` (proceed with the original platform, the default on dismiss/timeout everywhere this is implemented), or `DisableForApp(PlatformType)` (stop intercepting this platform going forward).
+- **called_by**: `InterceptCoordinator::show_intercept_overlay`, every platform overlay's `show` implementation
+
+### `InterceptOverlay`
+- **type**: trait (async)
+- **file**: `crates/hsip-intercept/src/overlay.rs`
+- **purpose**: The abstraction every platform's overlay UI implements — `show` (present the prompt and block for a choice), `hide`, `is_visible`. `InterceptCoordinator` holds one as `Box<dyn InterceptOverlay>`.
+- **called_by**: `InterceptCoordinator::show_intercept_overlay`; implemented by `LinuxOverlay`, `MacOSOverlay`, `WindowsOverlay`, and the always-`unimplemented!()` `AndroidOverlay`
+
+### `OverlayContent`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/overlay.rs`
+- **purpose**: Platform-independent title/message/recipient/tutorial-flag content for the overlay, built once from a `MessagingEvent` and reused verbatim by every platform's rendering code (each platform only supplies its own presentation mechanism — layered Win32 window, `notify-rust` desktop notification, etc.).
+- **called_by**: every platform overlay's `show` method
+
+### `OverlayContent::from_event`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/overlay.rs`
+- **purpose**: Builds the prompt text for a real intercept — includes the recipient's name and platform (`{:?}` debug-formatted) if a recipient was resolved, otherwise a generic "send through HSIP instead?" message. Always sets `show_tutorial: false` (the first-run tutorial is a separate, explicitly-requested `OverlayContent::tutorial()`).
+- **inputs**: `event: &MessagingEvent`, `recipient: Option<&str>`
+- **outputs**: `Self`
+- **called_by**: `WindowsOverlay::show`, `LinuxOverlay::show`, `MacOSOverlay::show`
+
+### `OverlayContent::tutorial`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/overlay.rs`
+- **purpose**: Builds the fixed first-time-user explanation of what the intercept system does. `show_tutorial: true` — but no current platform overlay implementation actually branches on this flag or calls this constructor (`OverlayConfig::show_tutorial` is read from config but the tutorial content itself is unused code as of this file).
+- **outputs**: `Self`
+
+---
+
+## `crates/hsip-intercept/src/patterns.rs`
+
+The rule-based (not ML) recognizer that decides whether a `MessagingEvent` looks like a real "about to send a message" action, and with how much confidence.
+
+### `PatternDatabase`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: Versioned, serializable collection of `PlatformPattern`s — either loaded from a JSON file at `InterceptConfig.pattern_db_path` or generated in-memory via `PatternMatcher::default_database`.
+
+### `PlatformPattern`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: All `TriggerPattern`s associated with one `PlatformType`.
+
+### `TriggerPattern`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: A single matchable rule: which platform it belongs to, what kind of UI signal to look for (`TriggerType`), the literal substring `value` to match, and the `confidence` score awarded on a match.
+- **called_by**: `InterceptCoordinator::handle_event` (receives the matched pattern for logging/threshold check), `PatternMatcher::match_event`/`match_pattern`
+
+### `TriggerType`
+- **type**: enum
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: What kind of event metadata a `TriggerPattern` matches against: `AccessibilityId`, `ClassName`, `WindowTitle`, `TextContent`, `ProcessName`, `AutomationId`. Serialized `snake_case` for the on-disk JSON pattern DB format.
+
+### `PatternMatcher`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: The matching engine: holds the loaded `PatternDatabase` plus a `HashMap` cache keyed by a composite string of `(process_name, window_title, resource_id)` so repeated identical events (the common case under 500ms polling, where the same window stays focused across ticks) skip re-running every pattern.
+- **called_by**: `InterceptCoordinator` (constructed once, held as `pattern_matcher`)
+
+### `PatternMatcher::load_from_config`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: Loads the pattern DB from `config.pattern_db_path` if that file exists on disk, otherwise falls back to `default_database()` — so a fresh install with no pattern file works out of the box without requiring the caller to ship one.
+- **inputs**: `config: &InterceptConfig`
+- **outputs**: `Result<Self>`
+- **calls**: `Self::load_database`, `Self::default_database`
+- **called_by**: `InterceptCoordinator::new`
+
+### `PatternMatcher::load_database`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: Reads and JSON-deserializes a `PatternDatabase` from a file path, wrapping the read error in `InterceptError::PatternMatch`.
+- **inputs**: `path: &std::path::Path`
+- **outputs**: `Result<PatternDatabase>`
+- **called_by**: `load_from_config`
+
+### `PatternMatcher::default_database`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: Hardcoded starter pattern set covering Instagram (DM inbox button/thread view/"Send Message" text), Facebook (Messenger button/window title), Gmail (Compose window title/button), and WhatsApp (chat input field) — each with its own confidence weight (0.70–0.95).
+- **outputs**: `PatternDatabase`
+- **called_by**: `load_from_config` (fallback), directly in tests
+
+### `PatternMatcher::match_event`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: Finds the best (highest-confidence) matching `TriggerPattern` for an event's platform, checking the cache first. Filters the database to patterns whose `platform` equals the event's platform, evaluates each with `match_pattern`, and keeps whichever produces the single highest confidence score (a strict `>` comparison, so on a tie the first-encountered pattern wins). Caches the result (including a `None` miss) keyed by the composite cache key.
+- **inputs**: `&mut self`, `event: &MessagingEvent`
+- **outputs**: `Result<Option<TriggerPattern>>`
+- **calls**: `self.match_pattern`
+- **called_by**: `InterceptCoordinator::handle_event`
+- **mutates**: `self.cache`
+
+### `PatternMatcher::match_pattern`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: Evaluates one `TriggerPattern` against one event by substring-matching the pattern's `value` against whichever event field its `TriggerType` designates (falling back between related metadata keys for some types, e.g. `AccessibilityId` checks `accessibility_id` then `resource_id`; `TextContent` checks `text_content` then `content_description`). Returns the pattern's confidence on a hit, `None` on a miss.
+- **inputs**: `&self`, `pattern: &TriggerPattern`, `event: &MessagingEvent`
+- **outputs**: `Option<f64>`
+- **called_by**: `match_event`
+- **mutates**: nothing
+
+### `PatternMatcher::save_database`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/patterns.rs`
+- **purpose**: Serializes the current in-memory database as pretty JSON and writes it to a given path. Not currently called anywhere in this crate — exists as an API for a caller wanting to persist a modified/learned pattern set, but nothing in this crate mutates `self.database` after construction.
+- **inputs**: `&self`, `path: &std::path::Path`
+- **outputs**: `Result<()>`
+- **calls**: `serde_json::to_string_pretty`, `std::fs::write`
+- **mutates**: filesystem (writes to `path`)
+
+---
+
+## `crates/hsip-intercept/src/privacy.rs`
+
+Standalone, mostly-pure privacy-enhancing utility functions. Not orchestrated as a struct — each function is called independently by whatever code opts into it (currently just `InterceptCoordinator::handle_event`'s timing-jitter call; the rest are unused-but-available or explicit not-yet-implemented placeholders).
+
+### `add_timing_jitter`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/privacy.rs`
+- **purpose**: Sleeps for a random delay in the default 50–500ms range, to mask exactly-when-the-user-acted timing patterns from anything observing IPC/network timing.
+- **calls**: `add_timing_jitter_range`
+- **called_by**: `InterceptCoordinator::handle_event` (only if `config.privacy.timing_obfuscation`)
+- **mutates**: nothing (delays the calling task only)
+
+### `add_timing_jitter_range`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/privacy.rs`
+- **purpose**: Sleeps for a uniformly random duration between `min_ms` and `max_ms` inclusive.
+- **inputs**: `min_ms: u64`, `max_ms: u64`
+- **calls**: `rand::thread_rng().gen_range`, `tokio::time::sleep`
+- **called_by**: `add_timing_jitter`
+
+### `normalize_timestamp`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/privacy.rs`
+- **purpose**: Rounds a UTC timestamp down to the nearest 5-minute boundary (minute, second, and nanosecond all zeroed/floored) to prevent precise send-time correlation. Not currently called by any other function in this crate — a standalone utility available to a caller, same as `pad_message`/`strip_image_metadata` below.
+- **inputs**: `ts: chrono::DateTime<chrono::Utc>`
+- **outputs**: `chrono::DateTime<chrono::Utc>`
+- **mutates**: nothing
+
+### `pad_message`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/privacy.rs`
+- **purpose**: Pads a byte buffer up to the next fixed bucket size (256/512/1024/2048/4096/8192 bytes; beyond 8192 it adds a flat 256-byte pad instead of jumping to a next bucket) to hide the true message length, using random bytes for the padding rather than zeros (harder to distinguish padding from content by pattern). Not wired into any message-sending path in this crate yet — `PrivacyConfig.message_padding` exists as a config flag but nothing reads it to call this function.
+- **inputs**: `message: &[u8]`
+- **outputs**: `Vec<u8>`
+- **calls**: `rand::random::<u8>()`
+- **mutates**: nothing (returns a new buffer)
+
+### `strip_image_metadata`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/privacy.rs`
+- **purpose**: Placeholder for EXIF-stripping (GPS, camera model, timestamps, software tag) — currently just logs a warning and returns the input unchanged. Explicitly marked `TODO` in a comment; needs an image-processing dependency (e.g. `image-rs`/`kamadak-exif`) not yet added.
+- **inputs**: `image_data: &[u8]`
+- **outputs**: `Result<Vec<u8>, String>`
+- **mutates**: nothing (no-op today)
+
+### `start_cover_traffic`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/privacy.rs`
+- **purpose**: Placeholder for a Phase-3 cover-traffic feature (dummy packets at regular intervals to mask real message timing) — currently only logs a warning and returns immediately, doing nothing.
+- **inputs**: `_intensity: CoverTrafficIntensity`
+- **mutates**: nothing (no-op today)
+
+### `CoverTrafficIntensity`
+- **type**: enum
+- **file**: `crates/hsip-intercept/src/privacy.rs`
+- **purpose**: `Low`/`Medium`/`High` intensity levels for the not-yet-implemented cover-traffic feature (roughly 1 packet/minute, /10s, /second respectively, per the doc comments — not enforced anywhere yet since `start_cover_traffic` is a no-op).
+
+---
+
+## `crates/hsip-intercept/src/router.rs`
+
+The (still largely stubbed) HSIP-side routing logic that would take over once a user chooses "send privately." Most of this file's methods are explicit `TODO`s with `warn!` logs rather than working implementations — this is the least-finished module in the crate outside of Android.
+
+### `PeerID`
+- **type**: variable (type alias)
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: `pub type PeerID = hsip_core::hello::PeerId` — re-exports `hsip-core`'s peer identity type under this crate's own name so callers of `HSIPRouter` don't need a direct `hsip_core` import.
+
+### `HSIPRouter`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: Intended to route intercepted messages through HSIP's consent handshake and encrypted session, but is currently a stub — it holds a cloned `InterceptConfig` (marked `#[allow(dead_code)]` with a comment noting it's kept for the future `hsip-core` integration this router is a placeholder for) and every method beyond construction either does nothing useful yet or explicitly logs "not yet implemented."
+
+### `HSIPRouter::new`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: Trivial constructor — clones the passed config into the struct. Never fails in practice (always returns `Ok`) despite the `Result` return type.
+- **inputs**: `config: &InterceptConfig`
+- **outputs**: `Result<Self>`
+- **called_by**: `InterceptCoordinator::new`
+
+### `HSIPRouter::open_messenger`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: Entry point for "user chose SendPrivately." If a recipient string is present, tries `resolve_recipient` first; on a resolved `PeerID` calls `start_session_with_peer` (itself a stub), otherwise falls back to `open_messenger_manual` with the raw recipient hint. With no recipient at all, opens the manual/blank messenger directly.
+- **inputs**: `recipient: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `self.resolve_recipient`, `self.start_session_with_peer`, `self.open_messenger_manual`
+- **called_by**: `InterceptCoordinator::show_intercept_overlay`
+
+### `HSIPRouter::resolve_recipient`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: Attempts to turn a free-text recipient string into a `PeerID`. Currently only two paths exist and neither is functional: a `"peer_"`-prefixed string logs a warning and always returns `None` (PeerID parsing itself is a `TODO`), and `lookup_contact` (local contact-book lookup) is also a stub that always returns `None`. DHT lookup and deep-link resolution are noted as future work, not present at all.
+- **inputs**: `&self`, `recipient: &str`
+- **outputs**: `Result<Option<PeerID>>`
+- **calls**: `self.lookup_contact`
+- **called_by**: `open_messenger`
+
+### `HSIPRouter::lookup_contact`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: Stub for a local contact-book lookup — always returns `Ok(None)`, forcing manual recipient entry every time.
+- **inputs**: `&self`, `_name: &str`
+- **outputs**: `Result<Option<PeerID>>`
+- **called_by**: `resolve_recipient`
+
+### `HSIPRouter::start_session_with_peer`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: Stub for establishing an actual HSIP consent-and-session flow with a resolved peer — logs a warning that this isn't implemented and returns `Ok(())` immediately.
+- **inputs**: `&self`, `peer_id: PeerID`
+- **outputs**: `Result<()>`
+- **called_by**: `open_messenger`
+
+### `HSIPRouter::open_messenger_manual`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: Dispatches to the platform's own messenger-window opener (`windows::open_messenger_window`/`android::open_messenger_activity`) when built for those targets; on Linux/macOS there's no `#[cfg]` arm at all, so this is a silent no-op there beyond the log line.
+- **inputs**: `&self`, `hint: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `windows::open_messenger_window`, `android::open_messenger_activity`
+- **called_by**: `open_messenger`
+
+### `HSIPRouter::send_message`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/router.rs`
+- **purpose**: Public API for sending a message through an established HSIP session — entirely unimplemented (logs a warning, returns `Ok(())`, ignores the message content parameter). Not called from anywhere else in this crate yet.
+- **inputs**: `peer_id: PeerID`, `_message: String`
+- **outputs**: `Result<()>`
+
+---
+
+## `crates/hsip-intercept/src/android/mod.rs`, `android/event_monitor.rs`, `android/messenger.rs`, `android/overlay.rs`
+
+Android is meant to use `AccessibilityService` for event monitoring, `WindowManager` (`TYPE_APPLICATION_OVERLAY`) for the overlay, and a JNI bridge to talk to this Rust core — but as of this code, **none of that is actually implemented**. `android/mod.rs` conditionally re-exports `event_monitor`/`overlay`/`messenger` from real files only `#[cfg(target_os = "android")]`; on every other target it defines its own inline stub modules with the same names so the crate still compiles for non-Android targets. Critically, the *real*, Android-only files (`android/event_monitor.rs`, `android/overlay.rs`, `android/messenger.rs`) are themselves nothing but `unimplemented!()` bodies — so even a genuine Android build of this crate panics the instant any of these are called. Despite `lib.rs`'s module doc calling Android "production-ready," there is no working Android implementation in this codebase at all.
+
+### `AndroidEventMonitor` (real, `android/event_monitor.rs`)
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/android/event_monitor.rs`
+- **purpose**: Unit struct standing in for a real Android event monitor. `AndroidEventMonitor::new` panics via `unimplemented!("Android event monitor — JNI bridge not yet implemented")` rather than returning an error — a caller (`InterceptCoordinator::new`) that reaches this on a real Android build crashes the process instead of getting a `Result::Err` it could handle.
+- **inputs**: `_tx: mpsc::Sender<MessagingEvent>`, `_config: &InterceptConfig`
+- **outputs**: `Result<Box<dyn EventMonitor>>` (never actually returns — always panics)
+- **called_by**: `InterceptCoordinator::new` (`#[cfg(target_os = "android")]` branch)
+- **mutates**: nothing (panics before doing anything)
+
+### `AndroidOverlay` (real, `android/overlay.rs`)
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/android/overlay.rs`
+- **purpose**: Same pattern as `AndroidEventMonitor` — `AndroidOverlay::new` is `unimplemented!("Android overlay — WindowManager bridge not yet implemented")`.
+- **inputs**: `_config: &InterceptConfig`
+- **outputs**: `Result<Box<dyn InterceptOverlay>>` (never returns)
+- **called_by**: `InterceptCoordinator::new` (`#[cfg(target_os = "android")]` branch)
+
+### `open_messenger_activity` (real, `android/messenger.rs`)
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/android/messenger.rs`
+- **purpose**: `unimplemented!("Android messenger activity — JNI bridge not yet implemented")`.
+- **inputs**: `_hint: Option<String>`
+- **outputs**: `Result<()>` (never returns)
+- **called_by**: `HSIPRouter::open_messenger_manual` (`#[cfg(target_os = "android")]` branch)
+
+### `extract_recipient_from_view` (real, `android/messenger.rs`)
+- **type**: function
+- **file**: `crates/hsip-intercept/src/android/messenger.rs`
+- **purpose**: `unimplemented!("Android recipient extraction — JNI bridge not yet implemented")`.
+- **inputs**: `_event: &MessagingEvent`
+- **outputs**: `Result<String>` (never returns)
+- **called_by**: `InterceptCoordinator::extract_recipient` (`#[cfg(target_os = "android")]` branch)
+
+### Non-Android stub modules (`android/mod.rs`, `#[cfg(not(target_os = "android"))]`)
+- **type**: function (multiple, inline modules `event_monitor`/`overlay`/`messenger`)
+- **file**: `crates/hsip-intercept/src/android/mod.rs`
+- **purpose**: Second copy of the same type/function names (`AndroidEventMonitor::new`, `AndroidOverlay::new`, `open_messenger_activity`, `extract_recipient_from_view`), all likewise `unimplemented!()`, that exist purely so `hsip-intercept` compiles as a library on non-Android hosts (e.g. so `cargo build --workspace` on Linux/macOS/Windows dev machines doesn't fail on a missing `android` submodule). These are never reachable in practice since every call site is itself `#[cfg(target_os = "android")]`-gated — they exist for compilation completeness only, not for any runtime path.
+- **mutates**: nothing (unreachable in practice)
+
+---
+
+## `crates/hsip-intercept/src/linux/mod.rs`, `linux/event_monitor.rs`, `linux/overlay.rs`
+
+Linux is the one platform in this crate with a genuinely complete, non-stub implementation for both halves of the pipeline. Event detection uses subprocess polling — `xdotool` on X11 (`getactivewindow getwindowname`/`getwindowpid`) or, on Wayland (where there's no portable way to query the focused window without a compositor-specific protocol), a fallback scan of `/proc/<pid>/comm` for known messaging-app process names. The overlay is a real desktop notification via the `notify-rust` crate (libnotify/D-Bus), with three action buttons (send via HSIP / continue / disable for this app).
+
+### `extract_recipient_from_window` (`linux/mod.rs`)
+- **type**: function
+- **file**: `crates/hsip-intercept/src/linux/mod.rs`
+- **purpose**: Best-effort recipient parsing from a Linux window title. Tries a fixed set of known prefixes (`"Chat with "`, `"Direct: "`, `"DM: "`) first, splitting the remainder on space/em-dash/en-dash/hyphen to isolate just the name; if no prefix matches, falls back to splitting the whole title on an em-dash/en-dash (e.g. `"Alice – Telegram Desktop"` → `"Alice"`), accepting the result only if it's non-empty and under 64 characters. Returns an `EventMonitor` error if nothing usable was found.
+- **inputs**: `event: &crate::event::MessagingEvent`
+- **outputs**: `crate::Result<String>`
+- **called_by**: *not currently called* — `InterceptCoordinator::extract_recipient` only has `#[cfg]` arms for windows/android, so this function is dead code on the actual Linux runtime path today despite being fully implemented and exported.
+- **mutates**: nothing
+
+### `LinuxEventMonitor`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: Polls the focused window every 500ms on a dedicated blocking thread (`tokio::task::spawn_blocking`), classifies the platform, computes a confidence score from window-title keywords, and emits a `MessagingEvent` on any observed change. Holds an `Arc<AtomicBool>` `running` flag shared between the async handle and the polling thread so `stop()` can signal the loop to exit without needing a channel.
+- **called_by**: `InterceptCoordinator::new` (`#[cfg(target_os = "linux")]` branch)
+
+### `LinuxEventMonitor::new`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: Constructs the monitor in a non-running state; doesn't touch the OS at all until `start()` is called.
+- **inputs**: `event_tx: mpsc::Sender<MessagingEvent>`, `config: &InterceptConfig`
+- **outputs**: `Result<Box<dyn EventMonitor>>`
+
+### `LinuxEventMonitor::is_wayland`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: Detects Wayland by checking `WAYLAND_DISPLAY` (any value) or `XDG_SESSION_TYPE == "wayland"` (case-insensitively). This decides which of the two detection strategies `poll_once` uses.
+- **outputs**: `bool`
+- **called_by**: `start`, `poll_once`
+
+### `LinuxEventMonitor::x11_active_window_title`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: Shells out to `xdotool getactivewindow getwindowname` and returns the trimmed stdout, or `None` if the subprocess fails, exits non-zero, or the title is empty.
+- **outputs**: `Option<String>`
+- **calls**: `std::process::Command::new("xdotool")`
+- **called_by**: `poll_once`
+
+### `LinuxEventMonitor::x11_active_window_process`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: Shells out to `xdotool getactivewindow getwindowpid` to get the focused window's PID, then reads `/proc/<pid>/comm` for its process name.
+- **outputs**: `Option<String>`
+- **calls**: `std::process::Command::new("xdotool")`, `Self::read_proc_comm`
+- **called_by**: `poll_once`
+
+### `LinuxEventMonitor::read_proc_comm`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: Reads `/proc/<pid>/comm` (the kernel-truncated-to-15-char process name) and trims it.
+- **inputs**: `pid: u32`
+- **outputs**: `Option<String>`
+- **called_by**: `x11_active_window_process`, `scan_proc_for_messaging_apps`, unit test `test_proc_comm_read`
+
+### `LinuxEventMonitor::scan_proc_for_messaging_apps`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: Wayland fallback: walks every entry of `/proc`, keeps only numeric (PID) directory names, reads each one's `comm`, and case-insensitively substring-matches it against a fixed list of known messaging-app process names (Telegram, Signal, Slack, Discord, WhatsApp variants, Thunderbird, Evolution, Geary, Fractal, Element, Nheko, Ferdi/Ferdium, Rambox). Notably includes both `"telegram-deskto"` (the kernel's 15-char-truncated `comm` value) and the untruncated `"Telegram Desktop"` as separate list entries to cover both possible reported forms.
+- **outputs**: `Vec<(u32, String)>` (pid, process name pairs)
+- **calls**: `std::fs::read_dir("/proc")`, `Self::read_proc_comm`
+- **called_by**: `poll_once` (Wayland branch)
+
+### `LinuxEventMonitor::poll_once`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: One polling tick. On Wayland, uses `scan_proc_for_messaging_apps` and takes the first match's process name with no window title (title is always `None` in that branch — Wayland offers no portable window-title query here). On X11, queries both title and process via `xdotool`. Compares against the previous tick's values; if unchanged, does nothing. On change, classifies platform, checks `config.is_platform_enabled`, scores confidence from a fixed keyword list in the window title (0.85 if any keyword like "compose"/"chat"/"dm" is present, else 0.55 baseline), builds a `MessagingEvent`, and spawns a task to send it on the channel (so a slow/full channel doesn't block the polling loop itself).
+- **inputs**: `&self`, `last_title: &mut Option<String>`, `last_process: &mut Option<String>`
+- **calls**: `Self::is_wayland`, `Self::scan_proc_for_messaging_apps`, `Self::x11_active_window_title`, `Self::x11_active_window_process`, `PlatformType::from_process_name`, `self.config.is_platform_enabled`, `MessagingEvent::new`/`with_confidence`/`with_window_title`, `tokio::spawn`
+- **called_by**: `start`'s polling loop
+- **mutates**: `*last_title`, `*last_process` (via the caller's mutable references); sends on `self.event_tx`
+
+### `LinuxEventMonitor::start` / `stop` / `is_running` / `event_sender` (trait impl)
+- **type**: function (async, trait impl of `EventMonitor`)
+- **file**: `crates/hsip-intercept/src/linux/event_monitor.rs`
+- **purpose**: `start` is idempotent (no-op if already running), logs which display server was detected, warns (doesn't fail) if `xdotool` is missing on an X11 session, then spawns a `spawn_blocking` task running a `poll_once` + 500ms-sleep loop until `running` flips false. `stop` just flips the shared `AtomicBool` — the blocking thread notices on its next loop iteration and exits (there's no join/await on that thread from `stop` itself, so `stop()` returning doesn't guarantee the thread has actually finished yet).
+- **outputs**: `Result<()>` / `bool` / `&mpsc::Sender<MessagingEvent>`
+- **calls**: `Self::is_wayland`, `poll_once`, `tokio::task::spawn_blocking`
+- **called_by**: `InterceptCoordinator::run` (`start`)
+- **mutates**: `self.running` (AtomicBool)
+
+### `LinuxOverlay`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/linux/overlay.rs`
+- **purpose**: Wraps a desktop notification (via `notify_rust`) as the intercept prompt. Tracks `current_platform` in an `Arc<Mutex<PlatformType>>` purely so the blocking notification thread's `DisableForApp` action (which doesn't know the platform) can be substituted with the real one back on the async side after the blocking call returns.
+- **called_by**: `InterceptCoordinator::new` (`#[cfg(target_os = "linux")]` branch)
+
+### `ACTION_HSIP` / `ACTION_CONTINUE` / `ACTION_DISABLE`
+- **type**: variable (constants, `&str`)
+- **file**: `crates/hsip-intercept/src/linux/overlay.rs`
+- **purpose**: The three D-Bus notification action IDs (`"hsip"`, `"continue"`, `"disable"`) registered on the notification and matched against the actual clicked action in `show_notification`.
+- **called_by**: `LinuxOverlay::show_notification`
+
+### `LinuxOverlay::new`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/linux/overlay.rs`
+- **purpose**: Constructs the overlay in a not-yet-shown state.
+- **inputs**: `config: &InterceptConfig`
+- **outputs**: `Result<Box<dyn InterceptOverlay>>`
+
+### `LinuxOverlay::build_body`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/linux/overlay.rs`
+- **purpose**: Trivial passthrough of `content.message` — kept as its own function (rather than inlined) so it's directly unit-testable without going through the async/blocking notification machinery.
+- **inputs**: `content: &OverlayContent`
+- **outputs**: `String`
+- **called_by**: `show`
+
+### `LinuxOverlay::show_notification`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/linux/overlay.rs`
+- **purpose**: Builds and shows a `notify_rust::Notification` with the three actions above and a configurable timeout (`Timeout::Never` if `timeout_secs == 0`), then blocks (`handle.wait_for_action`) until the user clicks an action or the notification is dismissed — default on dismiss/timeout is `UserChoice::Continue`. This is a blocking D-Bus call, hence always invoked from inside `spawn_blocking` by its caller.
+- **inputs**: `summary: &str`, `body: &str`, `timeout_secs: u32`
+- **outputs**: `Result<UserChoice>`
+- **calls**: `notify_rust::Notification::show`, `handle.wait_for_action`
+- **called_by**: `show` (via `tokio::task::spawn_blocking`)
+
+### `LinuxOverlay::show` / `hide` / `is_visible` (trait impl)
+- **type**: function (async, trait impl of `InterceptOverlay`)
+- **file**: `crates/hsip-intercept/src/linux/overlay.rs`
+- **purpose**: `show` records the event's platform (for the `DisableForApp` substitution), builds the overlay content, then runs `show_notification` on a blocking thread and awaits it; if the result was `DisableForApp` (with a placeholder `Unknown` platform baked in from inside the blocking closure, since that closure has no access to the real platform), substitutes back the real captured platform. `hide` is a no-op (notifications self-dismiss or are dismissed by the user; there's no persistent handle retained to close). `is_visible` always returns `false` — visibility isn't tracked, since the notification daemon owns that state.
+- **outputs**: `Result<UserChoice>` / `Result<()>` / `bool`
+- **calls**: `OverlayContent::from_event`, `Self::build_body`, `Self::show_notification` (via `spawn_blocking`)
+- **called_by**: `InterceptCoordinator::show_intercept_overlay`
+- **mutates**: `self.current_platform`
+
+---
+
+## `crates/hsip-intercept/src/macos/mod.rs`, `macos/event_monitor.rs`, `macos/overlay.rs`
+
+macOS, like Linux, has a real (not stubbed) implementation for both halves, but deliberately avoids Objective-C/Swift/CoreFoundation bindings for this MVP: event detection shells out to `osascript` (AppleScript via System Events) to poll the frontmost application's name and window title every 500ms, and the overlay uses `notify-rust`'s macOS backend (`mac-notification-sys`, User Notification Center) for a banner notification. The module doc notes real CoreFoundation bindings are planned for a later phase to avoid the subprocess overhead and get lower latency.
+
+### `extract_recipient_from_window` (`macos/mod.rs`)
+- **type**: function
+- **file**: `crates/hsip-intercept/src/macos/mod.rs`
+- **purpose**: Same best-effort window-title recipient parsing as the Linux equivalent, with macOS-specific prefixes (`"Chat with "`, `"DM with "`, `"Message to "`) tried first, falling back to splitting on em-dash/en-dash/hyphen and taking the first non-empty, under-64-character segment.
+- **inputs**: `event: &crate::event::MessagingEvent`
+- **outputs**: `crate::Result<String>`
+- **called_by**: *not currently called* — same gap as Linux's equivalent function; `InterceptCoordinator::extract_recipient` has no `#[cfg(target_os = "macos")]` arm, so this is dead code on the actual runtime path despite being exported and implemented.
+- **mutates**: nothing
+
+### `MacOSEventMonitor`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: Polls the frontmost application/window every 500ms on a `spawn_blocking` thread, same `Arc<AtomicBool>` `running`-flag pattern as `LinuxEventMonitor`. Requires the process to already hold the macOS "Accessibility" (and/or "Screen Recording") privacy permission for the AppleScript queries to succeed — `start()` logs a loud warning about this requirement but does not itself verify or request the permission.
+- **called_by**: `InterceptCoordinator::new` (`#[cfg(target_os = "macos")]` branch)
+
+### `SCRIPT_APP_NAME` / `SCRIPT_WINDOW_TITLE`
+- **type**: variable (constants, `&str`, raw AppleScript source)
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: The two AppleScript snippets run via `osascript -e`: one returns the name of the frontmost process (via `System Events`), the other returns the title of that process's first window, or empty string if it has no windows.
+- **called_by**: `sample_frontmost` (via `run_applescript`)
+
+### `MacOSEventMonitor::new`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: Constructs the monitor in a non-running state.
+- **inputs**: `event_tx: mpsc::Sender<MessagingEvent>`, `config: &InterceptConfig`
+- **outputs**: `Result<Box<dyn EventMonitor>>`
+
+### `MacOSEventMonitor::run_applescript`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: Runs `osascript -e <script>` as a subprocess, returning trimmed stdout on success (and non-empty output), or `None` on subprocess failure or a non-zero exit (logging stderr at debug level in that case).
+- **inputs**: `script: &str`
+- **outputs**: `Option<String>`
+- **calls**: `std::process::Command::new("osascript")`
+- **called_by**: `sample_frontmost`
+
+### `MacOSEventMonitor::sample_frontmost`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: Runs both AppleScript queries and returns the pair of results.
+- **outputs**: `(Option<String>, Option<String>)` (app name, window title)
+- **calls**: `Self::run_applescript` (×2)
+- **called_by**: `poll_once`
+
+### `MacOSEventMonitor::is_messaging_app`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: Case-insensitive substring match of an app name against a fixed list of known macOS messaging/mail/meeting apps (Messages, Telegram, Signal, Slack, Discord, WhatsApp, Messenger, Mimestream, Spark, Mail, Airmail, Outlook, Zoom, Teams, Skype).
+- **inputs**: `app_name: &str`
+- **outputs**: `bool`
+- **called_by**: `poll_once`, unit test `test_messaging_app_detection`
+
+### `MacOSEventMonitor::has_messaging_title`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: Scores a window title against two keyword tiers — "strong" keywords ("compose", "new message", "direct message", "dm", "send message") yield confidence 0.90; "weak" keywords ("message", "chat", "conversation", "inbox") yield 0.70; no match yields `(false, 0.50)`.
+- **inputs**: `title: &str`
+- **outputs**: `(bool, f64)` (whether any keyword hit, and the associated confidence)
+- **called_by**: `poll_once`, unit test `test_messaging_title_detection`
+
+### `MacOSEventMonitor::poll_once`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: One polling tick: samples frontmost app+title, skips if unchanged or if there's no app name at all, skips if the app isn't a recognized messaging app (`is_messaging_app`), classifies platform and checks `config.is_platform_enabled`. Confidence is 0.60 baseline for an app-name match alone, replaced by `has_messaging_title`'s score if the title itself also hits a keyword. Builds and asynchronously sends a `MessagingEvent` (via `tokio::spawn`, same non-blocking-send pattern as Linux).
+- **inputs**: `&self`, `last_app: &mut Option<String>`, `last_title: &mut Option<String>`
+- **calls**: `Self::sample_frontmost`, `Self::is_messaging_app`, `PlatformType::from_process_name`, `self.config.is_platform_enabled`, `Self::has_messaging_title`, `MessagingEvent::new`, `tokio::spawn`
+- **called_by**: `start`'s polling loop
+- **mutates**: `*last_app`, `*last_title`; sends on `self.event_tx`
+
+### `MacOSEventMonitor::start` / `stop` / `is_running` / `event_sender` (trait impl)
+- **type**: function (async, trait impl of `EventMonitor`)
+- **file**: `crates/hsip-intercept/src/macos/event_monitor.rs`
+- **purpose**: `start` first sanity-checks that `osascript` runs at all (`osascript -e 1`), returning an error immediately if not — the one platform monitor in this crate that actually validates its subprocess dependency up front rather than only discovering its absence on first real query. Then warns about the Accessibility permission requirement and spawns the same `spawn_blocking` poll loop pattern as Linux. `stop` flips the shared `AtomicBool`.
+- **outputs**: `Result<()>` / `bool` / `&mpsc::Sender<MessagingEvent>`
+- **calls**: `std::process::Command::new("osascript")`, `poll_once`, `tokio::task::spawn_blocking`
+- **called_by**: `InterceptCoordinator::run`
+- **mutates**: `self.running`
+
+### `MacOSOverlay`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/macos/overlay.rs`
+- **purpose**: Notification-based overlay using `notify-rust`'s macOS backend. Tracks `current_platform` (same `DisableForApp`-substitution reasoning as `LinuxOverlay`) and additionally a `visible: Arc<Mutex<bool>>` flag that Linux's overlay doesn't bother tracking. Doc comment notes macOS 10.14+ restricts custom notification action buttons to App Store apps unless using `UNUserNotificationCenter` directly, so for this MVP a click on the notification body is simply treated as "Send via HSIP" rather than presenting real per-action buttons.
+- **called_by**: `InterceptCoordinator::new` (`#[cfg(target_os = "macos")]` branch)
+
+### `MacOSOverlay::new`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/macos/overlay.rs`
+- **purpose**: Constructs the overlay, initially not visible.
+- **inputs**: `config: &InterceptConfig`
+- **outputs**: `Result<Box<dyn InterceptOverlay>>`
+
+### `MacOSOverlay::show_notification`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/macos/overlay.rs`
+- **purpose**: Shows a `notify_rust::Notification` (with `"default"`/`"close"` actions, though as noted only the click/dismiss distinction really matters on macOS) and blocks for the user's response via `wait_for_action`; maps `"default"` → `SendPrivately`, anything else (including `"__closed"`) → `Continue`.
+- **inputs**: `summary: &str`, `body: &str`, `timeout_secs: u32`
+- **outputs**: `Result<UserChoice>`
+- **calls**: `notify_rust::Notification::show`, `handle.wait_for_action`
+- **called_by**: `show` (via `spawn_blocking`)
+
+### `MacOSOverlay::show` / `hide` / `is_visible` (trait impl)
+- **type**: function (async, trait impl of `InterceptOverlay`)
+- **file**: `crates/hsip-intercept/src/macos/overlay.rs`
+- **purpose**: `show` records platform and sets `visible = true` before dispatching to the blocking `show_notification` call, resetting `visible = false` once it returns (inside the same `spawn_blocking` closure, so visibility flips back the instant the blocking call itself completes, not when the async caller resumes); substitutes the real platform into any `DisableForApp` result the same way Linux does. `hide` just sets `visible = false` directly (macOS notifications are OS-managed; there's no window handle to destroy). `is_visible` reads the tracked flag — unlike Linux, which hardcodes `false`.
+- **outputs**: `Result<UserChoice>` / `Result<()>` / `bool`
+- **calls**: `OverlayContent::from_event`, `Self::show_notification` (via `spawn_blocking`)
+- **called_by**: `InterceptCoordinator::show_intercept_overlay`
+- **mutates**: `self.current_platform`, `self.visible`
+
+---
+
+## `crates/hsip-intercept/src/windows/mod.rs`, `windows/event_monitor.rs`, `windows/messenger.rs`, `windows/overlay.rs`, `windows/utils.rs`
+
+Windows uses the real Win32/COM UI Automation API (`IUIAutomation`) plus `SetWinEventHook` for event detection, and a hand-built layered (`WS_EX_LAYERED`) always-on-top popup window, drawn with raw GDI calls, for the overlay — the only platform in this crate that renders its own custom window rather than delegating to an OS notification center. Event detection is real (COM `IUIAutomation` is initialized and a genuine 500ms polling loop via `GetForegroundWindow` detects window changes and sends events), but two important pieces are still placeholders: the `SetWinEventHook`-based event-hook path is registered but its callback (`win_event_proc`) never actually forwards anything to the event channel (just logs), so all real event delivery in practice comes from the separate polling loop inside `start()`, not the hooks; and recipient/messenger-window handling (`messenger.rs`) is largely unimplemented, falling back to a debug-only `MessageBoxW` placeholder.
+
+### `IUIAutomation` / `IUIAutomationElement` / `UIA_PATTERN_ID` (`windows/mod.rs`)
+- **type**: variable (re-exports)
+- **file**: `crates/hsip-intercept/src/windows/mod.rs`
+- **purpose**: Re-exports these `windows` crate Win32 UI Automation types under `crate::windows::` so downstream code doesn't need its own direct `windows::Win32::UI::Accessibility` import.
+
+### `SendSyncWrapper<T>`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: A thin wrapper that unsafely asserts `Send + Sync` for a COM object (`IUIAutomation`) so it can live inside `WindowsEventMonitor`, which itself must be `Send`/`Sync` to satisfy the `EventMonitor: Send + Sync` trait bound. The safety comment asserts this is sound for apartment-threaded COM objects "when properly initialized per-thread" — a claim not otherwise enforced by the type system here.
+- **called_by**: `WindowsEventMonitor` (as the type of its `automation` field)
+
+### `WindowsEventMonitor`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Holds the event channel sender, cloned config, a shared `running` flag, and the (optionally uninitialized until `start()`) `IUIAutomation` COM instance wrapped in `SendSyncWrapper`.
+- **called_by**: `InterceptCoordinator::new` (`#[cfg(target_os = "windows")]` branch)
+
+### `WindowsEventMonitor::new`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Constructs the monitor with `automation` empty (`SendSyncWrapper::none()`) and not running — no COM/Win32 calls happen until `start()`.
+- **inputs**: `event_tx: mpsc::Sender<MessagingEvent>`, `config: &InterceptConfig`
+- **outputs**: `Result<Box<dyn EventMonitor>>`
+
+### `WindowsEventMonitor::initialize_automation`
+- **type**: function (private, unsafe body)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Calls `CoInitializeEx(None, COINIT_APARTMENTTHREADED)` then `CoCreateInstance(&CUIAutomation, ...)` to obtain a real `IUIAutomation` COM object, storing it in `self.automation`. Unlike `main.rs`'s later-written `create_shortcuts` (see that entry for comparison), this does **not** distinguish `RPC_E_CHANGED_MODE`/`S_FALSE` from a hard failure — any non-`S_OK` `CoInitializeEx` result is treated uniformly as an error via `.ok()?`, and there is no matching `CoUninitialize` call anywhere in this function (cleanup only happens in `stop()`, and only unconditionally, regardless of whether initialization here actually succeeded or which apartment-mode outcome occurred).
+- **outputs**: `Result<()>`
+- **calls**: `CoInitializeEx`, `CoCreateInstance`
+- **called_by**: `start`
+- **mutates**: `self.automation`; process-wide COM apartment state on the calling thread
+
+### `WindowsEventMonitor::register_event_handlers`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Intended to register `IUIAutomationEventHandler`-based event handlers (button-click `InvokePattern` events) but that path is an explicit `TODO` — it currently only calls `register_win_event_hooks`, the `SetWinEventHook`-based polling-adjacent mechanism, as a stand-in.
+- **outputs**: `Result<()>`
+- **calls**: `self.register_win_event_hooks`
+- **called_by**: `start`
+
+### `WindowsEventMonitor::register_win_event_hooks`
+- **type**: function (private, unsafe body)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Registers two `SetWinEventHook` hooks (`EVENT_OBJECT_FOCUS` and `EVENT_OBJECT_INVOKED`), both pointed at the same `win_event_proc` callback, with `WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS`. Fails if either `SetWinEventHook` call returns an invalid handle. **The registered hooks are effectively dead weight in this version**: `win_event_proc` (below) never forwards anything into `self.event_tx` — real event delivery instead comes entirely from the independent polling loop spawned in `start()`.
+- **outputs**: `Result<()>`
+- **calls**: `SetWinEventHook`
+- **called_by**: `register_event_handlers`
+
+### `WindowsEventMonitor::win_event_proc`
+- **type**: function (unsafe extern "system")
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: The raw Windows callback invoked by the OS for the registered hook events. Filters to window-level events only (`id_object == OBJID_WINDOW.0`), fetches window info via `get_window_info`, and only *logs* it at debug level — the code comment explicitly notes sending the event onward would need thread-local storage or global state to reach `event_tx` from this free-standing `extern "system"` function, and that wiring was never added. Effectively a no-op beyond logging.
+- **inputs**: raw Win32 hook parameters (`HWINEVENTHOOK`, `event: u32`, `hwnd: HWND`, `id_object: i32`, etc.)
+- **calls**: `Self::get_window_info`
+- **called_by**: the OS, via the hooks registered in `register_win_event_hooks`
+- **mutates**: nothing (logging only)
+
+### `WindowsEventMonitor::get_window_info`
+- **type**: function (private, unsafe)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Given an `HWND`, fetches its title (`GetWindowTextW`), class name (`GetClassNameW`), and owning process's image name (`GetWindowThreadProcessId` → `OpenProcess` → `QueryFullProcessImageNameW`, falling back to `"unknown"` if the query fails) into a `WindowInfo`. Explicitly closes the opened process handle (`CloseHandle`) before returning.
+- **inputs**: `hwnd: HWND`
+- **outputs**: `Result<WindowInfo>`
+- **calls**: `GetWindowTextW`, `GetClassNameW`, `GetWindowThreadProcessId`, `OpenProcess`, `QueryFullProcessImageNameW`, `CloseHandle`
+- **called_by**: `win_event_proc`, `poll_ui_changes`, `start`'s inline polling loop
+- **mutates**: opens/closes a process handle (transient OS resource)
+
+### `WindowsEventMonitor::poll_ui_changes`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: An `async` polling loop (documented as "fallback if event hooks don't work") that calls `GetForegroundWindow` every 500ms, and on a detected window change calls `handle_window_change`. **Not actually invoked from `start()`** — `start()` instead spawns its own separate, near-identical polling logic inline inside a `spawn_blocking` closure (see below), so this function and `handle_window_change` are effectively dead code duplicating that inline loop's logic.
+- **outputs**: `Result<()>`
+- **calls**: `GetForegroundWindow`, `Self::get_window_info`, `self.handle_window_change`
+- **called_by**: *nothing currently* — dead code as of this file
+- **mutates**: nothing directly (delegates to `handle_window_change`)
+
+### `WindowsEventMonitor::handle_window_change`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Classifies platform from the window's process name, and if `is_messaging_window` says yes, builds a `MessagingEvent` (bumping confidence to 0.85 if the title contains "compose"/"message"/"chat") and sends it on `self.event_tx`. Only reachable via `poll_ui_changes`, which is itself unreferenced — see above.
+- **inputs**: `&self`, `window_info: &WindowInfo`
+- **calls**: `PlatformType::from_process_name`, `self.is_messaging_window`, `MessagingEvent::new`
+- **called_by**: `poll_ui_changes` (dead path)
+- **mutates**: sends on `self.event_tx`
+
+### `WindowsEventMonitor::is_messaging_window`
+- **type**: function (private)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Returns `false` immediately if the platform is disabled per config; otherwise checks the window title against a fixed keyword list (compose/message/chat/direct/dm/messenger/inbox/conversation).
+- **inputs**: `&self`, `window_info: &WindowInfo`, `platform: PlatformType`
+- **outputs**: `bool`
+- **calls**: `self.config.is_platform_enabled`
+- **called_by**: `handle_window_change`, unit test `test_messaging_window_detection`
+- **mutates**: nothing
+
+### `WindowsEventMonitor::start` / `stop` / `is_running` / `event_sender` (trait impl)
+- **type**: function (async, trait impl of `EventMonitor`)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: `start` initializes COM/`IUIAutomation`, registers (functionally inert) event hooks, then spawns a `spawn_blocking` task containing **its own independently written 500ms polling loop** — duplicating (rather than calling) `poll_ui_changes`/`handle_window_change`'s logic inline: it grabs `tokio::runtime::Handle::current()` up front so the blocking-thread closure can still `rt.spawn` an async send of the `MessagingEvent` back onto the tokio runtime. `stop` flips `running` to false and unconditionally calls `CoUninitialize()` regardless of whether `initialize_automation` actually succeeded or what apartment-mode outcome `CoInitializeEx` returned.
+- **outputs**: `Result<()>` / `bool` / `&mpsc::Sender<MessagingEvent>`
+- **calls**: `self.initialize_automation`, `self.register_event_handlers`, `tokio::task::spawn_blocking`, `GetForegroundWindow`, `WindowsEventMonitor::get_window_info`, `PlatformType::from_process_name`, `MessagingEvent::new`, `CoUninitialize`
+- **called_by**: `InterceptCoordinator::run`
+- **mutates**: `self.running`, `self.automation`; process-wide COM state
+
+### `WindowInfo`
+- **type**: struct (private)
+- **file**: `crates/hsip-intercept/src/windows/event_monitor.rs`
+- **purpose**: Plain title/class_name/process_name bundle used to detect "did the foreground window change" via `PartialEq`/`Eq` comparison between polling ticks.
+- **called_by**: `get_window_info`, `poll_ui_changes`, `handle_window_change`, `start`'s inline loop
+
+### `open_messenger_window`
+- **type**: function (async)
+- **file**: `crates/hsip-intercept/src/windows/messenger.rs`
+- **purpose**: Intended to launch/activate the HSIP Messenger window, but this is an explicit `TODO` (options listed in comments: spawn an `hsip-cli messenger` subprocess, IPC to an existing daemon, or a WebView2/native UI — none implemented). Logs a warning and, only in debug builds (`#[cfg(debug_assertions)]`), shows a raw `MessageBoxW` placeholder dialog naming the intended recipient. In release builds this function does nothing observable at all beyond the log line.
+- **inputs**: `recipient_hint: Option<String>`
+- **outputs**: `Result<()>`
+- **calls**: `MessageBoxW` (debug builds only)
+- **called_by**: `HSIPRouter::open_messenger_manual` (`#[cfg(target_os = "windows")]` branch)
+- **mutates**: nothing persistent (a transient debug-only dialog box)
+
+### `extract_recipient_from_window` (`windows/messenger.rs`)
+- **type**: function
+- **file**: `crates/hsip-intercept/src/windows/messenger.rs`
+- **purpose**: Parses two hardcoded window-title shapes: Gmail's `"Compose - <email> - Gmail"` (extracts the substring between `"Compose - "` and the following `" - "`), and Instagram's `"Direct - @username"` (finds the `@` and takes the run of non-whitespace/non-`)` characters after it). Falls back to `event.metadata["recipient"]` if set, otherwise errors. Unlike the Linux/macOS equivalents, this is pattern-matched to two specific literal title formats rather than a general prefix/separator heuristic.
+- **inputs**: `event: &MessagingEvent`
+- **outputs**: `Result<String>`
+- **called_by**: `InterceptCoordinator::extract_recipient` (`#[cfg(target_os = "windows")]` branch)
+- **mutates**: nothing
+
+### `to_wide_string` / `from_wide_string` (`windows/utils.rs`)
+- **type**: function
+- **file**: `crates/hsip-intercept/src/windows/utils.rs`
+- **purpose**: `to_wide_string` converts a Rust `&str` to a null-terminated UTF-16 `Vec<u16>` for Win32 API calls expecting a wide string; `from_wide_string` does the reverse, stopping at the first null terminator (or the slice's end if none is found) and lossily converting invalid UTF-16 sequences. These are general-purpose duplicates of the same wide-string conversion `main.rs::to_wide` in `hsip-api` implements independently for its own Windows shortcut-creation code — the two crates don't share this helper.
+- **inputs/outputs**: `to_wide_string(s: &str) -> Vec<u16>`; `from_wide_string(wide: &[u16]) -> String`
+- **called_by**: not currently called elsewhere in this crate (`windows/overlay.rs` and `windows/event_monitor.rs` each inline their own ad hoc UTF-16 conversions rather than reusing these) — available utility functions, exercised only by this file's own unit test
+- **mutates**: nothing
+
+### `SendableHwnd`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/windows/overlay.rs`
+- **purpose**: Wraps a raw `HWND` and unsafely asserts `Send + Sync` so it can be stored in `Arc<Mutex<Option<SendableHwnd>>>` and survive across `.await` points inside async functions — `HWND` itself isn't `Send`, and the surrounding code specifically structures `show`/`wait_for_choice` to fetch the handle out of this wrapper only inside non-async scopes, to avoid holding a raw `HWND` live across an `await`.
+- **called_by**: `WindowsOverlay` (as the type inside its `hwnd` field)
+
+### `WindowsOverlay`
+- **type**: struct
+- **file**: `crates/hsip-intercept/src/windows/overlay.rs`
+- **purpose**: Renders the intercept prompt as a real custom Win32 layered window (`WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW`), positioned per `OverlayConfig.position`, drawn with raw GDI in its `window_proc`. Tracks the current window handle and the resolved `UserChoice` behind `Arc<Mutex<...>>` so they can be shared safely between the async caller and the dedicated OS message-loop thread.
+- **called_by**: `InterceptCoordinator::new` (`#[cfg(target_os = "windows")]` branch)
+
+### `WindowsOverlay::new`
+- **type**: function
+- **file**: `crates/hsip-intercept/src/windows/overlay.rs`
+- **purpose**: Constructs the overlay with no window yet created and no choice recorded.
+- **inputs**: `config: &InterceptConfig`
+- **outputs**: `Result<Box<dyn InterceptOverlay>>`
+
+### `WindowsOverlay::create_overlay_window`
+- **type**: function (private, unsafe body)
+- **file**: `crates/hsip-intercept/src/windows/overlay.rs`
+- **purpose**: Registers a window class (`"HSIPInterceptOverlay"`, black background brush), computes screen position from `calculate_overlay_position`, creates a topmost, tool, layered popup window at that position/size via `CreateWindowExW`, sets 240/255 alpha transparency via `SetLayeredWindowAttributes`, then shows and updates it. Returns the resulting `HWND`.
+- **inputs**: `&self`, `content: &OverlayContent`
+- **outputs**: `Result<HWND>`
+- **calls**: `GetModuleHandleW`, `RegisterClassW`, `self.calculate_overlay_position`, `CreateWindowExW`, `SetLayeredWindowAttributes`, `ShowWindow`, `UpdateWindow`
+- **called_by**: `show`
+- **mutates**: creates an OS window (visible screen state)
+
+### `WindowsOverlay::calculate_overlay_position`
+- **type**: function (private, unsafe body)
+- **file**: `crates/hsip-intercept/src/windows/overlay.rs`
+- **purpose**: Computes a fixed 400×200 window's `(x, y)` origin for each `OverlayPosition` variant based on `GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)` — the only overlay implementation in this crate that actually reads `OverlayConfig.position` (Linux/macOS notifications don't have a configurable on-screen position).
+- **outputs**: `(i32, i32, i32, i32)` (x, y, width, height)
+- **calls**: `GetSystemMetrics`
+- **called_by**: `create_overlay_window`, unit test `test_position_calculation`
+
+### `WindowsOverlay::window_proc`
+- **type**: function (unsafe extern "system")
+- **file**: `crates/hsip-intercept/src/windows/overlay.rs`
+- **purpose**: The window procedure for the overlay window. `WM_PAINT` fills a dark-gray background and draws the fixed placeholder text `"Send through HSIP instead?"` centered (a `TODO` notes real content rendering — title/message/recipient text from `OverlayContent` is not actually drawn, just this one hardcoded string) — regardless of the actual `OverlayContent` passed to `create_overlay_window`. `WM_LBUTTONDOWN` posts a `WM_CLOSE` with `wParam=1` (interpreted downstream as "Send Privately"); `WM_RBUTTONDOWN` posts `WM_CLOSE` with `wParam=0` ("Continue"). `WM_DESTROY` calls `PostQuitMessage`.
+- **inputs**: `hwnd: HWND`, `msg: u32`, `wparam: WPARAM`, `lparam: LPARAM`
+- **outputs**: `LRESULT`
+- **calls**: `BeginPaint`/`EndPaint`, `CreateSolidBrush`/`FillRect`/`DeleteObject`, `DrawTextW`, `PostMessageW`, `PostQuitMessage`, `DefWindowProcW`
+- **called_by**: the OS message dispatcher (registered as `WNDCLASSW.lpfnWndProc`)
+
+### `WindowsOverlay::wait_for_choice`
+- **type**: function (async, private)
+- **file**: `crates/hsip-intercept/src/windows/overlay.rs`
+- **purpose**: Spawns a dedicated OS thread (`std::thread::spawn`, deliberately *not* a tokio task, since it must run a native Win32 message loop with `GetMessageW`/`TranslateMessage`/`DispatchMessageW`) that blocks until it sees the `WM_CLOSE` message posted by `window_proc`, decodes the choice from `wParam`, and stores it in the shared `Arc<Mutex<Option<UserChoice>>>`. The calling async function meanwhile polls that mutex every 100ms with a hard timeout from `config.overlay.timeout_seconds`; on timeout it posts its own synthetic `WM_CLOSE`(wParam=0) to force the message-loop thread to exit and returns `Continue` immediately rather than waiting for that thread to actually process the synthetic message.
+- **outputs**: `Result<UserChoice>`
+- **calls**: `std::thread::spawn`, `GetMessageW`, `TranslateMessage`, `DispatchMessageW`, `PostMessageW`, `tokio::time::sleep`
+- **called_by**: `show`
+- **mutates**: `self.choice` (via the shared Mutex, from the spawned OS thread)
+
+### `WindowsOverlay::show` / `hide` / `is_visible` (trait impl)
+- **type**: function (async, trait impl of `InterceptOverlay`)
+- **file**: `crates/hsip-intercept/src/windows/overlay.rs`
+- **purpose**: `show` builds content, creates the overlay window in a scoped (non-`.await`-spanning) block and stores its `HWND` (wrapped in `SendableHwnd`) before awaiting `wait_for_choice`, then calls `hide` to tear the window down before returning the resolved choice. `hide` destroys the window (`DestroyWindow`) if one is currently tracked, clearing `self.hwnd`. `is_visible` reports whether `self.hwnd` currently holds a handle.
+- **outputs**: `Result<UserChoice>` / `Result<()>` / `bool`
+- **calls**: `OverlayContent::from_event`, `self.create_overlay_window`, `self.wait_for_choice`, `self.hide`, `DestroyWindow`
+- **called_by**: `InterceptCoordinator::show_intercept_overlay`
+- **mutates**: `self.hwnd`; creates/destroys an OS window
+
+---
+
+## `crates/hsip-common/src/lib.rs`
+
+Crate root for `hsip-common`. Re-exports `quantum_physics` (see below) as the crate's entire public surface — there is no other functionality in this crate. The module doc comment maps each "quantum physics" name to the practical feature it actually implements: No-Cloning → single-use nonce/anti-replay, Decoherence → auto-expiring consent/sessions, Observer Effect → read receipts/access logging, Superposition → hidden message state until revealed, Entanglement → mutual/bidirectional consent linkage, Uncertainty → a privacy/performance tradeoff slider. The physics framing is a deliberate naming choice (per project history, to appeal to security researchers), not an indication of anything quantum-mechanical in the implementation — everything underneath is ordinary classical cryptography (BLAKE3 hashing, XOR/keyed-hash "encryption," `chrono` timestamps, `parking_lot` locks).
+
+### `quantum_physics` (re-export)
+- **type**: module re-export (`pub use quantum_physics::*`)
+- **file**: `crates/hsip-common/src/lib.rs`
+- **purpose**: Flattens all six `quantum_physics` submodules' public items into the crate root, so callers write `hsip_common::QuantumNonce` etc. instead of `hsip_common::quantum_physics::no_cloning::QuantumNonce`.
+- **calls**: none
+- **called_by**: `hsip-telemetry-guard` (`use hsip_common::quantum_physics::uncertainty::PrivacyLevel`, etc.)
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-common/src/quantum_physics/mod.rs`
+
+Declares and re-exports the six "quantum physics" submodules. Purely organizational — no logic of its own.
+
+### `decoherence` / `entanglement` / `no_cloning` / `observer_effect` / `superposition` / `uncertainty` (module declarations + re-exports)
+- **type**: module declarations (`pub mod ...`) + wildcard re-exports (`pub use ...::*`)
+- **file**: `crates/hsip-common/src/quantum_physics/mod.rs`
+- **purpose**: Makes every submodule's public types directly reachable as `hsip_common::quantum_physics::<Type>` in addition to their fully-qualified submodule paths.
+- **calls**: none
+- **called_by**: `hsip-common/src/lib.rs`, `hsip-telemetry-guard` (imports `uncertainty::PrivacyLevel` and `observer_effect::{ObservationLog, ObservationType}` directly)
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-common/src/quantum_physics/decoherence.rs`
+
+Real property implemented: **time-based automatic expiry** (consent TTLs, session idle timeouts, key-rotation intervals) — "decoherence" is just the name for "this state stops being valid after enough time/inactivity passes." Nothing here is cryptographic on its own; `DecoherenceState`/`DecayingConsent`/`DecayingSession` are plain `chrono`-timestamp bookkeeping structs that other code (e.g. `hsip-telemetry-guard`'s `ConsentGate`/`TelemetryConsent`, which is BLAKE3-signed) is expected to combine with real cryptographic enforcement. This module by itself does not stop anyone from ignoring `is_valid()` and using an "expired" value anyway — it only supplies the expiry computation and revocation-reason bookkeeping.
+
+### `DecoherenceError`
+- **type**: enum
+- **file**: `crates/hsip-common/src/quantum_physics/decoherence.rs`
+- **purpose**: Error variants for validation failures: `ConsentExpired` (used for both hard expiry and explicit revocation), `SessionIdle`, `KeyExpired` (declared, not currently produced by any method here), `InvalidConfig` (declared, unused).
+- **called_by**: `DecoherenceState::validate`
+
+### `DecoherenceConfig`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/decoherence.rs`
+- **purpose**: Holds the three tunable lifetimes (consent, session-idle, key-rotation) plus a grace period field (declared but not read by any method in this file — clock-drift tolerance is not actually applied anywhere yet). `Default` derives from the module's `DEFAULT_*` constants (90-day consent, 24h idle, 30-day key rotation).
+- **outputs**: `Self` (via `Default`/construction)
+- **called_by**: `DecoherenceState::new_consent`, `DecayingConsent::new`, `DecayingSession::new`, `DecoherenceManager`
+
+### `DecoherenceState`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/decoherence.rs`
+- **purpose**: The core expiry primitive: `created_at`/`expires_at` (hard deadline) plus `last_activity`/`idle_timeout_secs` (soft, resettable-by-`touch()` deadline) plus an explicit `revoked`/`revocation_reason` flag. `is_valid()` = not revoked AND not past `expires_at` AND not idle past `last_activity + idle_timeout_secs`. `decoherence_factor()` gives a 0.0–1.0 "how expired is this" ratio (elapsed/total lifetime, clamped) purely for UI/display use — not a security check.
+- **inputs**: `lifetime_secs: u64, idle_timeout_secs: u64` (`new`); `expires_at: DateTime<Utc>, idle_timeout_secs: u64` (`with_expiry`)
+- **outputs**: `Self`; `bool` (`is_valid`/`is_expired`/`is_idle`); `Result<(), DecoherenceError>` (`validate`); `i64` (`remaining_lifetime_secs`/`idle_duration_secs`); `f64` (`decoherence_factor`)
+- **calls**: `chrono::Utc::now()`
+- **called_by**: `DecayingConsent`, `DecayingSession`, `DecoherenceManager::should_purge_*`
+
+### `DecayingConsent`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/decoherence.rs`
+- **purpose**: A consent record (grantor/grantee/purpose/scope list) wrapping a `DecoherenceState`. `allows(action)` checks both validity and scope membership (empty scope = allows everything valid). `revoke`/`renew` delegate straight to the inner state.
+- **inputs**: `consent_id, grantor_id, grantee_id, purpose: String, lifetime_days: i64` (`new`)
+- **outputs**: `Self`; `bool` (`allows`); `Result<ConsentStatus, DecoherenceError>` (`validate`)
+- **calls**: `DecoherenceState::new`
+- **called_by**: not consumed elsewhere in this workspace as of this writing (no call sites in `hsip-telemetry-guard`, which has its own parallel `TelemetryConsent` type instead) — available as a general-purpose primitive.
+- **mutates**: `self.state`, `self.scope`
+
+### `DecayingSession`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/decoherence.rs`
+- **purpose**: A session wrapper around `DecoherenceState` that also tracks `message_count`; `record_message()` bumps the count and calls `touch()` to reset the idle clock on every message.
+- **inputs**: `session_id, peer_id: String` (`new`)
+- **outputs**: `Self`; `bool` (`is_alive`); `Result<(), DecoherenceError>` (`validate`)
+- **calls**: `DecoherenceState::new`, `DecoherenceState::touch`
+- **mutates**: `self.state`, `self.message_count`
+
+### `DecoherenceManager`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/decoherence.rs`
+- **purpose**: Stateless-except-for-config helper for bulk expiry checks: `should_purge_consent`/`should_purge_session` (pure boolean checks) and `filter_valid_consents` (retains only currently-valid consents from a `Vec`).
+- **inputs**: `config: DecoherenceConfig` (`with_config`)
+- **outputs**: `bool`; `Vec<DecayingConsent>`
+- **calls**: `DecoherenceState::is_valid`
+- **mutates**: nothing (all methods take `&self`, operate on caller-supplied data)
+
+---
+
+## `crates/hsip-common/src/quantum_physics/entanglement.rs`
+
+Real property implemented: **bidirectionally-linked consent state between two (or more) parties**, i.e. a shared consent record both sides reference by the same ID rather than each tracking their own independent copy — "entanglement" names the fact that revoking on one side is meant to immediately affect the other because it's the *same* record, not two synced copies. The cryptography here (`Hasher::new_keyed(&self.shared_secret)`) produces a MAC-like `proof_hash` that lets a holder of `shared_secret` assert "this is the current state," but `shared_secret` is generated fresh per entanglement and never given to either party in this module — nothing in this file hands `shared_secret` to `party_a`/`party_b`, so `generate_proof`/`verify_proof` are currently only self-checks by whoever holds the `EntangledConsent`/`EntanglementManager` instance, not yet an inter-party protocol. `verify_history()` is a stub — it only checks the history vector is non-empty, it does not actually recompute and check the hash chain.
+
+### `EntanglementError`
+- **type**: enum
+- **file**: `crates/hsip-common/src/quantum_physics/entanglement.rs`
+- **purpose**: Error variants: `AlreadyEntangled`, `NotFound`, `BrokenByParty` (carries the revoking party's hex id), `InvalidProof` (used both for actual proof failures and for "wrong state to transition from" — e.g. calling `activate()` when not `Pending`), `Unauthorized`, `Expired`, `InsufficientParties`.
+- **called_by**: `EntangledConsent`, `GroupEntanglement`, `EntanglementManager`
+
+### `EntanglementState`
+- **type**: enum
+- **file**: `crates/hsip-common/src/quantum_physics/entanglement.rs`
+- **purpose**: `Pending | Active | Revoked | Expired | Suspended` — the finite state machine both `EntangledConsent` and `GroupEntanglement` drive through.
+- **called_by**: `EntangledConsent::transition_state`, `GroupEntanglement`
+
+### `EntangledConsent`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/entanglement.rs`
+- **purpose**: A pairwise consent link between `party_a`/`party_b` (32-byte identifiers — typically a public-key hash). `new()` generates a random `entanglement_id` and `shared_secret` and seeds a 1-entry `state_history`. `activate`/`revoke`/`suspend`/`resume` are guarded transitions (each rejects if not currently in the expected prior state) that all funnel through `transition_state`, which checks `expires_at` first (flipping to `Expired` and returning `Err` if past it) then appends a new BLAKE3 state-hash to `state_history`. `revoke` additionally checks the caller is one of the two parties.
+- **inputs**: `party_a: [u8; 32], party_b: [u8; 32], expires_at: Option<DateTime<Utc>>` (`new`)
+- **outputs**: `Self`; `Result<(), EntanglementError>` (transition methods); `bool` (`is_active`/`involves_party`/`verify_proof`/`verify_history`); `Option<[u8; 32]>` (`other_party`); `EntanglementProof` (`generate_proof`)
+- **calls**: `rand::thread_rng().fill_bytes`, `blake3::Hasher::{new, new_keyed}`
+- **called_by**: `EntanglementManager::create_pairwise`/`activate`/`revoke`
+- **mutates**: `self.state`, `self.updated_at`, `self.state_history`
+
+### `EntanglementProof`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/entanglement.rs`
+- **purpose**: A snapshot (`entanglement_id`, `state`, `timestamp`, keyed-hash `proof_hash`) that `EntangledConsent::verify_proof` can check against the live object — proves "this proof was generated by someone holding `shared_secret` for this exact state/timestamp," not an inter-party signature.
+- **called_by**: `EntangledConsent::{generate_proof, verify_proof}`
+
+### `GroupEntanglement`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/entanglement.rs`
+- **purpose**: Threshold multi-party consent — `parties` is the full member list, `threshold` is the minimum number who must call `add_consent` before `state` flips `Pending → Active`. `add_consent` returns `Ok(true)` exactly on the transition where the threshold is first reached (not on every subsequent call). `remove_consent` drops back to `Suspended` if the count falls below threshold after having been `Active`. Rejects non-member parties and expired groups.
+- **inputs**: `parties: Vec<[u8;32]>, threshold: usize, expires_at: Option<DateTime<Utc>>` (`new`, errors if `threshold == 0` or `> parties.len()`)
+- **outputs**: `Result<Self, EntanglementError>`; `Result<bool, EntanglementError>` (`add_consent`); `bool` (`is_active`/`has_consented`)
+- **mutates**: `self.consenting`, `self.state`, `self.updated_at`
+
+### `EntanglementManager`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/entanglement.rs`
+- **purpose**: Thread-safe (`parking_lot::RwLock`-guarded) registry of both pairwise and group entanglements, plus a `party_index` for O(1)-ish lookup of "all entanglements involving this party." `create_pairwise` refuses to create a duplicate between the same two parties (`get_entanglement_between` scans the requesting party's indexed IDs). `cleanup_expired` removes any pairwise/group entanglement whose `expires_at` has passed.
+- **outputs**: `Result<[u8; 32], EntanglementError>` (create methods, returns the new ID); `bool` (`are_entangled`/`is_group_active`); `usize` (`cleanup_expired`, count removed); `EntanglementStats`
+- **calls**: `EntangledConsent::{new, activate, revoke}`, `GroupEntanglement::{new, add_consent, remove_consent}`
+- **called_by**: not yet wired into any other crate in this workspace — a standalone primitive.
+- **mutates**: `self.pairwise`, `self.groups`, `self.party_index`
+
+### `EntanglementStats`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/entanglement.rs`
+- **purpose**: Plain counts (`total_pairwise`, `active_pairwise`, `total_groups`, `active_groups`) returned by `EntanglementManager::stats()`.
+- **called_by**: `EntanglementManager::stats`
+
+---
+
+## `crates/hsip-common/src/quantum_physics/no_cloning.rs`
+
+Real property implemented: **anti-replay / single-use tokens** — the literal quantum no-cloning theorem ("you can't copy an unknown quantum state") is used only as a naming metaphor for "this token, once consumed, cannot be validly presented again." The actual mechanism is a sliding-window nonce cache (`AntiReplayGuard`) plus a payload-binding hash (`SingleUseToken`), both ordinary classical constructions — BLAKE3 hashing and a `HashSet` of seen-nonce hashes with time-based eviction.
+
+### `QuantumNonce`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/no_cloning.rs`
+- **purpose**: A 24-byte (`NONCE_SIZE`) cryptographically random value plus a creation timestamp. `generate()` uses `OsRng`. `is_within_window(window_secs)` is the freshness check consumers must apply before accepting a nonce — note `from_hex` deliberately cannot recover the true original `created_at_ms` (hex encoding only carries the 24 nonce bytes, not the timestamp), so it substitutes the current time; this makes a nonce reconstructed from hex always appear "fresh" regardless of when it was actually generated, which is a genuine sharp edge for any caller round-tripping nonces through hex and then checking their age.
+- **outputs**: `Self` (`generate`); `bool` (`is_within_window`); `String` (`to_hex`); `Result<Self, NoClonError>` (`from_hex`)
+- **calls**: `rand::rngs::OsRng::fill_bytes`, `std::time::SystemTime::now`
+- **called_by**: `SingleUseToken::new`, `AntiReplayGuard`
+
+### `NoClonError`
+- **type**: enum
+- **file**: `crates/hsip-common/src/quantum_physics/no_cloning.rs`
+- **purpose**: `ReplayDetected`, `NonceExpired`, `InvalidNonce`, `SessionMismatch` (declared, not currently produced anywhere in this file), `VerificationFailed`.
+- **called_by**: `AntiReplayGuard::check_and_mark`, `SingleUseToken::validate_and_consume`
+
+### `AntiReplayGuard`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/no_cloning.rs`
+- **purpose**: The actual anti-replay enforcement point — this is HSIP's genuine no-cloning-theorem implementation, and it is distinct from (and predates, in the workspace) `hsip-telemetry-guard::ConsentGate`'s own similar-looking `consumed_tokens` map. Tracks seen-nonce BLAKE3 hashes (optionally salted with a bound `session_id`, so two different sessions can independently accept the same raw nonce bytes) in a `HashSet` plus an ordered `Vec<NonceEntry>` for age-based eviction. `check_and_mark` double-checks for a replay both under the read lock and again after acquiring the write lock (closing the check-then-act race between the two lock acquisitions). Auto-evicts entries older than `window` on every check, and additionally prunes the oldest 10% if the cache exceeds `MAX_NONCE_CACHE_SIZE` (100,000).
+- **inputs**: `window: Duration` (`with_window`); `nonce: &QuantumNonce` (`check_and_mark`/`would_accept`)
+- **outputs**: `Self`; `Result<(), NoClonError>` (`check_and_mark`); `bool` (`would_accept`); `usize` (`tracked_count`)
+- **calls**: `blake3::Hasher`, `parking_lot::RwLock`
+- **called_by**: `SingleUseToken::validate_and_consume`, `new_shared_guard`
+- **mutates**: `self.seen_nonces`, `self.nonce_order`
+
+### `SingleUseToken`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/no_cloning.rs`
+- **purpose**: Bundles an arbitrary `payload: Vec<u8>` (e.g. consent data) with a fresh `QuantumNonce` and a domain-separated (`"HSIP-NO-CLONE-BINDING-v1"`) BLAKE3 hash binding the two together, so a captured token's payload can't be swapped without invalidating `binding`. `validate_and_consume` checks `verify_integrity()` first, then delegates the actual replay check to the caller-supplied `AntiReplayGuard`.
+- **inputs**: `payload: Vec<u8>` (`new`); `guard: &AntiReplayGuard` (`validate_and_consume`)
+- **outputs**: `Self`; `bool` (`verify_integrity`); `Result<(), NoClonError>` (`validate_and_consume`)
+- **calls**: `QuantumNonce::generate`, `AntiReplayGuard::check_and_mark`
+- **mutates**: nothing itself (mutation happens inside the passed `guard`)
+
+### `SharedAntiReplayGuard` / `new_shared_guard`
+- **type**: type alias (`Arc<AntiReplayGuard>`) / function
+- **file**: `crates/hsip-common/src/quantum_physics/no_cloning.rs`
+- **purpose**: Convenience constructor for a thread-shareable guard.
+- **outputs**: `SharedAntiReplayGuard`
+- **calls**: `AntiReplayGuard::new`
+
+---
+
+## `crates/hsip-common/src/quantum_physics/observer_effect.rs`
+
+Real property implemented: **tamper-evident access logging / read receipts** — every "observation" (read, decrypt, export, etc.) of a resource produces a cryptographically-bound, hash-chained record, so after the fact you can prove both that an access happened and that the log of accesses hasn't been reordered or edited. This is the same hash-chaining pattern `hsip-api`'s `audit_log.rs` uses for the HTTP audit trail (BLAKE3, `prev_hash`/`entry_hash` linkage) — this module is `hsip-telemetry-guard::AuditLog`'s and `hsip-telemetry-guard::ConsentGate`'s underlying receipt primitive (see `audit.rs` below, which wraps an `ObservationLog` internally).
+
+### `ObserverError`
+- **type**: enum
+- **file**: `crates/hsip-common/src/quantum_physics/observer_effect.rs`
+- **purpose**: `InvalidSignature`, `ChainIntegrityViolation(usize)` (carries the breaking index), `ObservationNotFound` (declared, unused in this file), `Unauthorized`, `ResourceNotFound` (declared, unused in this file).
+- **called_by**: `ObservationLog::verify_chain`, `ResourceObserver::observe`
+
+### `ObservationType`
+- **type**: enum
+- **file**: `crates/hsip-common/src/quantum_physics/observer_effect.rs`
+- **purpose**: `Read | MetadataAccess | ConsentCheck | KeyDerivation | Decryption | Export | Forward`. `requires_explicit_log()` flags the three most sensitive kinds (`Decryption`, `Export`, `Forward`) as needing explicit logging — this is advisory metadata only; nothing in this file actually enforces that flag (no caller is forced to check it before proceeding).
+- **called_by**: `ReadReceipt`, `ObservationLog::record_observation`, `hsip-telemetry-guard::audit.rs` (maps its own `DecisionType` onto these)
+
+### `ReadReceipt`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/observer_effect.rs`
+- **purpose**: The actual "read receipt": binds `resource_id`, `observer_id`, `observation_type`, `timestamp`, and an optional `prev_receipt_hash` (for chaining) under a keyed BLAKE3 `proof` computed from a caller-supplied `binding_secret`. `verify()` recomputes and compares; a wrong `binding_secret` or any tampered field fails verification.
+- **inputs**: `resource_id, observer_id: [u8;32], observation_type: ObservationType, prev_receipt_hash: Option<[u8;32]>, binding_secret: &[u8]` (`new`)
+- **outputs**: `Self`; `bool` (`verify`); `[u8; 32]` (`hash`, for chaining to the next receipt)
+- **calls**: `blake3::Hasher::{new, new_keyed}`
+- **called_by**: `ObservationLog::record_observation`
+
+### `ObservationRecord`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/observer_effect.rs`
+- **purpose**: The actual hash-chain link stored in `ObservationLog`: wraps a `ReadReceipt` plus an `index`, optional `encrypted_context`, `prev_hash`, and its own `record_hash` (BLAKE3 over index/receipt-id/receipt-proof/context/prev_hash). `verify_integrity()` recomputes and compares `record_hash`.
+- **inputs**: `index: u64, receipt: ReadReceipt, encrypted_context: Option<Vec<u8>>, prev_hash: [u8;32]` (`new`)
+- **outputs**: `Self`; `bool` (`verify_integrity`)
+- **calls**: `blake3::Hasher::new`
+- **called_by**: `ObservationLog::{record_observation, verify_chain}`
+
+### `ObservationLog`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/observer_effect.rs`
+- **purpose**: The append-only, hash-chained log itself, plus two secondary indices (`resource_index`, `observer_index`) for fast filtering. `record_observation` chains each new record to the previous one's `record_hash` (genesis is `[0u8;32]`) and returns the freshly created `ReadReceipt`. `verify_chain()` walks every record checking both per-record integrity and correct `prev_hash` linkage and receipt-proof validity — a single pass, `O(n)`, same "recompute the whole thing" pattern as `hsip-api`'s `GET /v1/audit/verify` (and shares its scaling caveat: no checkpointing, cost grows with log size).
+- **inputs**: `binding_secret: [u8; 32]` (`new`)
+- **outputs**: `Self`; `ReadReceipt` (`record_observation`); `Result<(), ObserverError>` (`verify_chain`); `Vec<ReadReceipt>` (`get_observations_for_resource`/`get_observations_by_observer`); `usize` (`len`); `Option<[u8;32]>` (`latest_hash`)
+- **calls**: `ReadReceipt::new`, `ObservationRecord::new`
+- **called_by**: `hsip-telemetry-guard::audit.rs::AuditLog` (embeds one as a secondary cryptographic-receipt log alongside its own primary `AuditEntry` chain), `ResourceObserver`
+- **mutates**: `self.records`, `self.resource_index`, `self.observer_index`
+
+### `ResourceObserver`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/observer_effect.rs`
+- **purpose**: Per-resource authorization wrapper around a shared `ObservationLog`: maintains its own `authorized_observers` list and refuses to record an observation (`Err(ObserverError::Unauthorized)`) from anyone not on it, before delegating to `log.record_observation`.
+- **inputs**: `log: SharedObservationLog, resource_id: [u8;32]` (`new`)
+- **outputs**: `Self`; `Result<ReadReceipt, ObserverError>` (`observe`); `Vec<ReadReceipt>` (`get_receipts`)
+- **calls**: `ObservationLog::record_observation`
+- **mutates**: `self.authorized_observers`
+
+---
+
+## `crates/hsip-common/src/quantum_physics/superposition.rs`
+
+Real property implemented: **state privacy via commitment/reveal** — a message's status (read/unread/deleted/etc.) is stored only as an encrypted+committed value ("in superposition") until explicitly decrypted ("collapsed"), so an observer holding the data structure alone (without the encryption/commitment keys) cannot tell what state it's in. `QuantumSealedEnvelope`'s "cover traffic" half additionally hides *whether a message exists at all* by making real and decoy envelopes byte-identical in shape. The "encryption" here is a single-byte XOR keyed off a BLAKE3-derived keystream byte — cryptographically trivial (not a real stream cipher; it only ever encrypts one byte, the `MessageState` discriminant) and should not be read as HSIP's actual message-content encryption (that's ChaCha20-Poly1305 elsewhere in `hsip-core`/`hsip-api`); this module's contribution is the state-hiding *protocol shape* (commit, then later reveal-and-verify), not production-grade encryption.
+
+### `SuperpositionError`
+- **type**: enum
+- **file**: `crates/hsip-common/src/quantum_physics/superposition.rs`
+- **purpose**: `AlreadyCollapsed` (also returned, not just as an error path — see `SuperpositionState::collapse`), `InvalidCollapseProof`, `Unauthorized` (declared, unused in this file), `StateNotFound`, `ImmutableState` (declared, unused).
+- **called_by**: `SuperpositionState::collapse`, `SuperpositionManager`
+
+### `MessageState`
+- **type**: enum
+- **file**: `crates/hsip-common/src/quantum_physics/superposition.rs`
+- **purpose**: `Pending | Delivered | Read | Acknowledged | Deleted | Expired` — the hidden value being committed to/revealed. Cast to `u8` (0–5) for the XOR encoding in `SuperpositionState`.
+- **called_by**: `StateCommitment`, `SuperpositionState`
+
+### `StateCommitment`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/superposition.rs`
+- **purpose**: A hiding commitment to a `MessageState`: `commitment = keyed_BLAKE3(secret, state_byte || nonce)`. `verify(state, secret)` recomputes and compares — this is what "collapsing" a superposition means concretely: proving a specific state matches a previously-published commitment without the commitment itself having revealed it.
+- **inputs**: `state: MessageState, secret: &[u8; 32]` (`new`)
+- **outputs**: `Self`; `bool` (`verify`)
+- **calls**: `blake3::Hasher::new_keyed`
+- **called_by**: `SuperpositionState::{new, collapse}`
+
+### `SuperpositionState`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/superposition.rs`
+- **purpose**: Combines an XOR-"encrypted" single-byte state with a `StateCommitment` and a `collapsed` flag. `collapse()` decrypts, matches the byte back to a `MessageState`, verifies it against the stored commitment, and — only once — records `revealed_state`/`collapsed_at`; a second call to `collapse()` (once already collapsed) short-circuits and returns the previously revealed value rather than re-deriving it, so it is idempotent rather than erroring, despite `SuperpositionError::AlreadyCollapsed` existing as a name (it only surfaces if `revealed_state` is somehow `None` on an already-collapsed instance, which the normal API can't produce). Derives `Zeroize`/`ZeroizeOnDrop` on `encrypted_state` implicitly (most fields are `#[zeroize(skip)]`, so only the raw encrypted byte vector is actually zeroized on drop).
+- **inputs**: `entity_id: [u8;32], state: MessageState, encryption_key: &[u8;32], commitment_secret: &[u8;32]` (`new`); same two keys again (`collapse`)
+- **outputs**: `Self`; `Result<MessageState, SuperpositionError>` (`collapse`); `bool` (`is_superposed`); `Option<MessageState>` (`revealed_state`)
+- **calls**: `blake3::Hasher::new_keyed`, `StateCommitment::{new, verify}`
+- **called_by**: `SuperpositionManager`
+- **mutates**: `self.collapsed`, `self.collapsed_at`, `self.revealed_state`
+
+### `SuperpositionManager`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/superposition.rs`
+- **purpose**: Keyed store (`entity_id -> SuperpositionState`) holding one shared `encryption_key`/`commitment_secret` pair for all managed states. `transition_state` replaces an existing entry's state with a brand-new `SuperpositionState` (a fresh nonce/commitment each time) rather than mutating in place — each transition is its own independent commitment, so a `SuperpositionState`'s `collapsed` history doesn't carry across transitions.
+- **inputs**: `encryption_key, commitment_secret: [u8;32]` (`new`)
+- **outputs**: `StateCommitment` (`create_state`/`transition_state`, `Result` for the latter); `Result<MessageState, SuperpositionError>` (`collapse_state`); `Option<bool>` (`is_collapsed`)
+- **calls**: `SuperpositionState::{new, collapse}`
+- **mutates**: `self.states`
+
+### `QuantumSealedEnvelope`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/superposition.rs`
+- **purpose**: Existence-hiding cover traffic: `seal_real` pads a real payload to `max_size` and commits `is_real = true`; `seal_cover` fills `max_size` bytes with random noise and commits `is_real = false`. Both produce a struct of identical shape/size (`envelope_id`, `sealed_payload`, `batch_timestamp` all present either way), so an observer without `secret` cannot distinguish a real message from decoy traffic by inspecting the envelope alone (`test_envelope_indistinguishability` asserts exactly this). `open()` only returns `Some(payload)` if `verify_real` succeeds *and* `is_real` — otherwise `None`, whether because it's cover traffic or the commitment doesn't verify. Note: `open()`'s comment on removing padding is aspirational — the actual implementation returns the full padded buffer verbatim, it does not truncate back to the original payload length.
+- **inputs**: `payload: &[u8], max_size: usize, batch_timestamp: DateTime<Utc>, secret: &[u8;32]` (`seal_real`); `max_size, batch_timestamp, secret` (`seal_cover`, no payload)
+- **outputs**: `Self`; `bool` (`verify_real`); `Option<Vec<u8>>` (`open`)
+- **calls**: `rand::thread_rng().fill_bytes`, `blake3::Hasher::new_keyed`
+
+---
+
+## `crates/hsip-common/src/quantum_physics/uncertainty.rs`
+
+Real property implemented: **a discrete privacy/performance tradeoff configuration** — not cryptography at all, but a lookup table (`PrivacyLevel` 0–4 → `PrivacyFeatures`/`PerformanceImpact`/`EncryptionParams`) describing which mitigations (metadata hiding, cover traffic, multi-hop, padding, KDF iteration count, etc.) are conceptually "on" at each level, plus estimated (hardcoded, not measured) performance costs. "Uncertainty principle" names the tradeoff itself (more privacy protections ⇒ less performance, and vice versa) — nothing here actually measures or enforces performance; the multipliers/delays in `PerformanceImpact::for_level` are fixed illustrative constants, not derived from real benchmarking.
+
+### `PrivacyLevel`
+- **type**: enum (`#[repr(u8)]`, `Minimal=0 | Basic=1 | Balanced=2 (default) | Enhanced=3 | Maximum=4`)
+- **file**: `crates/hsip-common/src/quantum_physics/uncertainty.rs`
+- **purpose**: The discrete slider position everything else in this file is keyed off. `value()`/`from_value()` round-trip to `u8`; `normalized()` maps to 0.0–1.0.
+- **outputs**: `u8`/`Option<Self>`/`&'static str`/`f32`
+- **called_by**: `PrivacyFeatures::for_level`, `PerformanceImpact::for_level`, `EncryptionParams::from_level`, `UncertaintyConfig`, `TradeoffSummary::for_level`, `SliderData`; consumed externally by `hsip-telemetry-guard::ConsentGate`/`PolicyEngine`/`TelemetryGuard` to gate/block traffic at `Maximum`.
+
+### `PrivacyFeatures`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/uncertainty.rs`
+- **purpose**: Boolean feature flags (content encryption always on; metadata hiding, traffic-analysis resistance, cover traffic, delayed delivery, multi-hop, receipt/typing hiding progressively enabled) for a given `PrivacyLevel` — a hardcoded lookup table in `for_level`, not computed from any live measurement.
+- **outputs**: `Self` (`for_level`); `usize` (`enabled_count`)
+- **called_by**: `UncertaintyConfig::new`, `TradeoffSummary::for_level`, `hsip-telemetry-guard::consent_gate.rs` reasoning about privacy level (indirectly, via `PrivacyLevel` itself rather than this struct directly)
+
+### `PerformanceImpact` / `BatteryImpact`
+- **type**: struct / enum
+- **file**: `crates/hsip-common/src/quantum_physics/uncertainty.rs`
+- **purpose**: Illustrative (hardcoded, not measured) latency/bandwidth/CPU multipliers, delivery delay, and a `BatteryImpact` severity enum per privacy level — for UI display, not derived from any real profiling.
+- **outputs**: `Self` (`for_level`); `&'static str` (`BatteryImpact::description`)
+
+### `UncertaintyConfig`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/uncertainty.rs`
+- **purpose**: Bundles a `PrivacyLevel` with its derived `PrivacyFeatures`/`PerformanceImpact` and an optional `custom_overrides: HashMap<String,bool>` map letting a caller flip individual named features away from the level's default (`effective_feature` checks the override map first, falls back to the level default). Also computes concrete operational parameters from the level: `padding_size(message_size)` (0 / 16B / pad-to-256B / pad-to-1KB / pad-to-fixed-4KB depending on level), `cover_traffic_interval_ms()`, `batch_delay_ms()`.
+- **inputs**: `level: PrivacyLevel` (`new`); `level, overrides: HashMap<String,bool>` (`with_overrides`)
+- **outputs**: `Self`; `Option<bool>` (`effective_feature`); `usize` (`padding_size`); `Option<u64>` (`cover_traffic_interval_ms`/`batch_delay_ms`)
+- **calls**: `PrivacyFeatures::for_level`, `PerformanceImpact::for_level`
+
+### `EncryptionParams`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/uncertainty.rs`
+- **purpose**: Per-level suggested encryption parameters — number of layers (1–3), KDF iteration count (10k–500k), whether to authenticate, whether to encrypt the timestamp itself. Advisory only: nothing in this file (or, as far as this sweep found, elsewhere in the workspace) actually consumes `EncryptionParams` to configure a real cipher — it's a design/UI artifact describing intended tradeoffs, not wired into `hsip-core`'s actual ChaCha20-Poly1305 usage.
+- **outputs**: `Self` (`from_level`)
+
+### `TradeoffSummary`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/uncertainty.rs`
+- **purpose**: Human-readable summary for a given level — `privacy_score`/`performance_score` (both linear in `level.value()`, deliberately inverse of each other), plus `protected`/`exposed`/`warnings` string lists built by checking each `PrivacyFeatures` flag.
+- **outputs**: `Self` (`for_level`)
+- **calls**: `PrivacyFeatures::for_level`
+
+### `SliderData`
+- **type**: struct
+- **file**: `crates/hsip-common/src/quantum_physics/uncertainty.rs`
+- **purpose**: UI-facing wrapper: current 0–4 `position`, fixed 5 display labels ("Speed"…"Maximum"), and the current `TradeoffSummary`. `increase`/`decrease` step the position by 1 (clamped to [0,4]) and recompute the summary.
+- **inputs**: `level: PrivacyLevel` (`new`)
+- **outputs**: `Self`
+- **calls**: `TradeoffSummary::for_level`
+- **mutates**: `self.position`, `self.summary`
+
+---
+
+## `crates/hsip-telemetry-guard/src/lib.rs`
+
+Crate root. Declares the always-on modules (`audit`, `consent_gate`, `decisions`, `flow_meta`, `guard`, `known_endpoints`, `policy`, `quarantine`) plus three feature-gated ones (`audit_postgres` behind `postgres`, `ntp_sync` behind `ntp-sync`, `geolocation` behind `geolocation`) and wildcard-re-exports all of them, so the whole crate's public surface is reachable as `hsip_telemetry_guard::<Type>` without submodule paths. The module doc's ASCII architecture diagram is accurate to the actual pipeline in `guard.rs::TelemetryGuard::evaluate`: Flow Meta → (Consent Gate, then Policy Engine) → Decision → Audit Trail.
+
+### `TelemetryGuardError`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/lib.rs`
+- **purpose**: Crate-wide error type. Most variants (`NoConsent`, `ConsentExpired`, `ConsentRevoked`, `InvalidConsent`, `PolicyViolation`, `UnknownCategory`, `PatternError`) are declared but as of this reading are not actually constructed anywhere in the crate's non-test code — the crate's real runtime error paths mostly return `Result<_, TelemetryGuardError>` via `Ok`/direct construction of `InvalidConsent` (`ConsentGate::grant`) and `NoConsent` (`TelemetryGuard::approve_quarantine`/`reject_quarantine`, repurposed to carry a hex entry-id rather than a domain). `IoError` is populated via the `From<std::io::Error>` impl and by `QuarantineStorage::export_json`'s JSON-serialization failure path.
+- **calls**: none
+- **called_by**: every module in this crate via the `Result<T> = std::result::Result<T, TelemetryGuardError>` alias
+
+### `Result<T>` (alias)
+- **type**: type alias
+- **file**: `crates/hsip-telemetry-guard/src/lib.rs`
+- **purpose**: Crate-standard `Result` alias so every function signature in this crate reads `Result<X>` instead of the fully-qualified form.
+- **called_by**: all public functions in this crate that can fail
+
+---
+
+## `crates/hsip-telemetry-guard/src/audit.rs`
+
+Cryptographic logging of telemetry decisions, integrating `hsip_common::quantum_physics::observer_effect::ObservationLog` (see above) as a secondary receipt log alongside this file's own primary hash chain. This is the crate's own audit trail, independent of (and predates any integration with) `hsip-api`'s separate `audit_log.rs`/`audit_entries` table — the two are not connected; this module operates entirely in-memory (bounded `VecDeque`, `MAX_AUDIT_ENTRIES` = 50,000, oldest entries silently evicted once full).
+
+### `AuditEntry`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/audit.rs`
+- **purpose**: One hash-chained record of a `Decision`: `entry_id` (BLAKE3 of timestamp+flow-id-prefix), `entry_hash` (BLAKE3 of entry_id + decision-type byte + destination + `prev_hash`) — note the hash formula does *not* include `timestamp`, `intent`, or `reason` even though they're stored fields, so tampering with those specific fields after the fact would not be caught by `verify()`. `verify()` recomputes and compares `entry_hash`.
+- **inputs**: `decision: &Decision, prev_hash: [u8;32]` (`from_decision`)
+- **outputs**: `Self`; `bool` (`verify`)
+- **calls**: `blake3::Hasher::new`
+- **called_by**: `AuditLog::log`
+
+### `AuditLog`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/audit.rs`
+- **purpose**: In-memory, capacity-bounded (`VecDeque`, FIFO eviction at `max_entries`) hash chain of `AuditEntry` plus an embedded `ObservationLog` (fixed, hardcoded `binding_secret` `[0xA, 0xD1, 0x17, 0, 0, ...]` — **not derived from any real key material**, effectively a constant known to anyone reading this source, so the embedded `ObservationLog`'s receipts are only tamper-evident against someone who doesn't have the source code, not a cryptographic secret in the normal sense). `log()` appends an entry, recording `genesis_hash` on the very first insert, and separately records an `ObservationLog` observation mapping decision type to an `ObservationType` (Allow/AllowOnce→Read, Block→ConsentCheck, Quarantine→Export, else→MetadataAccess). `verify_chain()` walks all entries checking both per-entry `verify()` and chain linkage. `export_json()`/`export_verification_hash()` support external tamper-checking of an exported copy; `export_counter` increments every export specifically so repeated/selective exports are themselves detectable (an auditor can ask "how many times has this log been exported" and compare).
+- **outputs**: `Self` (`new`); `[u8;32]` (`log`, the entry_id); `bool` (`verify_chain`); `Vec<AuditEntry>` (`recent`/`for_destination`/`by_decision`); `String` (`export_json`); `[u8;32]` (`export_verification_hash`)
+- **calls**: `AuditEntry::from_decision`, `ObservationLog::{new, record_observation}`
+- **called_by**: `hsip-telemetry-guard::guard.rs::TelemetryGuard` (holds one `Arc<AuditLog>`)
+- **mutates**: `self.entries`, `self.stats`, `self.genesis_hash`, `self.export_counter`
+
+### `AuditStats`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/audit.rs`
+- **purpose**: Running counters (`total_logged`, `allowed`, `blocked`, `quarantined`) plus chain-verification bookkeeping (`chain_valid`, `last_verified`) and hex-encoded `genesis_hash`/`head_hash`/`export_count` for display.
+- **called_by**: `AuditLog::{log, verify_chain, export_json}`
+
+---
+
+## `crates/hsip-telemetry-guard/src/audit_postgres.rs`
+
+A PostgreSQL-backed alternative to `audit.rs`'s in-memory `AuditLog`, gated entirely behind the `postgres` cargo feature (via `#[cfg(feature = "postgres")]` on every real method; a stub `PostgresAuditLog` with an `init()` that always returns `Err(...)` exists for the non-feature build so the type name is always available). Implements the identical hash-chain formula as `AuditLog::log`/`AuditEntry::from_decision` (same field ordering into the BLAKE3 hasher) but persists rows to a real `hsip_audit_log` table instead of an in-memory `VecDeque`, and enforces write-once at the database layer via a Postgres trigger rather than only in application logic.
+
+### `PgAuditEntry`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/audit_postgres.rs`
+- **purpose**: Row-shape mirror of `AuditEntry` but with `Vec<u8>` fields instead of fixed-size arrays (Postgres `BYTEA` maps naturally to `Vec<u8>` via `tokio_postgres`).
+- **called_by**: `PostgresAuditLog::recent`
+
+### `PostgresAuditLog`
+- **type**: struct (feature-gated; a zero-field stub exists when the feature is off)
+- **file**: `crates/hsip-telemetry-guard/src/audit_postgres.rs`
+- **purpose**: `init()` connects via `tokio_postgres` (spawning the connection driver as a background task, `NoTls` — no TLS to the database), then calls `create_schema` which `CREATE TABLE IF NOT EXISTS hsip_audit_log (...)` plus a `prevent_audit_modification()` trigger function that `RAISE EXCEPTION`s on any `UPDATE`/`DELETE` against the table — the actual write-once enforcement lives in the database itself, not merely in this Rust code, so even a bug or a raw `psql` session can't quietly edit/delete a row. `log()` reads the previous chain hash from the DB (`get_latest_hash`, defaulting to 32 zero bytes if the table is empty) and computes the identical hash formula as the in-memory `AuditEntry` before inserting. `verify_chain()` re-derives and checks every row's hash and linkage server-side.
+- **inputs**: `connection_string: String` (`new`); `decision: &Decision` (`log`)
+- **outputs**: `Self`; `Result<(), String>` (`init`); `Result<Vec<u8>, String>` (`log`, the entry_id); `Result<bool, String>` (`verify_chain`); `Result<Vec<PgAuditEntry>, String>` (`recent`); `Result<usize, String>` (`len`); `Result<String, String>` (`export_json`)
+- **calls**: `tokio_postgres::Config::connect`, `client.execute`/`client.query`/`client.query_opt`
+- **mutates**: the `hsip_audit_log` Postgres table
+
+---
+
+## `crates/hsip-telemetry-guard/src/consent_gate.rs`
+
+The crate's actual consent-enforcement gate. Module doc explicitly claims integration with all four other quantum-physics modules (Decoherence for auto-expiry, No-Cloning for anti-replay, Entanglement for mutual consent, Uncertainty for privacy-level integration) — in the current code, only **Decoherence** (conceptually — expiry is via `expires_at`/`is_valid()`, not literally `hsip_common::decoherence` types) and **Uncertainty** (`use hsip_common::quantum_physics::uncertainty::PrivacyLevel`, actually imported and used to gate `Maximum`-privacy traffic in `evaluate()`) are genuinely wired in; No-Cloning and Entanglement are *not* imported here — this module's own `consumed_tokens: RwLock<HashMap<[u8;32], DateTime<Utc>>>` is a separate, independently-implemented single-use-token mechanism, not a reuse of `hsip_common::quantum_physics::no_cloning::AntiReplayGuard`. Per the CLAUDE.md note this task was asked to confirm: `ConsentGate` currently has **no** `anti_replay` field — its struct fields are exactly `consents`, `signing_key`, `consumed_tokens`, `privacy_level`; the anti-replay/single-use behavior lives entirely in `consumed_tokens`/`consume()` as documented, confirming that field was indeed removed as dead weight rather than functionality being lost.
+
+### `ConsentScope`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/consent_gate.rs`
+- **purpose**: What a `TelemetryConsent` covers: exact `Domain`, wildcard `DomainPattern` (`*.example.com`), `Vendor`, `Intent` (a `TelemetryIntent`), `Application` (substring match on process name), or `Global`. `matches()` implements the actual predicate against a `FlowMeta` + optional vendor string; `scope_id()` gives a deterministic BLAKE3-based key used to index `ConsentGate.consents`.
+- **outputs**: `bool` (`matches`); `[u8;32]` (`scope_id`)
+- **calls**: `blake3::Hasher::new`
+- **called_by**: `TelemetryConsent::new`, `ConsentGate::{grant, revoke, check_consent}`
+
+### `TelemetryConsent`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/consent_gate.rs`
+- **purpose**: A signed, time-bounded consent token. `signature_hex` is a keyed-BLAKE3 MAC (`Hasher::new_keyed(signing_key)` over `consent_id`+`expires_at`) concatenated with the raw `consent_id` bytes, hex-encoded — this is a shared-secret MAC scheme, not an asymmetric signature, so `verify()` requires the same `signing_key` used to create it (typically held only by the `ConsentGate` itself). `standard()` = 90-day, `one_time()` = 24h single-use. `renew()` extends `expires_at` from *now*, not from the old expiry.
+- **inputs**: `scope: ConsentScope, grantor: [u8;32], duration: Duration, single_use: bool, signing_key: &[u8;32]` (`new`)
+- **outputs**: `Self`; `bool` (`is_valid`/`verify`); `Option<Duration>` (`remaining`)
+- **calls**: `blake3::Hasher::{new, new_keyed}`
+- **called_by**: `ConsentGate::{grant, grant_for_scope}`
+- **mutates**: `self.expires_at` (via `renew`)
+
+### `DataMinimization`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/consent_gate.rs`
+- **purpose**: Optional per-consent minimization flags (strip identifiers/IP/device-info, round timestamps, cap payload size) attachable via `TelemetryConsent::with_minimization`. Declared/stored but as of this reading not read or enforced anywhere else in the crate — no code path actually strips/rounds/caps based on these flags; it's a data-carrying struct only.
+- **outputs**: `Self` (`default`/`strict`)
+
+### `ConsentGate`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/consent_gate.rs`
+- **purpose**: The real gate. `grant()` verifies the consent's own MAC before storing it (rejects a forged/tampered consent up front) and indexes by `scope.scope_id()` — note this means granting a *second* consent for the same scope silently overwrites the first (a `HashMap` insert), there's no "already exists" check. `check_consent()` linear-scans all consents for a scope+vendor match, skipping any single-use consent already present in `consumed_tokens`. `consume()` marks a single-use token's ID as consumed (non-single-use tokens are treated as always "successfully consumed" — a no-op true). `evaluate()` is the actual decision entrypoint: at `PrivacyLevel::Maximum`, blocks everything except `CrashReport` intent regardless of consent; otherwise checks consent — single-use consents yield `AllowOnce` (and are immediately consumed) while standard ones yield `Allow` with a TTL equal to remaining consent lifetime; no consent at all yields `Block` (`DecisionReason::NoConsent`).
+- **inputs**: `signing_key: [u8;32]` (`new`)
+- **outputs**: `Result<[u8;32], TelemetryGuardError>` (`grant`/`grant_for_scope`, the consent ID); `bool` (`revoke`/`consume`); `Option<TelemetryConsent>` (`check_consent`); `Decision` (`evaluate`); `Vec<TelemetryConsent>` (`active_consents`); `usize` (`consent_count`/`cleanup_expired`/`cleanup_consumed`)
+- **calls**: `TelemetryConsent::{verify, is_valid, remaining}`, `Decision::{block, allow, allow_once}`
+- **called_by**: `hsip-telemetry-guard::guard.rs::TelemetryGuard` (holds one `Arc<ConsentGate>`, calls `evaluate`/`grant_for_scope`/`revoke`/`cleanup_expired`/`cleanup_consumed`)
+- **mutates**: `self.consents`, `self.consumed_tokens`, `self.privacy_level`
+
+---
+
+## `crates/hsip-telemetry-guard/src/decisions.rs`
+
+Pure data-model file — no I/O, no locking, just the `Decision`/`DecisionType`/`DecisionReason` types the rest of the crate (`consent_gate.rs`, `policy.rs`, `guard.rs`, `audit.rs`) all produce and consume, plus `DecisionStats` for aggregate counting.
+
+### `DecisionType`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/decisions.rs`
+- **purpose**: `Allow | AllowOnce | Block | Quarantine | Pending`. `allows_traffic()` is true only for `Allow`/`AllowOnce` — the single predicate every caller in this crate uses to decide whether to actually let a flow through.
+- **outputs**: `bool` (`allows_traffic`); `&'static str` (`emoji`/`action_text`)
+- **called_by**: `Decision`, `AuditEntry`, `TelemetryGuard::evaluate_with_quarantine`
+
+### `DecisionReason`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/decisions.rs`
+- **purpose**: The "why" behind a decision — carries structured payloads where relevant (`consent_id`, `rule_id`, risk `level`, tracker `vendor`, privacy `level`, match `pattern`). `description()` renders each variant to a human-readable string, used both for display and (via `Decision::display`) for `AuditEntry.reason`.
+- **outputs**: `String` (`description`)
+- **called_by**: `Decision::{allow, allow_once, block, quarantine, pending}`, `ConsentGate::evaluate`, `PolicyEngine` (all evaluate_* methods)
+
+### `Decision`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/decisions.rs`
+- **purpose**: The complete outcome of evaluating one `FlowMeta`: type, primary + contributing reasons, timestamp, optional `ttl` (for caching a decision so it needn't be re-evaluated on every packet), a privacy-safe `DecisionFlowSummary` (never the full `FlowMeta`, so decisions/audit entries derived from them can't leak full flow detail), and a `confidence` score. `is_valid()`/`allows_traffic()` both check `ttl` expiry against `timestamp` — an expired `Allow` decision no longer allows traffic even though `decision_type` itself hasn't changed.
+- **inputs**: `flow: &FlowMeta, reason: DecisionReason, ttl: Option<Duration>` (constructors vary per type)
+- **outputs**: `Self`; `bool` (`is_valid`/`allows_traffic`); `String` (`display`)
+- **calls**: `FlowMeta::{effective_hostname, flow_id}` (via `summarize_flow`)
+- **called_by**: `ConsentGate::evaluate`, `PolicyEngine` (all `evaluate_*` methods), `TelemetryGuard::evaluate`, `AuditLog::log`, `AuditEntry::from_decision`
+
+### `DecisionFlowSummary`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/decisions.rs`
+- **purpose**: Privacy-safe subset of `FlowMeta` embedded in a `Decision` — 8-byte hex flow-ID prefix, destination hostname, intent, risk level. Deliberately excludes source IP, full flow ID, request path, device fingerprint, etc.
+- **called_by**: `Decision::summarize_flow`, `AuditEntry::from_decision`
+
+### `DecisionStats`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/decisions.rs`
+- **purpose**: Aggregate counters by decision type plus breakdowns `by_intent`/`by_vendor` (both keyed by `Debug`-formatted strings — same unbounded-cardinality-label caution `hsip-api`'s CLAUDE.md documents for Prometheus metrics applies conceptually here too, though this is an in-process `HashMap`, not an exposed metrics endpoint). `top_blocked_vendors(limit)` sorts descending by block count.
+- **outputs**: `f32` (`block_rate`); `Vec<(String,u64)>` (`top_blocked_vendors`)
+- **called_by**: `TelemetryGuard::evaluate`/`evaluate_with_quarantine` (records into its own `stats: RwLock<DecisionStats>`)
+- **mutates**: `self.total`/`allowed`/etc., `self.by_intent`, `self.by_vendor` (via `record`)
+
+---
+
+## `crates/hsip-telemetry-guard/src/flow_meta.rs`
+
+Pure data-model file describing an observed network flow, with no cryptography — this is the "who/what" half of the pipeline diagram in `lib.rs`'s module doc, feeding both `ConsentGate` and `PolicyEngine`.
+
+### `FlowProtocol`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/flow_meta.rs`
+- **purpose**: `Http | Https | Http2 | Http3 | WebSocket | WebSocketSecure | Grpc | Tcp | Udp | Dns | Unknown`. `is_encrypted()` flags the TLS-carried variants.
+- **outputs**: `bool` (`is_encrypted`)
+
+### `TelemetryIntent`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/flow_meta.rs`
+- **purpose**: The inferred purpose of a flow (`CrashReport`, `UsageAnalytics`, `Diagnostics`, `Advertising`, `FeatureFlags`, `LicenseCheck`, `Heartbeat`, `BehaviorTracking`, `Performance`, `Security`, `Unknown`) — the central classification every other module in this crate branches on. `is_invasive()` flags `Advertising`/`BehaviorTracking`/`UsageAnalytics` as privacy-invasive by default.
+- **outputs**: `bool` (`is_invasive`); `&'static str` (`description`)
+- **called_by**: `ConsentScope::Intent`, `EndpointEntry`, `PolicyEngine::evaluate_privacy_level`, `DecisionFlowSummary`
+
+### `RiskLevel`
+- **type**: enum (`None=0 | Low=1 | Medium=2 | High=3 | Critical=4`, ordered)
+- **file**: `crates/hsip-telemetry-guard/src/flow_meta.rs`
+- **purpose**: Ordinal risk score used with `>=` comparisons throughout `policy.rs` (e.g. "auto-block anything at or above this level").
+- **called_by**: `PolicyConfig::auto_block_risk_level`, `PolicyEngine::{evaluate_known_endpoint, evaluate_auto_rules}`, `QuarantineStorage::get_by_risk`
+
+### `DeviceFingerprint`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/flow_meta.rs`
+- **purpose**: Best-effort browser/OS/device metadata. `parse_user_agent` does simple substring matching (not a real UA-parser library — the comment says as much) to fill `os`/`browser`. `fingerprint_hash()` BLAKE3-hashes the available UA/language/encoding/timezone fields into a stable identifier — a genuine (if simple) fingerprinting primitive, notable because it's the one piece of this crate that computes something identifying about the *client*, not the destination.
+- **outputs**: `String` (`fingerprint_hash`)
+- **calls**: `blake3::Hasher::new`
+- **mutates**: `self.os`, `self.browser`, `self.user_agent` (via `parse_user_agent`)
+
+### `FlowMeta`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/flow_meta.rs`
+- **purpose**: The full observed-flow record: addresses, hostname/SNI/cert fingerprint, HTTP method/path/content-type/user-agent, process id/name, inferred intent + risk, optional geolocation, device fingerprint. `flow_id` is a BLAKE3 hash of source/dest addr+port plus current nanosecond timestamp (so two otherwise-identical flows still get distinct IDs). `with_intent()` also recomputes `risk_level` from a fixed intent→risk mapping (e.g. `Advertising`/`BehaviorTracking` → `Critical`). `effective_hostname()` prefers SNI, then hostname, then falls back to the raw destination IP string — this is the hostname every consent-scope/policy-rule match in the crate actually compares against. `path_suggests_telemetry()` does substring matching against ~20 known telemetry-ish path fragments (`/collect`, `/beacon`, `/track`, etc.) as a heuristic classifier.
+- **inputs**: `source, destination: SocketAddr` (`new`); plus `hostname, method, path: &str` (`from_http`)
+- **outputs**: `Self`; `bool` (`path_suggests_telemetry`); `String` (`effective_hostname`); `FlowSummary` (`privacy_summary`)
+- **calls**: `blake3::Hasher::new`
+- **called_by**: virtually every other module in this crate (`ConsentGate`, `PolicyEngine`, `EndpointDatabase::lookup`, `Decision::*`, `QuarantineStorage::quarantine`)
+
+### `FlowSummary`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/flow_meta.rs`
+- **purpose**: A privacy-safe, no-PII rendering of a `FlowMeta` (truncated flow-ID prefix, destination domain, protocol, intent, risk, size) suitable for logging — distinct from, but structurally similar to, `decisions.rs::DecisionFlowSummary`.
+- **called_by**: `FlowMeta::privacy_summary`
+
+---
+
+## `crates/hsip-telemetry-guard/src/geolocation.rs`
+
+IP→location lookup via MaxMind's GeoLite2 database, entirely behind the `geolocation` cargo feature. When the feature is off, a stub `GeoLocator` exists whose `new`/`lookup` both always return `Err(...)`, so the type is always nameable but never functional without the feature.
+
+### `GeoLocation`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/geolocation.rs`
+- **purpose**: Plain result struct (country/country_code/city/lat/long/timezone/continent, all `Option`). Manually implements `Default` (all `None`) rather than deriving it — functionally identical to a derive, no special logic.
+- **called_by**: `FlowMeta.geolocation` field (when the `geolocation` feature is on), `GeoLocator::lookup`
+
+### `GeoLocator`
+- **type**: struct (feature-gated; stub otherwise)
+- **file**: `crates/hsip-telemetry-guard/src/geolocation.rs`
+- **purpose**: Wraps a `maxminddb::Reader` opened from a `.mmdb` file path. `lookup()` decodes a `geoip2::City` record and maps its fields into `GeoLocation`. `lookup_batch()` is a simple per-IP map, silently discarding per-IP lookup errors (`.ok()`) rather than surfacing them.
+- **inputs**: `db_path: PathBuf` (`new`); `ip: IpAddr` (`lookup`)
+- **outputs**: `Result<Self, String>`; `Result<GeoLocation, String>` (`lookup`); `Vec<(IpAddr, Option<GeoLocation>)>` (`lookup_batch`)
+- **calls**: `maxminddb::Reader::open_readfile`, `reader.lookup`
+
+### `download` (submodule)
+- **type**: module (functions `instructions`, `default_path`, `database_exists`)
+- **file**: `crates/hsip-telemetry-guard/src/geolocation.rs`
+- **purpose**: Operator-facing helper text and platform-aware default `.mmdb` path resolution (checks `HSIP_GEOIP_DB` env var first, falls back to a per-OS default path) plus an existence check. Pure convenience/diagnostics, no network calls (does not itself download anything despite the module name — it only prints instructions for a human to do so manually via MaxMind's site).
+- **outputs**: `&'static str` (`instructions`); `String` (`default_path`); `bool` (`database_exists`)
+
+---
+
+## `crates/hsip-telemetry-guard/src/guard.rs`
+
+The crate's top-level façade — combines `EndpointDatabase`, `PolicyEngine`, `ConsentGate`, `QuarantineStorage`, and `AuditLog` into one `TelemetryGuard` object implementing the full pipeline described in `lib.rs`'s module doc.
+
+### `TelemetryGuard`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/guard.rs`
+- **purpose**: `new()`/`with_config()` construct all five sub-components, using **hardcoded, non-secret placeholder keys** for both the consent-gate signing key and the quarantine encryption key (e.g. `signing_key[0]=0x53 /* 'S' */, [1]=0x49 /* 'I' */, ...` spelling "SIGN"/"ENC" in ASCII, the remaining 28+ bytes left as zero) — this is clearly a development/demo default, not a value safe for any real deployment; `TelemetryGuardBuilder` is the sanctioned way to supply real keys. `evaluate()` is the actual decision pipeline: if disabled, unconditionally allows; otherwise looks up the endpoint database for vendor context, checks the consent gate first (an explicit consent that allows traffic short-circuits straight to logging+return without ever reaching the policy engine), and only falls through to `PolicyEngine::evaluate` if consent didn't allow it — meaning a consent-based `Allow` decision never has policy-engine reasoning layered under it, while a policy-based decision has no possibility of consent-based override once it's reached (block-first design: consent can approve early, but if it doesn't, policy has the final say). `evaluate_with_quarantine()` additionally captures the payload into `QuarantineStorage` when the decision type is `Quarantine`. `approve_quarantine`/`reject_quarantine` are the human-review loop: approving grants a domain-scoped consent and marks the entry `Approved`; rejecting adds a permanent block `PolicyRule` and marks it `Rejected`.
+- **inputs**: `flow: &FlowMeta` (`evaluate`); `flow, payload: Option<&[u8]>` (`evaluate_with_quarantine`)
+- **outputs**: `Self`; `Decision` (`evaluate`/`evaluate_with_quarantine`); `Result<[u8;32], TelemetryGuardError>` (`grant_consent`/`grant_custom_consent`); `Result<(), TelemetryGuardError>` (`approve_quarantine`/`reject_quarantine`); `DecisionStats`/`QuarantineStats` (stats getters); `CleanupResult` (`cleanup`); `String` (`export_all`, raw JSON)
+- **calls**: `EndpointDatabase::lookup`, `ConsentGate::evaluate`, `PolicyEngine::evaluate`, `AuditLog::log`, `QuarantineStorage::{quarantine, get, set_status}`
+- **called_by**: not yet integrated into any other crate in this workspace (per CLAUDE.md, `hsip-telemetry-guard` is a supporting, not-actively-integrated crate) — consumed only by this crate's own tests.
+- **mutates**: `self.stats` (via inner `RwLock`), plus whatever the delegated sub-component mutates
+
+### `CleanupResult`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/guard.rs`
+- **purpose**: Counts of expired consents and consumed-token entries removed by `TelemetryGuard::cleanup()` — a thin aggregation of `ConsentGate::cleanup_expired`/`cleanup_consumed` (the latter hardcoded to a 7-day retention window for consumed single-use tokens).
+- **called_by**: `TelemetryGuard::cleanup`
+
+### `TelemetryGuardBuilder`
+- **type**: struct (builder pattern)
+- **file**: `crates/hsip-telemetry-guard/src/guard.rs`
+- **purpose**: The proper way to construct a `TelemetryGuard` with real keys/config/custom endpoints/initial rules instead of `new()`'s placeholder keys — still falls back to the same weak placeholder bytes (`0x53`/`0x45`, this time with only the *first* byte set rather than "SIGN"/"ENC" spelled out) if the caller never calls `.signing_key()`/`.encryption_key()`, so it does not itself force a caller to supply real key material.
+- **outputs**: `Self` (`new`); `TelemetryGuard` (`build`)
+- **calls**: `EndpointDatabase::{new, add_custom_rule}`, `PolicyEngine::{with_config, add_rule}`
+
+---
+
+## `crates/hsip-telemetry-guard/src/known_endpoints.rs`
+
+A curated, hardcoded database (no external network calls, no dynamic updates) of ~40 known telemetry/tracking/advertising domain patterns across Google, Meta, Microsoft, Apple, Amazon, third-party analytics (Mixpanel, Amplitude, Segment, Hotjar, FullStory, Heap, New Relic), crash reporters (Sentry, Bugsnag, Raygun), ad networks (Criteo, Taboola, Outbrain, The Trade Desk, Xandr, Rubicon, PubMatic), A/B testing (Optimizely, LaunchDarkly, Split), spyware-grade trackers (Comscore, Quantcast), attribution (AppsFlyer, Adjust, Branch), and social widgets (Twitter/X, LinkedIn, TikTok, Snapchat). Each entry pre-classifies intent, risk level, vendor, and whether it's `safe_to_block` (crash reporters and some diagnostics are marked unsafe to block by default, since blocking them may break legitimate functionality).
+
+### `EndpointEntry`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/known_endpoints.rs`
+- **purpose**: One database row — domain pattern (wildcard-capable), optional path patterns (declared, stored, but **not actually checked** by `EndpointDatabase::lookup`, which only ever matches on hostname — path narrowing is not enforced despite being modeled), category, intent, risk, vendor, description, `safe_to_block`.
+- **called_by**: `EndpointDatabase`, `PolicyEngine::evaluate_known_endpoint`, `TelemetryGuard`
+
+### `EndpointCategory`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/known_endpoints.rs`
+- **purpose**: Vendor/category classification (`Google | Meta | Microsoft | Apple | Amazon | AdNetwork | Analytics | CrashReporting | ABTesting | CDN | Social | Spyware | Enterprise | Gaming | IoT | Unknown`). `should_block_by_default()` flags `AdNetwork`/`Spyware`/`Social` — note this method is not actually called from `PolicyEngine`'s auto-block logic, which instead checks `intent`/`risk_level` directly; this predicate appears currently unused outside its own definition.
+- **outputs**: `bool` (`should_block_by_default`)
+
+### `EndpointDatabase`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/known_endpoints.rs`
+- **purpose**: Holds built-in entries (indexed by base domain, extracted by stripping a leading `*.`/`www.`) plus a separate `custom_rules` list checked *first* on every lookup (so a caller's own rule always overrides a built-in one for the same hostname). `lookup()` tries an exact hostname match, then falls through to a linear suffix-match scan over all indexed base domains — `O(n)` in the number of distinct base domains, not indexed by suffix trie, but the list is small (~40 entries) so this is a non-issue at current scale.
+- **outputs**: `Self` (`new`); `Option<EndpointEntry>` (`lookup`); `Vec<EndpointEntry>` (`get_by_category`); `usize` (`len`)
+- **calls**: none external (builds `builtin_entries()` from a hardcoded `Vec` literal)
+- **called_by**: `PolicyEngine::evaluate` (via `endpoints.lookup`), `TelemetryGuard::{evaluate, lookup_endpoint, endpoints_by_category, add_endpoint}`
+- **mutates**: `self.entries` (at construction only, via `load_builtin_entries`), `self.custom_rules` (via `add_custom_rule`)
+
+---
+
+## `crates/hsip-telemetry-guard/src/ntp_sync.rs`
+
+NTP-based clock-offset tracking, gated behind the `ntp-sync` feature. **The actual offset computation is a stub** — `sync_internal`'s comments say plainly that the real millisecond offset extraction from the `rsntp` crate's response is not yet implemented (`let offset_ms = 0i64; // Placeholder - actual sync occurs`), so even with the feature enabled and a successful NTP round-trip, `TimeOffset.offset_ms` is always hardcoded to zero — a real NTP query does happen (`client.synchronize`), but its result is discarded before ever being used, meaning `now()`'s "correction" is currently always a no-op and `is_synced()` will always report true (0 ≤ max_offset_ms) once any sync attempt has completed, regardless of the real clock's actual drift.
+
+### `TimeOffset`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/ntp_sync.rs`
+- **purpose**: Measured (nominally) offset in milliseconds plus when it was measured. As noted above, `offset_ms` is currently always 0 in practice.
+- **called_by**: `NtpSync`
+
+### `NtpSync`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/ntp_sync.rs`
+- **purpose**: `init()` performs an initial sync then (feature-gated) spawns a background task re-syncing every 5 minutes. `now()` applies the tracked offset (currently always zero, per above) to `Utc::now()`, falling back to plain system time if never synced. `is_synced()` checks the tracked offset is within `max_offset_ms` (hardcoded 2000ms / ±2s, described as a "DFF requirement" in comments). Non-feature build's `init()` always returns `Err("NTP sync not enabled...")`.
+- **inputs**: `server: String` (`new`)
+- **outputs**: `Self`; `Result<(), String>` (`init`); `DateTime<Utc>` (`now`); `Option<TimeOffset>` (`get_offset`); `bool` (`is_synced`); `String` (`status`)
+- **calls**: `rsntp::SntpClient::synchronize` (feature-gated)
+- **called_by**: not consumed elsewhere in this crate's non-test code as of this reading — a standalone utility awaiting integration.
+- **mutates**: `self.offset`
+
+---
+
+## `crates/hsip-telemetry-guard/src/policy.rs`
+
+The rule-based decision engine — the "Policy Engine" box in `lib.rs`'s architecture diagram. Confirmed, per the CLAUDE.md note this task was asked to verify: `PolicyEngine`'s struct fields are exactly `config`, `rules`, `endpoints` — there is **no** `regex_cache` field; every `Regex::new(pattern)` call in `RuleCondition::matches`/`match_wildcard_pattern` recompiles the pattern from scratch on every single evaluation rather than caching a compiled `Regex`, which is a real (if likely minor at current rule-list sizes) performance cost, not just a naming artifact — consistent with a cache field having existed and been removed as genuinely unused (nothing in the current code reads back a cached compiled pattern).
+
+### `PolicyRule`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/policy.rs`
+- **purpose**: A user-configurable rule: id/name/description, `enabled` flag, `priority` (rules are kept sorted descending by priority — see `PolicyEngine::add_rule`), a list of `RuleCondition`s that must **all** match (implicit AND across the top-level `conditions` vec), and the `RuleAction` to take.
+- **called_by**: `PolicyEngine::{add_rule, evaluate_custom_rules}`
+
+### `RuleCondition`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/policy.rs`
+- **purpose**: A small predicate DSL over a flow+optional endpoint: domain (pattern/suffix/exact), path (regex/prefix), intent, min risk level, vendor, category, min request size, protocol, process name, hostname regex, plus logical combinators `Not`/`And`/`Or` for nesting. `matches()` is the evaluator; both `PathRegex` and `HostnameRegex` silently treat an invalid regex pattern as a non-match (`if let Ok(re) = Regex::new(...)` — no error surfaced) rather than rejecting the rule at add-time.
+- **outputs**: `bool` (`matches`)
+- **calls**: `regex::Regex::new`/`is_match`
+- **called_by**: `PolicyEngine::evaluate_custom_rules`
+
+### `RuleAction`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/policy.rs`
+- **purpose**: `Allow | AllowOnce | Block | Quarantine | Prompt | Continue`. `Continue` is special-cased in `evaluate_custom_rules`'s match arm as a bare `continue` (skip to the next rule) rather than producing a `Decision` — meaning a rule matching with action `Continue` effectively behaves as if it hadn't matched, deferring to lower-priority rules.
+- **called_by**: `PolicyRule`, `PolicyConfig::default_action`
+
+### `PolicyConfig`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/policy.rs`
+- **purpose**: Engine-wide tunables: default action when nothing else matches, whether to block-by-default, auto-block trackers/ads, the risk-level threshold for auto-blocking, whether to allow crash reports, a `privacy_level` (0–4, mirrors `hsip_common`'s `PrivacyLevel` as a raw `u8` rather than the enum itself — kept in sync manually by `TelemetryGuard::set_privacy_level`, which writes `level.value()` into this field), and whether to quarantine unknown telemetry. `strict()`/`permissive()` are two preset configurations at opposite ends of the tradeoff.
+- **outputs**: `Self` (`default`/`strict`/`permissive`)
+
+### `PolicyEngine`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/policy.rs`
+- **purpose**: `evaluate()` runs a fixed 5-stage waterfall, returning on the first stage that produces a decision: (1) custom user rules, sorted by priority, first full-condition-match wins; (2) known-endpoint auto-rules (`evaluate_known_endpoint` — auto-block ads/behavior-tracking, allow crash reports, block by risk threshold, in that checked order, so an endpoint that is *both* advertising *and* otherwise-high-risk is blocked for the advertising reason first); (3) generic auto-rules on the flow itself (risk threshold again, plus telemetry-looking paths); (4) privacy-level rules (`evaluate_privacy_level` — a level-dependent ladder blocking analytics at 4+, diagnostics at 3+, behavior tracking at 2+, and advertising unconditionally at any level); (5) the configured default action. Before any of this, `evaluate()` enriches a *cloned* copy of the input flow with the looked-up endpoint's intent/risk (the caller's original `FlowMeta` is never mutated).
+- **inputs**: `endpoints: Arc<EndpointDatabase>` (`new`); `flow: &FlowMeta` (`evaluate`)
+- **outputs**: `Self`; `Decision` (`evaluate`); `Vec<PolicyRule>` (`rules`)
+- **calls**: `EndpointDatabase::lookup`, `RuleCondition::matches`, `Decision::{allow, allow_once, block, quarantine, pending}`
+- **called_by**: `TelemetryGuard::evaluate` (fallback path when consent doesn't allow), `TelemetryGuard::{add_rule, remove_rule, rules, set_policy_config, policy_config}`
+- **mutates**: `self.config` (via `set_config`), `self.rules` (via `add_rule`/`remove_rule`/`clear_rules`, keeping the list sorted by priority)
+
+---
+
+## `crates/hsip-telemetry-guard/src/quarantine.rs`
+
+Capture-without-sending storage for telemetry payloads flagged for review — the "🧊 QUARANTINE" outcome in `lib.rs`'s pipeline diagram. Explicitly designed for security-analysis/OWASP-testing use per the file's module doc, not as a production data-retention feature.
+
+### `QuarantinedPayload`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/quarantine.rs`
+- **purpose**: One captured entry: entry ID, a privacy-safe `QuarantineFlowMeta`, capture timestamp, a BLAKE3 hash of the *full* payload (for later integrity verification even though only a sample is stored), payload size, an `encrypted_sample` (see `QuarantineStorage::encrypt_sample` — XOR keystream, not a real cipher), why it was quarantined, review status, optional analysis results, and free-form tags.
+- **called_by**: `QuarantineStorage`
+
+### `QuarantineFlowMeta` (+ `From<&FlowMeta>`)
+- **type**: struct + trait impl
+- **file**: `crates/hsip-telemetry-guard/src/quarantine.rs`
+- **purpose**: A reduced, privacy-safe projection of `FlowMeta` (destination/port/protocol/method/path/intent/risk/process — no source IP, no cert fingerprint, no device fingerprint) stored alongside a quarantined payload instead of the full flow.
+- **calls**: `FlowMeta::{effective_hostname, destination_port}`
+- **called_by**: `QuarantineStorage::quarantine`
+
+### `QuarantineReason`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/quarantine.rs`
+- **purpose**: Why a payload was captured (`UserRequest | UnknownEndpoint | SuspiciousPattern | HighRisk | LargePayload | PolicyRule | NewEndpoint | Anomaly`) — several variants (`UnknownEndpoint`, `HighRisk`, `LargePayload`, `NewEndpoint`, `Anomaly`) are declared but, as of this reading, not actually constructed anywhere in the crate's non-test code; only `PolicyRule` (from `TelemetryGuard::evaluate_with_quarantine`) is currently produced by real code paths.
+- **called_by**: `QuarantinedPayload`, `QuarantineStorage::quarantine`
+
+### `ReviewStatus`
+- **type**: enum
+- **file**: `crates/hsip-telemetry-guard/src/quarantine.rs`
+- **purpose**: `Pending | Approved | Rejected | Flagged | Archived` — the human-review lifecycle state. `Flagged`/`Archived` are declared but not set by any code in this crate outside tests as of this reading (only `Pending` at creation, and `Approved`/`Rejected` via `TelemetryGuard::approve_quarantine`/`reject_quarantine`, are currently reachable).
+- **called_by**: `QuarantinedPayload`, `QuarantineStorage::{set_status, get_by_status, get_pending}`
+
+### `PayloadAnalysis` / `DetectedDataType` / `PrivacyConcern`
+- **type**: struct / enum / struct
+- **file**: `crates/hsip-telemetry-guard/src/quarantine.rs`
+- **purpose**: A rich schema for recording what a human (or, eventually, an automated analyzer) found upon inspecting a quarantined payload — detected data types (device IDs, location, PII categories, biometric/financial/health data, etc.) and privacy concerns with severity/remediation. Purely a data model: no code in this file (or elsewhere in the crate) actually performs the detection — `QuarantineStorage::set_analysis` only stores an already-computed `PayloadAnalysis` supplied by the caller.
+- **called_by**: `QuarantinedPayload`, `QuarantineStorage::set_analysis`
+
+### `QuarantineStats`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/quarantine.rs`
+- **purpose**: Aggregate counts by status/intent/risk (again `Debug`-formatted-string-keyed `HashMap`s), total bytes, oldest/newest timestamps — recomputed from scratch on every mutating operation via `update_stats()` (full `O(n)` rescan, not incrementally maintained).
+- **called_by**: `QuarantineStorage::{quarantine, delete, clear, stats}`
+
+### `QuarantineStorage`
+- **type**: struct
+- **file**: `crates/hsip-telemetry-guard/src/quarantine.rs`
+- **purpose**: FIFO-capacity-bounded (`VecDeque` + a `HashMap<[u8;32], usize>` position index) store. `quarantine()` computes a full-payload BLAKE3 hash for integrity but only samples/encrypts up to `MAX_SAMPLE_SIZE` (4096) bytes for storage — larger payloads are truncated before encryption, so `decrypt_sample` can never recover more than the first 4KB of an oversized original payload even though `payload_hash` covers the whole thing. `encrypt_sample`/`decrypt_sample` use a symmetric keyed-BLAKE3-keystream XOR (`key_stream = keyed_BLAKE3(encryption_key, nonce)`, then XOR each byte cyclically against the 32-byte digest) — the same "not a real stream cipher, just keystream reuse via a hash" pattern as `superposition.rs`, and notably the *nonce* used to derive the keystream is the entry's own `entry_id` (public, stored alongside the sample), so the "encryption" provides no confidentiality against anyone who can see both the stored entry and its ID — which is everyone with read access to the struct, since both fields live in the same record. `delete()` fully rebuilds the position index after removal (an `O(n)` operation) since removing from the middle of the `VecDeque` shifts every later position.
+- **inputs**: `encryption_key: [u8;32]` (`new`/`with_capacity`); `flow: &FlowMeta, payload: &[u8], reason: QuarantineReason` (`quarantine`)
+- **outputs**: `Result<[u8;32], TelemetryGuardError>` (`quarantine`, the entry ID); `Option<Vec<u8>>` (`decrypt_sample`); `Option<QuarantinedPayload>` (`get`); `bool` (`set_status`/`set_analysis`/`add_tag`/`delete`); `Vec<QuarantinedPayload>` (`get_by_status`/`get_pending`/`get_by_destination`/`get_by_risk`); `QuarantineStats` (`stats`); `Result<String>` (`export_json`)
+- **calls**: `blake3::{Hasher, hash}`
+- **called_by**: `TelemetryGuard::{evaluate_with_quarantine, approve_quarantine, reject_quarantine, pending_quarantine, quarantine_stats}`
+- **mutates**: `self.entries`, `self.index`, `self.stats`
+
+---
+## `crates/hsip-gateway/src/main.rs`
+
+Entry point for the `hsip-gateway` binary — a standalone MITM-style HTTP/HTTPS forward proxy (distinct from `hsip-api`'s `routes/proxy.rs` traffic monitor). Builds a `proxy::Config` from env vars, writes OS-specific auto-config helper files (a PAC file always, Windows registry enable/disable scripts on Windows), then runs the blocking proxy loop forever.
+
+### `main` (gateway)
+- **type**: function
+- **file**: `crates/hsip-gateway/src/main.rs`
+- **purpose**: Binary entry point. Builds the gateway config from environment variables, prints it, best-effort generates PAC/registry config files (a failure here is only a warning, not fatal), then hands off to `proxy::run_proxy` which blocks forever accepting connections.
+- **inputs**: none
+- **outputs**: `Result<()>` (only returns on `run_proxy`'s own I/O errors, e.g. failing to bind the listener)
+- **calls**: `build_gateway_configuration`, `generate_proxy_config_files`, `proxy::run_proxy`
+- **called_by**: Rust runtime (binary entry point)
+- **mutates**: stdout/stderr, filesystem (via `generate_proxy_config_files`)
+
+### `generate_proxy_config_files`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/main.rs`
+- **purpose**: Writes a browser-consumable PAC (Proxy Auto-Config) file that routes all non-local traffic through the gateway's `listen_addr` and, on Windows only, `.bat` scripts that flip the OS-level HTTP proxy registry keys on/off — a convenience so a user doesn't have to hand-edit browser/OS proxy settings to try the gateway.
+- **inputs**: `listen_addr: &str`
+- **outputs**: `Result<()>`
+- **calls**: `get_config_directory`, `fs::create_dir_all`, `fs::write`
+- **called_by**: `main`
+- **mutates**: filesystem — creates `<config_dir>/proxy.pac` and, on Windows, `enable-proxy.bat`/`disable-proxy.bat`
+
+### `get_config_directory`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/main.rs`
+- **purpose**: Resolves the platform-specific directory for gateway config output: `%LOCALAPPDATA%\HSIP\gateway` on Windows, `~/.config/hsip/gateway` on Unix-likes. Does not create the directory itself — the caller does that.
+- **inputs**: none
+- **outputs**: `Result<PathBuf>`
+- **calls**: `std::env::var`
+- **called_by**: `generate_proxy_config_files`
+- **mutates**: nothing
+
+### `build_gateway_configuration`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/main.rs`
+- **purpose**: Assembles the `proxy::Config` the gateway will run with, by reading listen address and connect-timeout from environment variables.
+- **inputs**: none
+- **outputs**: `Config`
+- **calls**: `read_listen_address`, `read_timeout_configuration`
+- **called_by**: `main`
+- **mutates**: nothing
+
+### `read_listen_address`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/main.rs`
+- **purpose**: Reads `HSIP_GATEWAY_LISTEN`, defaulting to `127.0.0.1:8080` if unset.
+- **inputs**: none
+- **outputs**: `String`
+- **calls**: `std::env::var`
+- **called_by**: `build_gateway_configuration`
+- **mutates**: nothing
+
+### `read_timeout_configuration`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/main.rs`
+- **purpose**: Reads `HSIP_GATEWAY_TIMEOUT_MS` (parsed as `u64`), defaulting to `5000` if unset or unparseable.
+- **inputs**: none
+- **outputs**: `u64`
+- **calls**: `std::env::var`
+- **called_by**: `build_gateway_configuration`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-gateway/src/classify.rs`
+
+Phase-2.0 (MVP, per the module doc comment) traffic classifier: loads a plaintext tracker-domain blocklist once from `~/.hsip/tracker_blocklist.txt` and decides allow/block for each request the proxy sees. Everything not on the list is allowed — no phishing/malware/ASN heuristics yet.
+
+### `ProtoKind`
+- **type**: enum
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Distinguishes HTTP vs HTTPS for a classified request, for future protocol-specific handling (not yet used to vary the actual decision logic).
+- **called_by**: `RequestInfo`
+
+### `RequestInfo`
+- **type**: struct
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Minimal view of an inbound request handed to the classifier: host, port, path, protocol kind.
+- **called_by**: `classify` callers (intended integration point for `proxy.rs`, though `proxy.rs`'s own `is_blocked_host` currently duplicates the blocking logic independently rather than calling into this module)
+
+### `DecisionKind`
+- **type**: enum
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: `Allow` or `Block` — the coarse outcome of `classify`.
+- **called_by**: `Decision`
+
+### `Decision`
+- **type**: struct
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: A classification result: `kind` plus an optional human-readable `reason` (only set for blocks).
+- **called_by**: `classify`
+
+### `Decision::allow`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Constructs an allow decision with no reason.
+- **outputs**: `Self`
+- **called_by**: `classify`
+- **mutates**: nothing
+
+### `Decision::block`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Constructs a block decision carrying the given reason string.
+- **inputs**: `reason: impl Into<String>`
+- **outputs**: `Self`
+- **called_by**: `classify`
+- **mutates**: nothing
+
+### `classify`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Public entry point: checks the request's host against the loaded tracker blocklist. On a match it records the block in gateway metrics (`metrics::record_tracker_block`) as a side effect of classifying, not just returning a decision — so simply calling `classify` on a tracker host updates the persisted metrics file even if the caller ignores the returned `Decision`.
+- **inputs**: `req: &RequestInfo`
+- **outputs**: `Decision`
+- **calls**: `is_tracker_domain`, `metrics::record_tracker_block`, `Decision::block`, `Decision::allow`
+- **called_by**: intended gateway request path (not currently wired into `proxy.rs`, which has its own separate `is_blocked_host` denylist)
+- **mutates**: gateway metrics (via `record_tracker_block`)
+
+### `TRACKERS`
+- **type**: variable (static, `OnceLock<HashSet<String>>`)
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Process-lifetime cache of the lowercased tracker blocklist, loaded once on first use.
+- **called_by**: `load_trackers`
+- **mutates**: nothing after first initialization
+
+### `tracker_blocklist_path`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Resolves the blocklist file path: `~/.hsip/tracker_blocklist.txt` (falls back to `.` if home dir can't be resolved).
+- **outputs**: `PathBuf`
+- **called_by**: `load_trackers`
+- **mutates**: nothing
+
+### `load_trackers`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Reads and parses the blocklist file (one domain per line, `#`-prefixed lines and blanks skipped, lowercased), caching the result in `TRACKERS`. A missing file is treated as an empty list (`unwrap_or_default`), not an error — the gateway still runs, just blocking nothing.
+- **outputs**: `&'static HashSet<String>`
+- **calls**: `tracker_blocklist_path`, `fs::read_to_string`, `TRACKERS.get_or_init`
+- **called_by**: `is_tracker_domain`
+- **mutates**: `TRACKERS` (first call only), stderr (logs count loaded)
+
+### `is_tracker_domain`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/classify.rs`
+- **purpose**: Checks whether `host` exactly matches or is a subdomain of any entry in the loaded blocklist (case-insensitive).
+- **inputs**: `host: &str`
+- **outputs**: `bool`
+- **calls**: `load_trackers`
+- **called_by**: `classify`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-gateway/src/metrics.rs`
+
+In-process + on-disk counter of trackers the gateway has blocked, read back by `hsip-cli`'s daemon (`daemon/mod.rs::read_blocked_trackers`) and the tray app to color their status indicator.
+
+### `GatewayMetrics`
+- **type**: struct
+- **file**: `crates/hsip-gateway/src/metrics.rs`
+- **purpose**: Serializable snapshot of gateway blocking activity: running `blocked_trackers` count, the last blocked host/reason, and a last-updated millisecond timestamp. Persisted verbatim as JSON to `~/.hsip/gateway_metrics.json`.
+- **called_by**: `record_tracker_block`, `daemon/mod.rs::GatewayMetricsFile` (a separate, read-only mirror struct in the CLI crate that only deserializes `blocked_trackers`)
+
+### `METRICS`
+- **type**: variable (static, `OnceLock<Mutex<GatewayMetrics>>`)
+- **file**: `crates/hsip-gateway/src/metrics.rs`
+- **purpose**: Process-wide in-memory metrics state, lazily initialized to `GatewayMetrics::default()`.
+- **called_by**: `global`
+- **mutates**: itself on first init
+
+### `global`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/metrics.rs`
+- **purpose**: Accessor for the shared `METRICS` mutex, initializing it on first call.
+- **outputs**: `&'static Mutex<GatewayMetrics>`
+- **calls**: `METRICS.get_or_init`
+- **called_by**: `record_tracker_block`
+- **mutates**: nothing (beyond first-call init)
+
+### `metrics_path`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/metrics.rs`
+- **purpose**: Resolves the on-disk metrics file path: `~/.hsip/gateway_metrics.json`.
+- **outputs**: `PathBuf`
+- **called_by**: `record_tracker_block`
+- **mutates**: nothing
+
+### `now_ms`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/metrics.rs`
+- **purpose**: Current Unix time in milliseconds, clamped to 0 on a clock error rather than panicking.
+- **outputs**: `u64`
+- **called_by**: `record_tracker_block`
+- **mutates**: nothing
+
+### `record_tracker_block`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/metrics.rs`
+- **purpose**: Increments the in-memory blocked-tracker counter, records the host/reason, and best-effort persists the whole struct to `gateway_metrics.json` — write failures are logged to stderr and swallowed, never propagated, since a metrics-write failure shouldn't affect the gateway's actual blocking behavior. Handles a poisoned mutex by recovering the inner guard rather than panicking (`poisoned.into_inner()`).
+- **inputs**: `host: &str`, `reason: &str`
+- **outputs**: none
+- **calls**: `global`, `metrics_path`, `serde_json::to_string`, `fs::write`
+- **called_by**: `classify::classify` (on a tracker-domain block)
+- **mutates**: `METRICS` (in-memory), `~/.hsip/gateway_metrics.json` (filesystem)
+
+---
+
+## `crates/hsip-gateway/src/proxy.rs`
+
+The actual blocking forward proxy implementation: a plain `TcpListener` accept loop, one thread per connection, handling both `CONNECT` (HTTPS tunneling) and plain HTTP forwarding. Has its own small, independent host denylist (`is_blocked_host`) rather than calling into `classify.rs`'s tracker-blocklist-file-backed classifier.
+
+### `Config` (gateway proxy)
+- **type**: struct
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Runtime configuration for the proxy: the listen address and the upstream connect timeout in milliseconds.
+- **called_by**: `main.rs::build_gateway_configuration`, `run_proxy`, `handle_client`, `handle_connect`, `handle_plain_http`
+
+### `Config::default` (gateway proxy)
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Default config: `127.0.0.1:8080`, 5000ms connect timeout.
+- **outputs**: `Self`
+- **mutates**: nothing
+
+### `run_proxy`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Binds the listener and loops forever accepting connections, spawning a new OS thread per client to run `handle_client`. A per-client error is logged to stderr, not propagated — one bad client can't take down the whole proxy.
+- **inputs**: `cfg: Config`
+- **outputs**: `Result<()>` (only errors on the initial `bind`)
+- **calls**: `TcpListener::bind`, `listener.accept`, `std::thread::spawn`, `handle_client`
+- **called_by**: `main::main`
+- **mutates**: spawns OS threads; binds a TCP listener
+
+### `is_blocked_host`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Hardcoded, in-source denylist (`neverssl.com`, `doubleclick.net`, `google-analytics.com`, `ads.google.com`, `tracking.test`) with exact-match or subdomain matching — a small "starter list so you can see blocks" per its own comment, independent of and not synced with `classify.rs`'s file-backed tracker list.
+- **inputs**: `host: &str`
+- **outputs**: `bool`
+- **called_by**: `handle_client`
+- **mutates**: nothing
+
+### `send_blocked_response`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Writes a minimal HTTP 403 HTML response back to the client explaining the destination is blocked by the gateway.
+- **inputs**: `client: &mut TcpStream`, `host: &str`
+- **outputs**: `Result<()>`
+- **calls**: `client.write_all`, `client.flush`
+- **called_by**: `handle_client`
+- **mutates**: writes to the client TCP stream
+
+### `extract_host_for_block`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Extracts the target hostname to check against the denylist: for `CONNECT` requests, splits `host:port` from the target; for plain HTTP, reads the `Host:` header from the raw request text.
+- **inputs**: `method: &str`, `target: &str`, `req_str: &str`
+- **outputs**: `Option<String>`
+- **called_by**: `handle_client`
+- **mutates**: nothing
+
+### `handle_client`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Per-connection driver: sets 2s read/write timeouts, reads the request until the header terminator (`\r\n\r\n`) or a 64KB cap (guards against unbounded memory growth from a client that never sends the terminator), parses the request line, checks the blocklist, then routes to `handle_connect` (HTTPS tunnel) or `handle_plain_http` (plain forwarding) based on the method.
+- **inputs**: `client: TcpStream`, `addr: SocketAddr`, `cfg: &Config`
+- **outputs**: `Result<()>`
+- **calls**: `client.read`, `parse_request_line`, `extract_host_for_block`, `is_blocked_host`, `send_blocked_response`, `handle_connect`, `handle_plain_http`
+- **called_by**: `run_proxy` (spawned per accepted connection)
+- **mutates**: the client TCP stream
+
+### `parse_request_line`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Splits an HTTP request line (`"METHOD target HTTP/x.y"`) into its three whitespace-separated parts.
+- **inputs**: `line: &str`
+- **outputs**: `Result<(String, String, String)>`
+- **called_by**: `handle_client`
+- **mutates**: nothing
+
+### `handle_connect`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Handles an HTTPS `CONNECT` tunnel: resolves and connects to the target `host:port`, replies `200 Connection Established`, then relays raw bytes bidirectionally — one direction on a spawned thread (`io::copy` client→server), the other on the current thread (server→client). Never inspects TLS content — it's a pure byte tunnel once established.
+- **inputs**: `_method: String`, `target: String`, `_version: String`, `_req: Vec<u8>`, `client: TcpStream`, `cfg: &Config`
+- **outputs**: `Result<()>`
+- **calls**: `resolve_target`, `TcpStream::connect_timeout`, `client.write_all`, `std::thread::spawn`, `std::io::copy`
+- **called_by**: `handle_client`
+- **mutates**: opens an upstream TCP connection, spawns a relay thread, writes to both streams
+
+### `handle_plain_http`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Handles plain (non-TLS) HTTP forwarding: extracts the target host from the `Host:` header, connects to it on port 80, forwards the original raw request bytes verbatim, then copies the upstream's response back to the client.
+- **inputs**: `_method: String`, `_target: String`, `_version: String`, `req: Vec<u8>`, `client: TcpStream`, `cfg: &Config`
+- **outputs**: `Result<()>`
+- **calls**: `extract_host_from_request`, `resolve_target`, `TcpStream::connect_timeout`, `server.write_all`, `std::io::copy`
+- **called_by**: `handle_client`
+- **mutates**: opens an upstream TCP connection, writes to both streams
+
+### `extract_host_from_request`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: Pulls the `Host:` header value out of a raw HTTP request buffer.
+- **inputs**: `req: &[u8]`
+- **outputs**: `Result<String>`
+- **called_by**: `handle_plain_http`
+- **mutates**: nothing
+
+### `resolve_target`
+- **type**: function
+- **file**: `crates/hsip-gateway/src/proxy.rs`
+- **purpose**: DNS-resolves a `host:port` string to a `SocketAddr`, taking the first result.
+- **inputs**: `target: &str`
+- **outputs**: `Result<SocketAddr>`
+- **calls**: `ToSocketAddrs::to_socket_addrs`
+- **called_by**: `handle_connect`, `handle_plain_http`
+- **mutates**: nothing (performs DNS I/O)
+
+---
+
+## `crates/hsip-reputation/src/lib.rs`
+
+Crate root for `hsip-reputation` — its only job is declaring the `store` module and re-exporting `DecisionType`/`Event`/`Evidence`/`Store` so downstream crates can `use hsip_reputation::Store;` without reaching into `hsip_reputation::store::Store`. Also carries `#![allow(non_camel_case_types)]` so `store.rs`'s `SCREAMING_SNAKE_CASE`-styled `DecisionType` variants (`TRUSTED`, `VERIFIED_ID`, etc. — chosen to match the wire/JSON vocabulary, not Rust naming convention) don't trigger a lint warning.
+
+### `store` (module declaration)
+- **type**: variable (module declaration)
+- **file**: `crates/hsip-reputation/src/lib.rs`
+- **purpose**: Declares and re-exports the crate's sole substantive module — all real logic lives in `store.rs`.
+- **calls**: none
+- **called_by**: downstream crates via `hsip_reputation::{DecisionType, Event, Evidence, Store}`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-reputation/src/store.rs`
+
+A local, append-only, hash-chained, Ed25519-signed reputation event log — one flat JSON-lines file, file-locked for concurrent-safe appends (`fs2::FileExt`), no database. Each line's `prev_hash` is the SHA-256 of the previous raw line (self-verifying chain, same shape as `hsip-api`'s `audit_log.rs` BLAKE3 chain but SHA-256 here and file-based rather than DB-based). A subject's reputation "score" is just the sum of signed event weights recorded against it.
+
+### `DecisionType`
+- **type**: enum
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: The kind of reputation-affecting decision an event records — positive (`TRUSTED`, `VERIFIED_ID`, `GOOD_BEHAVIOR`), neutral/administrative (`NOTE`, `APPEAL`, `REVERSAL` — always weight 0), and negative (`SPAM`, `MALFORMED`, `TIMEOUT`, `MISBEHAVIOR`, `REPLAY`, `INVALID_SIG`). Serialized as `SCREAMING_SNAKE_CASE` to match the variant names literally.
+- **called_by**: `Event`, `Store::weight_for`, `Store::append`
+
+### `Evidence` (reputation)
+- **type**: struct
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: A `{kind, value}` pair attached to an event as supporting evidence, e.g. `{"kind": "pcap_hash", "value": "sha256:..."}`.
+- **called_by**: `Event`, `Store::append`
+
+### `Event`
+- **type**: struct
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: One line of the reputation log: a UUID event id, RFC-ish timestamp, actor/subject peer ids, decision type + severity (0-3) + computed weight, human/machine reason fields, evidence list, optional TTL, the chain-link `prev_hash`, and the event's own Ed25519 `sig` (hex) over its own canonical JSON with `sig` blanked.
+- **called_by**: `Store::append`, `Store::verify`, `Store::compute_score`
+
+### `to_canonical_json`
+- **type**: function
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Serializes any `Serialize` value to plain `serde_json::to_string` bytes — the "canonical" form signatures are computed over. Note this is ordinary serde JSON serialization, not RFC 8785 JCS (unlike `hsip-core::canonical`'s decision-attestation canonicalization) — field order follows struct declaration order, which is stable but not a standardized canonical form.
+- **inputs**: `v: &T`
+- **outputs**: `anyhow::Result<Vec<u8>>`
+- **called_by**: `Store::append`, `Store::verify`
+- **mutates**: nothing
+
+### `now_rfc3339`
+- **type**: function
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Despite the name, returns the current Unix seconds as a string suffixed `"s"` (e.g. `"1738000000s"`), not an actual RFC 3339 datetime string — clamps to 0 rather than panicking if the system clock reads before the Unix epoch.
+- **outputs**: `String`
+- **called_by**: `Store::append`
+- **mutates**: nothing
+
+### `Store`
+- **type**: struct
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Handle to a single reputation log file, identified by its path. All operations reopen the file per call rather than holding a persistent handle.
+- **called_by**: `hsip-cli`/`hsip-net` consumers of the reputation feature
+
+### `Store::open`
+- **type**: function
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Opens (creating if missing, never truncating) the store file at `path`, creating parent directories as needed. On Unix, a newly-created file gets `0o600` permissions via `OpenOptionsExt::mode` — the same "don't leave secrets/sensitive logs world-readable" discipline `hsip-api`'s master-key files follow.
+- **inputs**: `path: P where P: AsRef<Path>`
+- **outputs**: `anyhow::Result<Self>`
+- **calls**: `std::fs::create_dir_all`, `OpenOptions::new().create(true).append(true)[.mode(0o600)]`
+- **called_by**: store consumers constructing a `Store`
+- **mutates**: filesystem (creates directory/file)
+
+### `Store::last_line_and_hash`
+- **type**: function
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Reads the file line-by-line to find the last non-blank line and computes its SHA-256 hex (or `"0"*64` genesis hash if the file is empty). Marked `#[allow(dead_code)]` — superseded in practice by the inline equivalent logic duplicated inside `append` (which needs the file handle it already holds locked, rather than reopening).
+- **outputs**: `anyhow::Result<(Option<String>, String)>`
+- **calls**: `BufReader::read_line`, `Sha256::update`/`finalize`
+- **called_by**: nothing currently (dead code, kept for potential external/test use)
+- **mutates**: nothing
+
+### `Store::weight_for`
+- **type**: function
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Maps a `(decision_type, severity)` pair to an integer reputation weight via per-type severity-indexed tables (severity clamped to 0..3). Positive types produce positive weights, negative types negative, `NOTE`/`APPEAL`/`REVERSAL` are always 0 (administrative, not reputation-affecting).
+- **inputs**: `decision_type: &DecisionType`, `severity: u8`
+- **outputs**: `i32`
+- **called_by**: `Store::append`
+- **mutates**: nothing
+
+### `Store::append`
+- **type**: function
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Appends one new signed, chained event. Opens the file, takes an exclusive cross-platform lock (`fs2::FileExt::lock_exclusive` — the mechanism that makes concurrent-process appends safe, called out in the doc comment as "Windows-safe"), re-reads the last line under that lock to compute `prev_hash`, builds the `Event` with a computed `weight`, signs its canonical JSON (with `sig` left empty during signing) with the caller-supplied `signing_key`, writes the final line, `sync_all()`s, then unlocks.
+- **inputs**: `signing_key: &SigningKey`, `actor_peer_id: &str`, `subject_peer_id: &str`, `decision_type: DecisionType`, `severity: u8`, `reason_code: &str`, `reason_text: &str`, `evidence: Vec<Evidence>`, `ttl: Option<String>`
+- **outputs**: `anyhow::Result<Event>`
+- **calls**: `file.lock_exclusive`, `Store::weight_for`, `to_canonical_json`, `signing_key.sign`, `file.write_all`, `file.sync_all`, `fs2::FileExt::unlock`
+- **called_by**: reputation-event producers (e.g. `hsip-net`/`hsip-cli` reputation commands)
+- **mutates**: appends a line to the store file on disk
+
+### `Store::verify`
+- **type**: function
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Re-reads the whole file, recomputing and checking the `prev_hash` chain link-by-link and verifying each line's Ed25519 signature (against the caller-supplied `verifying_key`, over the line's canonical JSON with `sig` blanked). Returns as soon as any line fails via `anyhow::bail!`/`?` rather than continuing past a break.
+- **inputs**: `verifying_key: &VerifyingKey`
+- **outputs**: `anyhow::Result<(bool, usize)>` — `(true, count)` on full success; an `Err` (not a `false`) on any broken link or bad signature
+- **calls**: `Sha256::update`/`finalize`, `serde_json::from_str`, `verifying_key.verify`
+- **called_by**: reputation-log auditors
+- **mutates**: nothing
+
+### `Store::compute_score`
+- **type**: function
+- **file**: `crates/hsip-reputation/src/store.rs`
+- **purpose**: Sums the `weight` field of every event in the log whose `subject_peer_id` matches, giving that peer's current reputation score. No caching — recomputes from the whole file on every call.
+- **inputs**: `subject_peer_id: &str`
+- **outputs**: `anyhow::Result<i32>`
+- **calls**: `serde_json::from_str`
+- **called_by**: reputation-score lookups
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-session/src/lib.rs`
+
+Ephemeral session establishment and AEAD sealing for HSIP's peer-to-peer transport: X25519 (or, when `hsip-core`'s `pqc` feature combines it with ML-KEM-768) ephemeral key exchange → HKDF-SHA256 → ChaCha20-Poly1305, with a direction-split 96-bit nonce (4-byte random prefix + 8-byte monotonic counter) enforcing per-direction replay protection.
+
+### `HybridSharedSecret`
+- **type**: struct
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Wraps the 32-byte HKDF output of `(X25519_shared || ML-KEM-768_shared)` produced by a caller's own hybrid PQC handshake (via `hsip-core::pqc` encapsulate/decapsulate helpers, not this crate) before it's fed into `Session::from_hybrid_handshake`. Zeroizes its bytes on drop.
+- **called_by**: `Session::from_hybrid_handshake`, external PQC handshake callers
+
+### `DEFAULT_INFO`
+- **type**: variable (constant)
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: HKDF domain-separation info string (`b"HSIP v1 session key"`) used when a caller derives a session without supplying their own `PeerLabel`.
+- **called_by**: `Session::from_shared_secret`
+
+### `PeerLabel`
+- **type**: struct
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Optional caller-supplied bytes (e.g. `b"CONSENTv1|peerA->peerB"`) mixed into HKDF as the `info` parameter, binding the derived session key to a specific protocol/peer-pair context so two different logical exchanges over the same raw shared secret can't be confused.
+- **called_by**: `Session::from_shared_secret` and everything that forwards a label to it
+
+### `SessionError`
+- **type**: enum
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: `Consumed` (an `Ephemeral`'s one-shot secret was already used) or `KdfExpand` (HKDF expansion failed). Implements `Display`/`std::error::Error`.
+- **called_by**: `Ephemeral::into_shared`, `Session::from_shared_secret` and its callers
+
+### `SealError`
+- **type**: enum
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: `Encrypt` — the single failure mode of `Session::seal` (AEAD encryption failed).
+- **called_by**: `Session::seal`
+
+### `OpenError`
+- **type**: enum
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Failure modes of `Session::open`: `Truncated` (shorter than nonce+tag), `BadNonce` (rx prefix mismatch or malformed nonce bytes), `Replayed` (stale/non-monotonic counter), `AuthFailed` (AEAD tag verification failed).
+- **called_by**: `Session::open`
+
+### `Ephemeral`
+- **type**: struct
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: A one-shot X25519 keypair — `secret` is `Option<EphemeralSecret>` specifically so it can be `take()`n and consumed exactly once, making key reuse a compile-time-adjacent, runtime-checked impossibility (`SessionError::Consumed` on a second attempt) rather than a silent bug.
+- **called_by**: `Session::from_handshake`, `demo_pair`
+
+### `Ephemeral::generate`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Generates a fresh ephemeral X25519 keypair from `OsRng`.
+- **outputs**: `Self`
+- **calls**: `EphemeralSecret::random_from_rng`
+- **called_by**: `demo_pair`, session-handshake initiators
+- **mutates**: nothing (beyond consuming OS entropy)
+
+### `Ephemeral::public`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Returns the (copyable) public key half, without consuming the ephemeral.
+- **outputs**: `PublicKey`
+- **called_by**: `demo_pair`
+- **mutates**: nothing
+
+### `Ephemeral::into_shared`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Consumes `self`'s secret to perform X25519 Diffie-Hellman against `their_pub`, producing the raw 32-byte shared secret. Errors instead of panicking if called twice on the same value (the secret was already `take()`n).
+- **inputs**: `self` (by value), `their_pub: &PublicKey`
+- **outputs**: `Result<[u8; 32], SessionError>`
+- **calls**: `EphemeralSecret::diffie_hellman`
+- **called_by**: `Session::from_handshake`, `demo_pair`, test rekey flow
+- **mutates**: consumes/drops the ephemeral secret
+
+### `Session`
+- **type**: struct
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: A live AEAD session: the derived `Key`/`ChaCha20Poly1305` cipher, a random `tx_prefix` + monotonic `tx_counter` for outgoing nonces, and a learned-on-first-receive `rx_prefix` + last-seen `rx_counter` for incoming replay detection. `Drop` zeroizes the key and counters/prefixes rather than relying on the field types alone.
+- **called_by**: `demo_pair`, all handshake/seal/open call sites
+
+### `Session::from_shared_secret`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Core session derivation: HKDF-expands the raw 32-byte shared secret (with `label` or, absent one, `DEFAULT_INFO` as the HKDF info) into a 32-byte AEAD key, builds the cipher, zeroizes the intermediate key-material buffer, and randomizes a fresh `tx_prefix`.
+- **inputs**: `shared: [u8; 32]`, `label: Option<&PeerLabel>`
+- **outputs**: `Result<Self, SessionError>`
+- **calls**: `Hkdf::<Sha256>::new`/`expand`, `ChaCha20Poly1305::new`, `OsRng.fill_bytes`
+- **called_by**: `Session::from_handshake`, `Session::from_hybrid_handshake`, `Session::rekey_from_shared`
+- **mutates**: nothing external (zeroizes a local buffer)
+
+### `Session::from_handshake`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Convenience wrapper: consumes `our_eph` against `their_pub` to get the shared secret, then derives a `Session` from it.
+- **inputs**: `our_eph: Ephemeral`, `their_pub: &PublicKey`, `label: Option<&PeerLabel>`
+- **outputs**: `Result<Self, SessionError>`
+- **calls**: `Ephemeral::into_shared`, `Session::from_shared_secret`
+- **called_by**: `demo_pair`
+- **mutates**: consumes the ephemeral
+
+### `Session::from_hybrid_handshake`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Phase-2 PQC entry point: derives a `Session` from a caller-provided `HybridSharedSecret` (already combining X25519 + ML-KEM-768 outputs via HKDF, performed elsewhere in `hsip-core`). The resulting session's AEAD/nonce mechanics are identical to a classical session — the only security difference is how the input shared-secret bytes were produced.
+- **inputs**: `hybrid_secret: HybridSharedSecret`, `label: Option<&PeerLabel>`
+- **outputs**: `Result<Self, SessionError>`
+- **calls**: `Session::from_shared_secret`
+- **called_by**: PQC-hybrid handshake integrators
+- **mutates**: nothing
+
+### `Session::rekey_from_shared`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Replaces `self` entirely with a freshly derived session from a new shared secret — resets both tx and rx state (new prefixes, counters back to 0), for periodic session rekeying after exchanging new ephemerals.
+- **inputs**: `&mut self`, `new_shared: [u8; 32]`, `label: Option<&PeerLabel>`
+- **outputs**: `Result<(), SessionError>`
+- **calls**: `Session::from_shared_secret`
+- **called_by**: session-rekey flows, tests
+- **mutates**: `self` (full replacement)
+
+### `Session::seal`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: AEAD-encrypts `plaintext` with `aad` as associated data, building the 12-byte nonce from `tx_prefix || tx_counter (big-endian)`, then increments `tx_counter` (wrapping, not checked — an extremely long-lived session could in principle wrap the counter back to 0, silently reusing a nonce; not guarded against here). Returns `nonce || ciphertext+tag`.
+- **inputs**: `&mut self`, `aad: &[u8]`, `plaintext: &[u8]`
+- **outputs**: `Result<Vec<u8>, SealError>`
+- **calls**: `ChaCha20Poly1305::encrypt`
+- **called_by**: session senders (tests, transport integrators)
+- **mutates**: `self.tx_counter`
+
+### `Session::open`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: AEAD-decrypts a `nonce || ciphertext+tag` frame. On the very first call, learns and stores the peer's `rx_prefix` from the incoming nonce; on every subsequent call, requires the prefix to match exactly (constant-time compare via `subtle::ConstantTimeEq`) and the embedded counter to be `>= rx_counter` (monotonic — replays and reordering-below-last-seen are rejected as `OpenError::Replayed`), then updates `rx_counter = rx_ctr + 1` **before** attempting decryption — so even a call that ultimately fails `AuthFailed` still advances the replay counter for that value, meaning a legitimately-late but valid frame can no longer be replayed after a forged one at the same counter was rejected.
+- **inputs**: `&mut self`, `aad: &[u8]`, `nonce_and_ct: &[u8]`
+- **outputs**: `Result<Vec<u8>, OpenError>`
+- **calls**: `ChaCha20Poly1305::decrypt`
+- **called_by**: session receivers (tests, transport integrators)
+- **mutates**: `self.rx_prefix` (first call only), `self.rx_counter`
+
+### `demo_pair`
+- **type**: function
+- **file**: `crates/hsip-session/src/lib.rs`
+- **purpose**: Test/demo helper that generates two ephemeral keypairs, performs the handshake both directions, and returns both parties' public keys and live `Session`s — used to set up a working client/server pair in one call for tests.
+- **inputs**: `label: Option<&PeerLabel>`
+- **outputs**: `Result<(PublicKey, PublicKey, Session, Session), SessionError>`
+- **calls**: `Ephemeral::generate`, `Session::from_handshake`
+- **called_by**: this file's own `#[cfg(test)]` module
+- **mutates**: nothing external
+
+---
+
+## `crates/hsip-session/src/persistence.rs`
+
+Small filesystem persistence helpers shared by `hsip-cli`/`hsip-net` for storing resume tokens, last-seen data, and other small session-related artifacts under a common state directory — separate from `rate_limit_persistence.rs` in `hsip-api` (that's DB-table snapshotting; this is plain files). Every write is atomic (write to `.tmp`, `fsync` on Unix, then `rename`).
+
+### `state_dir`
+- **type**: function
+- **file**: `crates/hsip-session/src/persistence.rs`
+- **purpose**: Resolves the base directory for all state files: `$HSIP_HOME/state/` if `HSIP_HOME` is set, else `~/.hsip/state/` (falling back to `.` if the home directory can't be resolved).
+- **outputs**: `PathBuf`
+- **calls**: `std::env::var`, `dirs::home_dir`
+- **called_by**: `path_for`, `ensure_dir`
+- **mutates**: nothing
+
+### `path_for`
+- **type**: function
+- **file**: `crates/hsip-session/src/persistence.rs`
+- **purpose**: Joins a logical file name onto `state_dir()`.
+- **inputs**: `name: &str`
+- **outputs**: `PathBuf`
+- **calls**: `state_dir`
+- **called_by**: `read_json`, `remove`, `load_blob`
+- **mutates**: nothing
+
+### `ensure_dir`
+- **type**: function
+- **file**: `crates/hsip-session/src/persistence.rs`
+- **purpose**: Idempotently creates the state directory if it doesn't exist yet, returning its path.
+- **outputs**: `io::Result<PathBuf>`
+- **calls**: `state_dir`, `fs::create_dir_all`
+- **called_by**: `write_json`, `save_blob`, this file's own tests
+- **mutates**: filesystem (creates directory)
+
+### `write_json`
+- **type**: function
+- **file**: `crates/hsip-session/src/persistence.rs`
+- **purpose**: Atomically writes pretty-printed JSON to `state_dir()/name`: writes to `name.tmp`, best-effort `fsync`s the file and (on Unix) the containing directory for durability, then `rename`s into place — so a crash mid-write never leaves a half-written file at the real path.
+- **inputs**: `name: &str`, `value: &T where T: Serialize`
+- **outputs**: `io::Result<()>`
+- **calls**: `fs::File::create`, `serde_json::to_string_pretty`, `f.sync_all`, `fs::rename`
+- **called_by**: session-state persisters (`hsip-cli` session save commands), this file's own tests
+- **mutates**: filesystem — writes `<name>.tmp` then renames to `<name>`
+
+### `read_json`
+- **type**: function
+- **file**: `crates/hsip-session/src/persistence.rs`
+- **purpose**: Reads and deserializes JSON from `state_dir()/name`, returning `None` (not an error) on any failure — missing file, read error, or parse error are all treated identically as "nothing to load."
+- **inputs**: `name: &str`
+- **outputs**: `Option<T> where T: DeserializeOwned`
+- **calls**: `fs::File::open`, `serde_json::from_str`
+- **called_by**: session-state loaders, this file's own tests
+- **mutates**: nothing
+
+### `remove`
+- **type**: function
+- **file**: `crates/hsip-session/src/persistence.rs`
+- **purpose**: Best-effort deletes `state_dir()/name` if it exists; a no-op (not an error) if it doesn't.
+- **inputs**: `name: &str`
+- **outputs**: `io::Result<()>`
+- **calls**: `path.exists`, `fs::remove_file`
+- **called_by**: session-state cleanup, this file's own tests
+- **mutates**: filesystem (deletes a file)
+
+### `save_blob`
+- **type**: function
+- **file**: `crates/hsip-session/src/persistence.rs`
+- **purpose**: Same atomic tmp-write-then-rename pattern as `write_json`, but for raw bytes rather than a serializable value — used by `hsip-cli`'s `SessionSave`/`SessionLoad` commands.
+- **inputs**: `name: &str`, `data: &[u8]`
+- **outputs**: `io::Result<()>`
+- **calls**: `fs::File::create`, `f.sync_all`, `fs::rename`
+- **called_by**: `hsip-cli` session save commands, this file's own tests
+- **mutates**: filesystem — writes `<name>.tmp` then renames to `<name>`
+
+### `load_blob`
+- **type**: function
+- **file**: `crates/hsip-session/src/persistence.rs`
+- **purpose**: Reads raw bytes from `state_dir()/name`.
+- **inputs**: `name: &str`
+- **outputs**: `io::Result<Vec<u8>>`
+- **calls**: `fs::read`
+- **called_by**: `hsip-cli` session load commands, this file's own tests
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-regenerative/src/lib.rs`
+
+Distributed identity recovery via Shamir Secret Sharing (using the `ssss` crate, which the code's own comment notes avoids a polynomial-bias vulnerability some naive implementations have): an identity secret is split into `total_shards` pieces such that any `threshold` of them reconstruct it, while any single shard reveals nothing. Phase-1 defaults are a 3-of-5 scheme with a 1-year expiration and a fixed local/trusted-contact/paper storage plan.
+
+### `DEFAULT_THRESHOLD`
+- **type**: variable (constant)
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Phase-1 default minimum shards needed to recover: `3`.
+- **called_by**: `ShardingConfig::default`
+
+### `DEFAULT_TOTAL_SHARDS`
+- **type**: variable (constant)
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Phase-1 default total shards created: `5`.
+- **called_by**: `ShardingConfig::default`
+
+### `MAX_SECRET_SIZE`
+- **type**: variable (constant)
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Maximum shardable secret size in bytes: `32` (a 256-bit key, e.g. an Ed25519/X25519 seed).
+- **called_by**: `IdentityRegenerator::shard_identity`
+
+### `RegenerativeError`
+- **type**: enum
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: All failure modes for sharding/recovery: bad threshold, too few shards, secret too large, shard verification/expiration/format/index failures, and a generic `RecoveryFailed(String)` wrapping the underlying `ssss` error's `Debug` output.
+- **called_by**: every fallible method in this crate
+
+### `ShardStorageType`
+- **type**: enum
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Where a shard is meant to be stored — `LocalDevice`, `TrustedContact`, `CloudBackup`, `HardwareToken`, `PaperBackup` — purely descriptive metadata, not enforced by this crate.
+- **called_by**: `ShardMetadata`, `ShardingConfig`
+
+### `ShardMetadata`
+- **type**: struct
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Non-sensitive, safely-shareable metadata about a shard: its id (BLAKE3 of the share data + identity fingerprint), index, creation/expiry timestamps, storage type, an integrity `verification_hash`, a human label, and the 8-byte `identity_fingerprint` (not the full identity) so shards from different identities can't be confused. Deliberately reveals nothing about the secret itself.
+- **called_by**: `IdentityShard`, `RecoveryProgress`
+
+### `IdentityShard`
+- **type**: struct
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: One recoverable piece of a sharded identity secret: public `metadata` plus the actual `shard_data` bytes (Base62-encoded `ssss` share, stored as its UTF-8 bytes) and an optional passphrase salt. Derives `Zeroize`/`ZeroizeOnDrop` — `metadata` and `passphrase_salt` are `#[zeroize(skip)]`'d since they're non-secret, only `shard_data` needs zeroizing.
+- **called_by**: `IdentityRegenerator::shard_identity`/`recover_identity`, `RecoveryProgress::add_shard`
+
+### `IdentityShard::from_share_data`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Builds one `IdentityShard` from a raw `ssss` share plus its index/fingerprint/storage assignment: computes `shard_id` as BLAKE3(share_data || fingerprint) and `verification_hash` as BLAKE3(shard_id || share_data), both used later to detect tampering.
+- **inputs**: `share_data: Vec<u8>`, `index: u8`, `identity_fingerprint: [u8; 8]`, `storage_type: ShardStorageType`, `label: String`, `expires_at: Option<DateTime<Utc>>`
+- **outputs**: `Self`
+- **calls**: `Hasher::new`/`update`/`finalize` (BLAKE3)
+- **called_by**: `IdentityRegenerator::shard_identity`
+- **mutates**: nothing
+
+### `IdentityShard::verify`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Recomputes BLAKE3(shard_id || shard_data) and checks it matches the stored `verification_hash` — detects a corrupted or tampered shard before it's used in recovery.
+- **outputs**: `bool`
+- **calls**: `Hasher::new`/`update`/`finalize`
+- **called_by**: `IdentityRegenerator::recover_identity`, tests
+- **mutates**: nothing
+
+### `IdentityShard::is_expired`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Checks whether `metadata.expires_at` (if set) is in the past.
+- **outputs**: `bool`
+- **called_by**: `IdentityRegenerator::recover_identity`, tests
+- **mutates**: nothing
+
+### `IdentityShard::shard_bytes`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Accessor for the raw shard data bytes.
+- **outputs**: `&[u8]`
+- **called_by**: `IdentityRegenerator::recover_identity`
+- **mutates**: nothing
+
+### `IdentityShard::index`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Accessor for the shard's 1-indexed position in the sharing scheme.
+- **outputs**: `u8`
+- **called_by**: external consumers of `IdentityShard`
+- **mutates**: nothing
+
+### `ShardingConfig`
+- **type**: struct
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Parameters for a sharding operation: `threshold`, `total_shards`, optional `expiration` duration, and a `storage_plan` (ordered list of `(ShardStorageType, label)` assigned to each shard index in order — index `i` beyond the plan's length falls back to `LocalDevice`/`"Shard {i+1}"`, see `shard_identity`).
+- **called_by**: `IdentityRegenerator`
+
+### `ShardingConfig::default`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Phase-1 default: 3-of-5, 1-year expiration, a 5-entry storage plan (2 local devices, 2 trusted contacts, 1 paper backup).
+- **outputs**: `Self`
+- **called_by**: `IdentityRegenerator::new`
+- **mutates**: nothing
+
+### `ShardingConfig::validate`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Rejects a config whose `threshold` is below 2 or above `total_shards`.
+- **outputs**: `Result<(), RegenerativeError>`
+- **called_by**: `IdentityRegenerator::shard_identity`, tests
+- **mutates**: nothing
+
+### `IdentityRegenerator`
+- **type**: struct
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: The sharding/recovery engine, parameterized by a `ShardingConfig`.
+- **called_by**: identity-backup/recovery flows in `hsip-cli`/`hsip-net` (or future callers)
+
+### `IdentityRegenerator::new`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Constructs with the Phase-1 default config.
+- **outputs**: `Self`
+- **calls**: `Self::with_config`, `ShardingConfig::default`
+- **called_by**: callers wanting default 3-of-5 behavior, tests
+- **mutates**: nothing
+
+### `IdentityRegenerator::with_config`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Constructs with a caller-supplied config (custom threshold/total/expiration/storage plan).
+- **inputs**: `config: ShardingConfig`
+- **outputs**: `Self`
+- **called_by**: `IdentityRegenerator::new`, custom-config callers, tests
+- **mutates**: nothing
+
+### `IdentityRegenerator::shard_identity`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Splits `secret` into `total_shards` `IdentityShard`s. Validates the secret isn't larger than `MAX_SECRET_SIZE` and the config itself, computes an 8-byte BLAKE3-derived identity fingerprint (shared by all resulting shards so they can be recognized as belonging to the same identity), then calls `ssss::gen_shares` and wraps each resulting Base62-string share (stored as UTF-8 bytes) in an `IdentityShard` via `from_share_data`, assigning storage type/label from `storage_plan` by index.
+- **inputs**: `&self`, `secret: &[u8]`
+- **outputs**: `Result<Vec<IdentityShard>, RegenerativeError>`
+- **calls**: `Hasher` (BLAKE3), `ShardingConfig::validate`, `ssss::SsssConfig::builder`, `ssss::gen_shares`, `IdentityShard::from_share_data`
+- **called_by**: identity backup flows, tests
+- **mutates**: nothing (pure computation over its inputs)
+
+### `IdentityRegenerator::recover_identity`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Reconstructs the original secret from a slice of shards: requires at least `threshold` shards, verifies each one's integrity and non-expiry first (failing fast on the first bad/expired shard rather than attempting recovery with tainted input), converts each shard's bytes back to its Base62 string form, then calls `ssss::unlock`.
+- **inputs**: `&self`, `shards: &[IdentityShard]`
+- **outputs**: `Result<Vec<u8>, RegenerativeError>`
+- **calls**: `IdentityShard::verify`, `IdentityShard::is_expired`, `String::from_utf8`, `ssss::unlock`
+- **called_by**: identity recovery flows, tests
+- **mutates**: nothing
+
+### `IdentityRegenerator::threshold`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Accessor for the configured recovery threshold.
+- **outputs**: `u8`
+- **called_by**: external consumers
+- **mutates**: nothing
+
+### `IdentityRegenerator::total_shards`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Accessor for the configured total shard count.
+- **outputs**: `u8`
+- **called_by**: external consumers
+- **mutates**: nothing
+
+### `RecoveryProgress`
+- **type**: struct
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Tracks an in-progress, time-boxed recovery attempt for one identity fingerprint: which shard indices have been collected so far (as their `ShardMetadata`, not the sensitive share bytes), and when the attempt itself expires.
+- **called_by**: recovery-flow orchestration (e.g. a wizard collecting shards from multiple contacts)
+
+### `RecoveryProgress::start`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Begins tracking a new recovery attempt for `fingerprint`, expiring after `timeout` from now.
+- **inputs**: `fingerprint: [u8; 8]`, `threshold: u8`, `timeout: Duration`
+- **outputs**: `Self`
+- **called_by**: recovery-flow initiators, tests
+- **mutates**: nothing (constructs a new value)
+
+### `RecoveryProgress::add_shard`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Records a collected shard's metadata if (and only if) its `identity_fingerprint` matches the one this recovery attempt is for — silently rejects (returns `false`) a shard belonging to a different identity, guarding against accidentally mixing shards from unrelated identities.
+- **inputs**: `&mut self`, `shard: &IdentityShard`
+- **outputs**: `bool`
+- **called_by**: recovery-flow orchestration, tests
+- **mutates**: `self.collected`
+
+### `RecoveryProgress::can_recover`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Whether enough distinct shard indices have been collected to meet `threshold`.
+- **outputs**: `bool`
+- **called_by**: recovery-flow orchestration, tests
+- **mutates**: nothing
+
+### `RecoveryProgress::is_expired`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Whether the recovery attempt's own timeout has passed.
+- **outputs**: `bool`
+- **called_by**: recovery-flow orchestration
+- **mutates**: nothing
+
+### `RecoveryProgress::progress_percent`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: `collected / threshold` as a percentage, capped at 100.
+- **outputs**: `u8`
+- **called_by**: UI/progress-reporting callers, tests
+- **mutates**: nothing
+
+### `RecoveryProgress::remaining`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: How many more distinct shards are needed to reach `threshold` (saturating at 0).
+- **outputs**: `usize`
+- **called_by**: UI/progress-reporting callers, tests
+- **mutates**: nothing
+
+### `ShardRotation`
+- **type**: struct
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Tracks when a set of shards was last (re)generated and whether it's due for rotation, for the "future premium" periodic-rotation feature the module doc mentions. Not wired to any actual re-sharding logic in this crate — it only tracks timing, the caller is responsible for actually calling `shard_identity` again.
+- **called_by**: future shard-rotation schedulers
+
+### `ShardRotation::new`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Starts a rotation tracker at generation 0, "created now".
+- **inputs**: `rotation_interval: Duration`
+- **outputs**: `Self`
+- **called_by**: rotation schedulers, tests
+- **mutates**: nothing
+
+### `ShardRotation::needs_rotation`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Whether `created_at + rotation_interval` has passed.
+- **outputs**: `bool`
+- **called_by**: rotation schedulers, tests
+- **mutates**: nothing
+
+### `ShardRotation::rotated`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Marks a rotation as having just occurred: increments `generation`, resets `created_at` to now.
+- **inputs**: `&mut self`
+- **outputs**: none
+- **called_by**: rotation schedulers, tests
+- **mutates**: `self.generation`, `self.created_at`
+
+### `ShardRotation::time_until_rotation`
+- **type**: function
+- **file**: `crates/hsip-regenerative/src/lib.rs`
+- **purpose**: Time remaining until rotation is due, or `None` if already overdue.
+- **outputs**: `Option<Duration>`
+- **called_by**: rotation schedulers
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-integration-sdk/src/lib.rs`
+
+A pure-types-and-traits crate — "stable extension points for third-party HSIP integrations," per its own module doc. Defines three extension traits (`PolicyHook`, `AuditSink`, `CapabilityProvider`) plus their supporting data types and a trivial no-op implementation of each. Nothing in this crate does any I/O or holds any state itself; it's an interface contract other crates/binaries are meant to implement. The doc comments are explicit that implementations must stay protocol-observable only — no platform-specific identity, no unverifiable claims, and must preserve HSIP's hash-chained audit trail properties (litigation/evidence-readiness is called out directly).
+
+### `PolicyDecision`
+- **type**: enum
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: The four possible outcomes a `PolicyHook` can force for a consent request: `AutoDeny`, `QueueForReview`, `AutoAccept`, `SilentReject` (malformed/suspicious traffic, deliberately unlogged).
+- **called_by**: `PolicyHook::evaluate`
+
+### `PolicyReason`
+- **type**: enum
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: Machine-readable reason codes logged alongside a `PolicyDecision` — includes a `CustomPolicyRule { rule_id, reason }` variant for hook-specific reasons and `TooManyAttempts { count }` carrying a count.
+- **called_by**: `PolicyHook::evaluate`
+
+### `ConsentRequestContext`
+- **type**: struct
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: The protocol-observable-only view of a consent request handed to a `PolicyHook`: verified peer id, claimed (unverified) purpose string, timestamp, and several booleans/counters (`unknown_peer`, `denied_before`, `failed_attempts`, `rate_limited`, `suspicious`) all derived from cryptographic verification or protocol history — explicitly not from unverifiable claims.
+- **called_by**: `PolicyHook::evaluate`
+
+### `PolicyHook`
+- **type**: trait
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: Extension point letting an integration inject custom consent-policy logic. `evaluate` returns `Some((decision, reason))` to override HSIP's default policy for this request, or `None` to fall through to default behavior — an opt-out-by-omission design so a hook only needs to handle the cases it cares about.
+- **inputs**: `&self`, `ctx: &ConsentRequestContext`
+- **outputs**: `Option<(PolicyDecision, PolicyReason)>`
+- **called_by**: HSIP's consent evaluation path (integration point, not called anywhere inside this crate itself beyond `NoOpPolicyHook`/tests)
+
+### `AuditEvent`
+- **type**: struct
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: A hash-chained, Ed25519-signed audit record shape for `AuditSink` implementations to log — structurally similar to `hsip-reputation::store::Event` (actor/subject peer ids, decision type, severity, reason codes, evidence, `prev_hash` chain link, hex signature) but this is a standalone SDK type, not literally shared code with that crate.
+- **called_by**: `AuditSink` trait methods
+
+### `Evidence` (integration-sdk)
+- **type**: struct
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: A `{kind, value}` evidence pair attached to an `AuditEvent`, e.g. `{"kind": "signature_hash", "value": "sha256:..."}`. Distinct type from (but structurally identical to) `hsip-reputation::store::Evidence`.
+- **called_by**: `AuditEvent`
+
+### `AuditSink`
+- **type**: trait
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: Extension point for exporting audit events to external storage while preserving tamper-evidence: `log_event` (must preserve hash chain/signatures, should be idempotent by `event_id`), `verify_chain` (must check `prev_hash` linkage and signatures), `export` (must include genesis/head hashes and a monotonic export counter to detect selective/rolled-back exports).
+- **called_by**: HSIP's audit export path (integration point); `NoOpAuditSink` is the only in-crate implementer
+
+### `AuditExport`
+- **type**: struct
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: The tamper-detection-annotated result of `AuditSink::export`: the full event list plus `genesis_hash`/`head_hash`/`export_counter` and an HMAC-style `verification_hash` binding all three together — designed so a selective export, a modified event, or a rolled-back log all become independently detectable.
+- **called_by**: `AuditSink::export`
+
+### `Capability`
+- **type**: struct
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: An opaque, expiring capability token (`capability_id`, opaque `token` bytes, `expires_ms`) — deliberately generic (e.g. `"file_transfer"`, `"video_call"`) so it can't encode platform-specific identity.
+- **called_by**: `CapabilityProvider`
+
+### `CapabilityProvider`
+- **type**: trait
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: Extension point for issuing/verifying opaque capability tokens per peer. `capabilities_for_peer` must base decisions only on protocol-observable state and should return an empty vec by default; `verify_capability` checks a token's validity for a given peer/capability.
+- **called_by**: HSIP's capability-issuance path (integration point); `NoOpCapabilityProvider` is the only in-crate implementer
+
+### `NoOpPolicyHook`
+- **type**: struct
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: Default `PolicyHook` implementation that always returns `None` — falls through to HSIP's built-in default policy every time, i.e. "no custom policy configured" behaves identically to not having this extension point at all.
+- **called_by**: default-configuration call sites, this file's own tests
+
+### `NoOpAuditSink`
+- **type**: struct
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: Default `AuditSink` implementation that discards every event: `log_event` always succeeds without storing anything, `verify_chain` always reports `true` (vacuously, since there's nothing to check), `export` returns an empty export with all-zero genesis/head/verification hashes and counter 0.
+- **called_by**: default-configuration call sites, this file's own tests
+
+### `NoOpCapabilityProvider`
+- **type**: struct
+- **file**: `crates/hsip-integration-sdk/src/lib.rs`
+- **purpose**: Default `CapabilityProvider` implementation that grants nothing: `capabilities_for_peer` always returns an empty vec, `verify_capability` always returns `Ok(false)`.
+- **called_by**: default-configuration call sites, this file's own tests
+
+---
+
+## `crates/hsip-api/src/lib.rs`
+
+The library-target crate root for `hsip-api`. Its sole content is `pub mod` declarations for every top-level source module (`anchor`, `anchor_job`, `audit_log`, `auth`, `config`, `db`, `errors`, `key_encryption`, `metrics`, `mtls`, `rate_limit_persistence`, `routes`, `state`, `system_health`) — no functions or types of its own. This is the "lib" half of the two-target split CLAUDE.md documents at length: `src/main.rs` independently re-declares its own private `mod` tree over the same source files for the `bin "hsip-api"` target, so `lib.rs` exists purely so `tests/integration.rs` (an external test crate, which can only see a library's public API) and other modules' own `#[cfg(test)]` blocks can reach `crate::db`, `crate::state`, etc. Because the two targets compile these files independently, dead-code analysis (and thus `cargo clippy -D warnings`) runs twice and can disagree — a function used only by `lib.rs`-side test code (e.g. `db::init`) can be genuinely dead in the `bin` target's own compilation, hence paired `#[allow(dead_code)]` annotations with explanatory comments at those sites rather than deleting the function.
+
+### `hsip_api` (crate root module declarations)
+- **type**: variable (module declarations)
+- **file**: `crates/hsip-api/src/lib.rs`
+- **purpose**: Re-exports every top-level module as `pub`, giving `tests/integration.rs` and any other external consumer of the `hsip_api` library crate access to `crate::{anchor, anchor_job, audit_log, auth, config, db, errors, key_encryption, metrics, mtls, rate_limit_persistence, routes, state, system_health}`.
+- **calls**: none
+- **called_by**: `tests/integration.rs`, `rate_limit_persistence.rs`'s own `#[cfg(test)]` tests (via `crate::db::init`), any other in-crate `#[cfg(test)]` code compiled as part of the lib target
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-cli/src/commands/mod.rs`
+
+Pure module-declaration file for the CLI's `commands/` directory — no logic of its own.
+
+### `commands` (module declarations)
+- **type**: variable (module declarations)
+- **file**: `crates/hsip-cli/src/commands/mod.rs`
+- **purpose**: Declares every command submodule (`agent`, `diag`, `handshake`, `keys`, `receipts`, `trust`, `up`, `util`) as `pub mod`, making them addressable as `commands::agent`, `commands::util`, etc. from `main.rs` and from each other.
+- **calls**: none
+- **called_by**: `crates/hsip-cli/src/main.rs`
+- **mutates**: nothing
+
+---
+
+## `crates/hsip-cli/src/daemon/mod.rs`
+
+A separate lightweight HTTP status/consent daemon for `hsip-cli` (listens on `127.0.0.1:8787` per `hsip-tray.rs`'s hardcoded client address) distinct from the main `hsip-api` server — mostly stubbed/`TODO`-marked placeholder logic wired up to real gateway metrics for the one field (`blocked_trackers`) that has a real backing file. Every response is wrapped in an HMAC-SHA256 signature for basic integrity, though the signing key is a hardcoded placeholder string flagged in its own comment as "CHANGE IN PRODUCTION."
+
+### `AppState` (daemon)
+- **type**: struct
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Axum shared state for the daemon: an `Arc<Mutex<Status>>` holding the current snapshot. Comment notes future intent to wire in real `sessions`/`reputation` managers, not yet done.
+- **called_by**: `http::serve`, all `http::get_*`/`post_*` handlers via `State<AppState>`
+
+### `Status` (daemon)
+- **type**: struct
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: The daemon's reported protection status: `protected` flag, session count, egress peer, cipher name, `since` timestamp, byte counters, a routing `path`, and HSIP-shield block counters (`blocked_connections`, `blocked_ips`, `blocked_trackers`).
+- **called_by**: `AppState`, `snapshot_status`, `http::get_status`, `hsip-tray.rs::Status` (a separately-defined deserialization mirror, not a shared type)
+
+### `Status::default` (daemon)
+- **type**: function
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Zeroed/placeholder default status: `protected: false`, `cipher: "ChaCha20-Poly1305"`, `path: ["Local"]`, everything else 0/empty.
+- **outputs**: `Self`
+- **called_by**: `AppState`'s derived `Default`
+- **mutates**: nothing
+
+### `GatewayMetricsFile`
+- **type**: struct
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Minimal deserialization target for `hsip-gateway`'s persisted `~/.hsip/gateway_metrics.json` — only reads the `blocked_trackers` field (defaulted to 0 if absent), ignoring the rest of `hsip_gateway::metrics::GatewayMetrics`'s shape. A separate, independently-defined struct rather than a shared dependency on the gateway crate's own type.
+- **called_by**: `read_blocked_trackers`
+
+### `gateway_metrics_path`
+- **type**: function
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Resolves `~/.hsip/gateway_metrics.json` — the same path `hsip-gateway::metrics::metrics_path` computes independently (duplicated logic, not a shared constant).
+- **outputs**: `PathBuf`
+- **called_by**: `read_blocked_trackers`
+- **mutates**: nothing
+
+### `read_blocked_trackers`
+- **type**: function
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Reads and parses the gateway's metrics file to get the real `blocked_trackers` count; returns `0` on any read/parse failure (a missing file is silent, a malformed one logs to stderr first).
+- **outputs**: `u64`
+- **calls**: `gateway_metrics_path`, `fs::read_to_string`, `serde_json::from_str`
+- **called_by**: `snapshot_status`
+- **mutates**: nothing
+
+### `snapshot_status`
+- **type**: function
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Builds a `Status` snapshot — marked with a `TODO: wire to real session metrics later` comment, since `protected`/`active_sessions`/`egress_peer`/byte counters/`path` are all hardcoded placeholder values. The one real field is `blocked_trackers`, sourced from the actual gateway metrics file.
+- **outputs**: `Status`
+- **calls**: `chrono::Utc::now`, `read_blocked_trackers`
+- **called_by**: `http::serve` (initial state), `http::get_status` is not itself calling this — it reads from `AppState`'s already-set snapshot
+- **mutates**: nothing
+
+### `http::RESPONSE_HMAC_KEY`
+- **type**: variable (constant)
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Hardcoded HMAC-SHA256 key used to sign every daemon HTTP response for basic integrity — the literal value ends in `"-CHANGE-IN-PRODUCTION"`, i.e. explicitly a placeholder, not meant to be trusted in real deployments.
+- **called_by**: `http::sign_response`
+
+### `http::SignedResponse`
+- **type**: struct
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Generic response envelope: the actual `data`, an HMAC-SHA256 `signature` (hex), and a fixed `sig_alg` label — wraps every daemon HTTP response.
+- **called_by**: `http::create_signed_response`
+
+### `http::sign_response`
+- **type**: function
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Serializes `data` to JSON and computes an HMAC-SHA256 over those bytes keyed by `RESPONSE_HMAC_KEY`, hex-encoded.
+- **inputs**: `data: &T where T: Serialize`
+- **outputs**: `Result<String, String>`
+- **calls**: `serde_json::to_vec`, `HmacSha256::new_from_slice`/`update`/`finalize`, `hex::encode`
+- **called_by**: `http::create_signed_response`
+- **mutates**: nothing
+
+### `http::create_signed_response`
+- **type**: function
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Wraps any serializable `data` into a `SignedResponse` and turns it into an Axum response; on a signing failure, returns a `500` with an `{"error":"signature_failed"}` body instead of panicking.
+- **inputs**: `data: T where T: Serialize`
+- **outputs**: `axum::response::Response`
+- **calls**: `sign_response`, `Json::into_response`
+- **called_by**: every `http::get_*`/`post_*` route handler in this module
+- **mutates**: nothing
+
+### `http::GrantRequest` / `http::GrantResponse` / `http::RevokeRequest` / `http::ReputationResponse` / `http::SessionView`
+- **type**: struct
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Request/response body shapes for the daemon's stub consent-grant/revoke, reputation, and session-listing endpoints — most are placeholders backing `TODO`-marked handler logic, not real functionality yet.
+- **called_by**: their respective `http::post_*`/`get_*` handlers
+
+### `http::serve`
+- **type**: function (async)
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Builds the daemon's `AppState` (seeding it with `snapshot_status()`), assembles the Axum router (`/status`, `/sessions`, `/consent/grant`, `/consent/revoke`, `/reputation/:peer_id`, `/.well-known/hsip-public-key.txt`), binds `addr`, and serves forever.
+- **inputs**: `addr: SocketAddr`
+- **outputs**: `anyhow::Result<()>`
+- **calls**: `AppState::default`, `snapshot_status`, `Router::new`/`.route`/`.with_state`, `TcpListener::bind`, `axum::serve`
+- **called_by**: `hsip-cli`'s daemon-launching command (the process that runs this listens on `127.0.0.1:8787`, matching `hsip-tray.rs`'s hardcoded client address)
+- **mutates**: binds a TCP listener; sets `AppState.inner` to the initial snapshot
+
+### `http::get_status`
+- **type**: function (async)
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Returns the current `Status` snapshot from `AppState`, HMAC-signed.
+- **inputs**: `State(state): State<AppState>`
+- **outputs**: `impl IntoResponse`
+- **calls**: `create_signed_response`
+- **called_by**: Axum router (`GET /status`) — this is what `hsip-tray.rs::get_status` polls every 3 seconds
+- **mutates**: nothing
+
+### `http::get_sessions`
+- **type**: function (async)
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Returns a hardcoded single-entry fake session list — placeholder, not backed by any real session tracking.
+- **outputs**: `impl IntoResponse`
+- **calls**: `create_signed_response`
+- **called_by**: Axum router (`GET /sessions`)
+- **mutates**: nothing
+
+### `http::post_consent_grant`
+- **type**: function (async)
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Stub consent-grant handler — per its own `TODO`, fabricates a fake capability token string (`"cap::{grantee}/{purpose}::{expires_ms}"`) rather than calling a real token issuer.
+- **inputs**: `Json(req): Json<GrantRequest>`
+- **outputs**: `impl IntoResponse`
+- **calls**: `create_signed_response`
+- **called_by**: Axum router (`POST /consent/grant`)
+- **mutates**: nothing
+
+### `http::post_consent_revoke`
+- **type**: function (async)
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Stub consent-revoke handler — per its own `TODO`, doesn't actually kill any session; just echoes back `{"ok": true, "revoked_for": peer_id}`.
+- **inputs**: `Json(req): Json<RevokeRequest>`
+- **outputs**: `impl IntoResponse`
+- **calls**: `create_signed_response`
+- **called_by**: Axum router (`POST /consent/revoke`)
+- **mutates**: nothing
+
+### `http::get_reputation`
+- **type**: function (async)
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: Stub reputation lookup — per its own `TODO`, always returns `score: 0` regardless of `peer_id`, not backed by `hsip-reputation::Store`.
+- **inputs**: `Path(peer_id): Path<String>`
+- **outputs**: `impl IntoResponse`
+- **calls**: `create_signed_response`
+- **called_by**: Axum router (`GET /reputation/:peer_id`)
+- **mutates**: nothing
+
+### `http::get_public_key`
+- **type**: function (async)
+- **file**: `crates/hsip-cli/src/daemon/mod.rs`
+- **purpose**: RFC 8615 `.well-known` endpoint serving the local identity's public key from `~/.hsip/identity.pub` as plain text; if the file doesn't exist yet, returns a helpful placeholder body explaining how to generate one via `hsip-cli keygen`, still as a `200` rather than an error. Unlike every other handler in this module, its response is **not** HMAC-wrapped via `create_signed_response` — it returns raw plain text directly.
+- **outputs**: `impl IntoResponse`
+- **calls**: `fs::read_to_string`
+- **called_by**: Axum router (`GET /.well-known/hsip-public-key.txt`)
+- **mutates**: nothing (reads the identity public-key file)
+
+---
+
+## `crates/hsip-cli/src/bin/hsip-tray.rs`
+
+A separate small binary (`hsip-tray`) implementing a system-tray icon that polls the `daemon/mod.rs` HTTP status endpoint every 3 seconds over a raw `TcpStream` (no `reqwest`/HTTP-client crate) and colors itself red/yellow/green based on protection and blocking state.
+
+### `Status` (tray)
+- **type**: struct
+- **file**: `crates/hsip-cli/src/bin/hsip-tray.rs`
+- **purpose**: Deserialization target for the daemon's `/status` JSON body — an independently-defined mirror of `daemon::Status`, not a shared type (this binary doesn't depend on the daemon module's own struct). Several fields are `#[allow(dead_code)]`/unused beyond deserialization.
+- **called_by**: `get_status`
+
+### `solid_icon`
+- **type**: function
+- **file**: `crates/hsip-cli/src/bin/hsip-tray.rs`
+- **purpose**: Builds a flat-color square RGBA icon of the given size/color for the tray (used to build the red/green/yellow status icons once at startup).
+- **inputs**: `width: u32`, `height: u32`, `rgba: [u8; 4]`
+- **outputs**: `tray_icon::Icon`
+- **calls**: `tray_icon::Icon::from_rgba`
+- **called_by**: `main` (tray)
+- **mutates**: nothing
+
+### `get_status` (tray)
+- **type**: function
+- **file**: `crates/hsip-cli/src/bin/hsip-tray.rs`
+- **purpose**: Connects to the daemon at hardcoded `127.0.0.1:8787`, sends a raw `GET /status HTTP/1.1` request with `Connection: close`, reads the full response, splits off the body after the header terminator, and parses it as `Status` JSON. A raw hand-rolled HTTP client rather than using an HTTP library — brittle (assumes `Connection: close` and reads to EOF) but adequate for this local-only, single-purpose polling use.
+- **outputs**: `Result<Status>`
+- **calls**: `TcpStream::connect`, `stream.write_all`, `stream.read_to_string`, `serde_json::from_str`
+- **called_by**: `main` (tray, polling loop)
+- **mutates**: opens a TCP connection
+
+### `main` (tray)
+- **type**: function
+- **file**: `crates/hsip-cli/src/bin/hsip-tray.rs`
+- **purpose**: Builds the tray icon (starting red/"starting…"), then loops forever every 3 seconds: on a successful status fetch, picks red (`!protected`), yellow (any of `blocked_connections`/`blocked_ips`/`blocked_trackers` > 0 — active threats being blocked), or green (protected, nothing currently blocked) and updates the tray icon/tooltip accordingly; on a connection failure, shows red "OFFLINE - Daemon not running." Runs forever — this binary has no exit path other than process termination.
+- **outputs**: `Result<()>` (never actually returns under normal operation — the loop is infinite)
+- **calls**: `solid_icon`, `TrayIconBuilder::new`/`.build`, `get_status`, `tray.set_icon`/`set_tooltip`, `thread::sleep`
+- **called_by**: Rust runtime (binary entry point)
+- **mutates**: the tray icon/tooltip; blocks the thread in a poll loop
+
+### `run_tray_ui`
+- **type**: function
+- **file**: `crates/hsip-cli/src/bin/hsip-tray.rs`
+- **purpose**: Dead placeholder (`#[allow(dead_code)]`) — its own comment says "move your existing tray setup/start code here"; currently just sleeps in an hour-long loop forever and is never called from `main`.
+- **outputs**: `anyhow::Result<()>` (never returns under normal operation)
+- **calls**: `std::thread::sleep`
+- **called_by**: nothing (dead code)
+- **mutates**: blocks the thread
+
+---
