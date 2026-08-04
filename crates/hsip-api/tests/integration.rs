@@ -962,12 +962,14 @@ async fn test_decisions_list_reports_agent_name_and_filters_by_agent_and_time() 
         .expect("predicta decision present");
     assert_eq!(predicta_row["agent_key_id"], predicta_id);
     assert_eq!(predicta_row["agent_name"], "predicta");
+    assert_eq!(predicta_row["agent_type"], "ai_agent");
     let manual_row = list
         .iter()
         .find(|d| d["strategy_id"] == "from-manual")
         .expect("manual decision present");
     assert_eq!(manual_row["agent_key_id"], manual_id);
     assert_eq!(manual_row["agent_name"], "manual-trader");
+    assert_eq!(manual_row["agent_type"], "ai_agent");
 
     // Filtered by agent: only that agent's decision comes back.
     let filtered_res = app

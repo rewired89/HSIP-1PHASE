@@ -107,6 +107,11 @@ pub struct DecisionSummary {
     /// The friendly name given when that connection was created (e.g.
     /// "Predicta"), if it still exists. `None` for a since-revoked key.
     pub agent_name: Option<String>,
+    /// That connection's `api_keys.agent_type` ('human' | 'service' |
+    /// 'ai_agent'), `None` for a since-revoked key. Lets a non-technical
+    /// reviewer see "AI agent" vs "human" at a glance without needing the
+    /// technical bundle explained to them.
+    pub agent_type: Option<String>,
 }
 
 /// Query params for `GET /v1/decisions` — all optional, all narrow the
@@ -486,7 +491,7 @@ pub async fn list(
     let rows = sqlx::query(
         "SELECT d.id, d.decision_type, d.model_version, d.strategy_id, d.event_hash, d.prev_hash,
                 d.timestamp_iso, d.anchor_id, d.merkle_index, d.accountable_key_signature,
-                d.agent_key_id, k.name
+                d.agent_key_id, k.name, k.agent_type
          FROM decisions d LEFT JOIN api_keys k ON d.agent_key_id = k.id
          WHERE d.tenant_id = $1
            AND ($2 IS NULL OR d.agent_key_id = $2)
@@ -522,6 +527,7 @@ pub async fn list(
                     .unwrap_or(false),
                 agent_key_id: r.try_get(10)?,
                 agent_name: r.try_get(11)?,
+                agent_type: r.try_get(12)?,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;

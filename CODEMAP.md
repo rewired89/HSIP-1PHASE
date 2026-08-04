@@ -2710,7 +2710,7 @@ its `payload_hash`.
 ### `DecisionSummary`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: Row shape for `GET /v1/decisions` listing. `accountable_key_verified: bool` — whether `accountable_key_signature` was supplied and verifies, derived from whether the stored `decisions.accountable_key_signature` column is non-empty. `agent_key_id: String` (the `api_keys.id` of the connection that recorded this decision — distinct from `accountable_key`, which is caller-asserted and may be shared across several connections in the same tenant) and `agent_name: Option<String>` (that connection's friendly name, `None` if since revoked) let a caller answer "which named agent did this" without a second lookup — added so the dashboard's Decisions views could show/filter by agent instead of just a raw key.
+- **purpose**: Row shape for `GET /v1/decisions` listing. `accountable_key_verified: bool` — whether `accountable_key_signature` was supplied and verifies, derived from whether the stored `decisions.accountable_key_signature` column is non-empty. `agent_key_id: String` (the `api_keys.id` of the connection that recorded this decision — distinct from `accountable_key`, which is caller-asserted and may be shared across several connections in the same tenant), `agent_name: Option<String>` (that connection's friendly name), and `agent_type: Option<String>` (`'human'|'service'|'ai_agent'`) — all three `None`/absent-friendly-name for a since-revoked key — let a caller answer "which named agent, of what kind, did this" without a second lookup. Added so the dashboard's Decisions views could show/filter by agent and render a plain "AI agent" vs "Human" label instead of just a raw key.
 - **called_by**: `list`
 
 ### `ListDecisionsQuery`
@@ -2760,7 +2760,7 @@ its `payload_hash`.
 ### `list` (decisions)
 - **type**: function (async handler)
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: `GET /v1/decisions` — lists the tenant's decisions, newest first, optionally narrowed by `ListDecisionsQuery` (`?agent_key_id=`, `?since_ms=`, `?until_ms=`). `LEFT JOIN`s `api_keys` on `agent_key_id` to resolve each row's `agent_name` in the same query rather than a per-row lookup; a since-revoked connection still lists its past decisions, just with `agent_name: null`. Each optional filter is expressed as `($N IS NULL OR col = $N)` in one fixed query rather than building SQL dynamically, so it still works identically on both `sqlx::Any` backends.
+- **purpose**: `GET /v1/decisions` — lists the tenant's decisions, newest first, optionally narrowed by `ListDecisionsQuery` (`?agent_key_id=`, `?since_ms=`, `?until_ms=`). `LEFT JOIN`s `api_keys` on `agent_key_id` to resolve each row's `agent_name`/`agent_type` in the same query rather than a per-row lookup; a since-revoked connection still lists its past decisions, just with both `null`. Each optional filter is expressed as `($N IS NULL OR col = $N)` in one fixed query rather than building SQL dynamically, so it still works identically on both `sqlx::Any` backends.
 - **inputs**: `State(state)`, `tenant: TenantId`, `Query(filter): Query<ListDecisionsQuery>`
 - **outputs**: `ApiResult<Json<Vec<DecisionSummary>>>`
 - **called_by**: Axum router
@@ -5840,12 +5840,24 @@ Simple-mode ("For Everyone") counterpart to `Decisions.jsx`, under the "AI Decis
 ### `DecisionRow`
 - **type**: function (React component)
 - **file**: `dashboard/src/pages/DecisionsSimple.jsx`
-- **purpose**: One decision's plain-language summary row for the Simple-mode list — deliberately less technical than Expert mode's raw hash/signature display. Shows a `🤖 <agent name>` badge (from `d.agent_name`, falling back to "Unknown connection" for a since-revoked key) next to the decision type, so a row is identifiable by *which* connected agent recorded it without opening the technical-detail panel.
-- **inputs**: `d: object` (decision record — now includes `agent_key_id`/`agent_name` from `GET /v1/decisions`), `apiKey: string`
+- **purpose**: One decision's plain-language summary row for the Simple-mode list — deliberately less technical than Expert mode's raw hash/signature display. Collapsed row shows a `🤖 <agent name> · <AI agent|Human|Service>` badge (from `d.agent_name`/`d.agent_type`, falling back to "Unknown connection" for a since-revoked key) plus an absolute, human-readable date (`formatDateTime`) alongside the relative one. Expanding a row opens a plain-language "Who / What / When / Status" fact block *before* the existing prose/JSON — meant to be readable by a non-technical reviewer (e.g. a compliance officer or executive) with nobody explaining the crypto to them. `toggle()` now auto-runs `verify()` against the freshly-fetched proof (passed directly as a `bundle` argument, since React state isn't updated synchronously) so the "Status" line shows a real, independently-checked verdict — genuine/tampered — the instant the row opens, not only after a manual click; the existing "Double-check it's genuine" button still works as an on-demand re-check (`onClick={() => verify()}`, explicitly no-arg since React would otherwise pass the click event as `bundle`).
+- **inputs**: `d: object` (decision record — now includes `agent_key_id`/`agent_name`/`agent_type` from `GET /v1/decisions`), `apiKey: string`
 - **outputs**: JSX
-- **calls**: `request` (as needed for detail expansion)
+- **calls**: `request` (as needed for detail expansion), `formatDateTime`, `timeAgo`
 - **called_by**: `DecisionsSimple`
 - **mutates**: nothing
+
+### `formatDateTime`
+- **type**: function
+- **file**: `dashboard/src/pages/DecisionsSimple.jsx`
+- **purpose**: Formats an ISO timestamp into an absolute, locale-formatted date+time (e.g. "August 4, 2026 at 1:45 PM") via `Date.toLocaleString({dateStyle:'long', timeStyle:'short'})`. Added because `timeAgo` alone ("4 minutes ago") is meaningless once a review happens days or months later — a real audit/compliance read needs the actual date.
+- **called_by**: `DecisionRow`
+
+### `AGENT_TYPE_LABELS`
+- **type**: const (module-level)
+- **file**: `dashboard/src/pages/DecisionsSimple.jsx`
+- **purpose**: Maps `api_keys.agent_type` (`'ai_agent'|'human'|'service'`) to a plain-English label ("AI agent"/"Human"/"Service") for display in `DecisionRow`.
+- **called_by**: `DecisionRow`
 
 ### `ConnectSimpleDialog`
 - **type**: function (React component)

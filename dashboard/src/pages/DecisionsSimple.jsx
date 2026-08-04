@@ -18,6 +18,17 @@ function timeAgo(iso) {
   return `${Math.floor(hours / 24)} day${Math.floor(hours / 24) !== 1 ? 's' : ''} ago`;
 }
 
+// Absolute, human-readable date — e.g. "August 4, 2026 at 1:45 PM".
+// timeAgo() above is still useful for a quick recency scan, but a real
+// audit/compliance review needs the actual date, not "4 minutes ago"
+// (which is meaningless days or months later).
+function formatDateTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'long', timeStyle: 'short' });
+}
+
+const AGENT_TYPE_LABELS = { ai_agent: 'AI agent', human: 'Human', service: 'Service' };
+
 // ── One decision, plain-language by default, technical detail on demand ──────
 
 function DecisionRow({ d, apiKey }) {
@@ -27,31 +38,44 @@ function DecisionRow({ d, apiKey }) {
   const [verifyResult, setVerifyResult] = useState(null);
   const [verifying, setVerifying] = useState(false);
   const agentLabel = d.agent_name || 'Unknown connection';
+  const agentTypeLabel = AGENT_TYPE_LABELS[d.agent_type] || null;
 
   async function toggle() {
     if (!open && !proof) {
       setLoading(true);
-      try { setProof(await request('GET', `/v1/decisions/${d.id}/proof`, null, apiKey)); }
+      try {
+        const p = await request('GET', `/v1/decisions/${d.id}/proof`, null, apiKey);
+        setProof(p);
+        // Auto-verify immediately — a non-technical reviewer needs the real
+        // verdict (genuine vs. tampered) the moment they open a row, not an
+        // extra button to know to click first.
+        await verify(p);
+      }
       catch (e) { alert(e.message); }
       setLoading(false);
     }
     setOpen(o => !o);
   }
 
-  async function verify() {
-    if (!proof) return;
+  // `bundle` lets `toggle()` above verify the just-fetched proof directly
+  // (React state updates aren't visible synchronously, so `proof` itself
+  // would still be null here otherwise). The manual "Double-check" button
+  // calls this with no argument, falling back to the already-loaded `proof`.
+  async function verify(bundle) {
+    const b = bundle || proof;
+    if (!b) return;
     setVerifying(true);
     try {
       const body = {
-        envelope: proof.envelope,
-        event_hash: proof.event_hash,
-        signature: proof.signature,
-        issuer_verify_key: proof.issuer_verify_key,
-        ...(proof.merkle_root ? {
-          merkle_root: proof.merkle_root,
-          inclusion_proof: proof.inclusion_proof,
-          anchor_signature: proof.anchor_signature,
-          anchor_verify_key: proof.anchor_verify_key,
+        envelope: b.envelope,
+        event_hash: b.event_hash,
+        signature: b.signature,
+        issuer_verify_key: b.issuer_verify_key,
+        ...(b.merkle_root ? {
+          merkle_root: b.merkle_root,
+          inclusion_proof: b.inclusion_proof,
+          anchor_signature: b.anchor_signature,
+          anchor_verify_key: b.anchor_verify_key,
         } : {}),
       };
       setVerifyResult(await request('POST', '/v1/decisions/verify', body, apiKey));
@@ -73,10 +97,12 @@ function DecisionRow({ d, apiKey }) {
                 background: '#2d3748', color: '#90cdf4', whiteSpace: 'nowrap',
               }}
             >
-              🤖 {agentLabel}
+              🤖 {agentLabel}{agentTypeLabel ? ` · ${agentTypeLabel}` : ''}
             </span>
           </div>
-          <span className="simple-decision-sub">{d.strategy_id} · {timeAgo(d.timestamp_iso)}</span>
+          <span className="simple-decision-sub">
+            {d.strategy_id} · {formatDateTime(d.timestamp_iso)} ({timeAgo(d.timestamp_iso)})
+          </span>
         </div>
         <span className={`badge ${d.anchored ? 'granted' : 'pending'}`}>
           {d.anchored ? '✓ Locked & verified' : '🔒 Locked, finishing up…'}
@@ -88,12 +114,45 @@ function DecisionRow({ d, apiKey }) {
           {loading && <p className="empty">Checking…</p>}
           {!loading && proof && (
             <>
+              {/* The whole record, in plain language — meant to be readable
+                  by someone non-technical with nobody explaining it to them. */}
+              <div
+                style={{
+                  display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: '1rem', rowGap: '0.5rem',
+                  fontSize: '0.9rem', padding: '0.85rem', borderRadius: '6px',
+                  background: '#1a202c', marginBottom: '1rem',
+                }}
+              >
+                <span style={{ color: '#718096' }}>Who</span>
+                <span>{agentLabel}{agentTypeLabel ? ` (${agentTypeLabel})` : ' (unknown type — connection was later removed)'}</span>
+                <span style={{ color: '#718096' }}>What</span>
+                <span style={{ textTransform: 'capitalize' }}>{d.decision_type.replace(/[._]/g, ' ')} · {d.strategy_id}</span>
+                <span style={{ color: '#718096' }}>When</span>
+                <span>{formatDateTime(d.timestamp_iso)}</span>
+                <span style={{ color: '#718096' }}>Status</span>
+                <span style={{
+                  color: verifying ? '#a0aec0'
+                    : verifyResult?.error ? '#fc8181'
+                    : verifyResult?.valid ? '#68d391'
+                    : verifyResult ? '#fc8181'
+                    : undefined,
+                  fontWeight: 'bold',
+                }}>
+                  {verifying
+                    ? 'Checking…'
+                    : verifyResult?.error ? `⚠ Could not verify (${verifyResult.error})`
+                    : verifyResult?.valid ? '✓ Genuine and untampered'
+                    : verifyResult ? '✗ Something is wrong with this record'
+                    : (proof.anchored ? '✓ Locked, tamper-evident' : '🔒 Still finishing up')}
+                </span>
+              </div>
+
               <p style={{ color: '#a0aec0', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
                 {proof.anchored
                   ? 'This decision is cryptographically signed and locked into a tamper-evident record. Nobody — including HSIP — can quietly change or delete it.'
                   : 'This decision is already signed. HSIP is still finishing the extra step that makes deletion detectable — check back shortly.'}
               </p>
-              <button className="primary" onClick={verify} disabled={verifying}>
+              <button className="primary" onClick={() => verify()} disabled={verifying}>
                 {verifying ? 'Checking…' : "Double-check it's genuine"}
               </button>
               {verifyResult && (
