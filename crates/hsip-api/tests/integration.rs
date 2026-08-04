@@ -858,6 +858,164 @@ async fn test_decision_attestation_sign_anchor_verify_end_to_end() {
     assert_eq!(tamper_json["event_hash_matches"], false);
 }
 
+/// `GET /v1/decisions` must report which named connection recorded each
+/// decision (`agent_key_id`/`agent_name`), and its `?agent_key_id=`/
+/// `?since_ms=`/`?until_ms=` filters must actually narrow the results —
+/// not just be accepted and ignored.
+#[tokio::test]
+async fn test_decisions_list_reports_agent_name_and_filters_by_agent_and_time() {
+    use sha2::{Digest, Sha256};
+
+    let (app, key) = test_app().await;
+
+    let ident_res = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/identity")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ident_json = body_json(ident_res.into_body()).await;
+    let accountable_key = ident_json["verify_key"].as_str().unwrap().to_string();
+
+    // Two distinct connections in the same tenant — this is exactly the
+    // "Predicta" / "manual-trader" distinction the dashboard's agent
+    // filter needs, and it's a different thing from `accountable_key`
+    // (which both share, since identity is per-tenant not per-key).
+    async fn create_agent_key(app: &axum::Router, owner_key: &str, name: &str) -> (String, String) {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/keys")
+                    .header(header::AUTHORIZATION, bearer(owner_key))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"name": name, "agent_type": "ai_agent"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let json = body_json(res.into_body()).await;
+        (
+            json["id"].as_str().unwrap().to_string(),
+            json["key"].as_str().unwrap().to_string(),
+        )
+    }
+
+    let (predicta_id, predicta_key) = create_agent_key(&app, &key, "predicta").await;
+    let (manual_id, manual_key) = create_agent_key(&app, &key, "manual-trader").await;
+
+    async fn record_decision(
+        app: &axum::Router,
+        agent_key: &str,
+        accountable_key: &str,
+        tag: &str,
+    ) {
+        let payload_hash = hex::encode(Sha256::digest(tag.as_bytes()));
+        let body = serde_json::json!({
+            "accountable_key": accountable_key,
+            "model_version": "v1",
+            "strategy_id": tag,
+            "decision_type": "trade.order",
+            "payload_hash": payload_hash,
+        });
+        let res = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/decisions")
+                    .header(header::AUTHORIZATION, bearer(agent_key))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    record_decision(&app, &predicta_key, &accountable_key, "from-predicta").await;
+    record_decision(&app, &manual_key, &accountable_key, "from-manual").await;
+
+    // Unfiltered: both decisions come back, each correctly labeled with
+    // the connection that actually recorded it.
+    let list_res = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/decisions")
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_json = body_json(list_res.into_body()).await;
+    let list = list_json.as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    let predicta_row = list
+        .iter()
+        .find(|d| d["strategy_id"] == "from-predicta")
+        .expect("predicta decision present");
+    assert_eq!(predicta_row["agent_key_id"], predicta_id);
+    assert_eq!(predicta_row["agent_name"], "predicta");
+    let manual_row = list
+        .iter()
+        .find(|d| d["strategy_id"] == "from-manual")
+        .expect("manual decision present");
+    assert_eq!(manual_row["agent_key_id"], manual_id);
+    assert_eq!(manual_row["agent_name"], "manual-trader");
+
+    // Filtered by agent: only that agent's decision comes back.
+    let filtered_res = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/decisions?agent_key_id={predicta_id}"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let filtered_json = body_json(filtered_res.into_body()).await;
+    let filtered = filtered_json.as_array().unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0]["agent_name"], "predicta");
+
+    // Filtered by a future time window: nothing yet should have happened.
+    let future_ms = hsip_api::db::now_ms() + 60_000;
+    let future_res = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/v1/decisions?since_ms={future_ms}"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let future_json = body_json(future_res.into_body()).await;
+    assert_eq!(future_json.as_array().unwrap().len(), 0);
+
+    // Filtered by a window covering "since the beginning of this test":
+    // both decisions should still be there.
+    let past_ms = hsip_api::db::now_ms() - 60_000;
+    let past_res = app
+        .oneshot(
+            Request::get(format!("/v1/decisions?since_ms={past_ms}"))
+                .header(header::AUTHORIZATION, bearer(&key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let past_json = body_json(past_res.into_body()).await;
+    assert_eq!(past_json.as_array().unwrap().len(), 2);
+}
+
 /// Two decisions from the same tenant must carry unrelated-looking public
 /// keys (unlinkable to an outside observer without the tenant's root),
 /// neither signature-verifying key may equal the tenant's root identity

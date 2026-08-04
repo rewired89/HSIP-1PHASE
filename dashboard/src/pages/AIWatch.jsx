@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { request } from '../api';
 
-const BASE_URL = 'http://127.0.0.1:7777';
+// Dynamic, not hardcoded: this must match whatever origin the dashboard
+// itself is being served from (7474 desktop, 3000 server mode, or
+// whatever port an embedded/production/Docker deployment actually uses)
+// — a fixed port here would silently break in every mode but the one
+// it happened to be written against.
+const BASE_URL = window.location.origin;
 
 function formatActivity(ms) {
   if (!ms) return 'No activity recorded';

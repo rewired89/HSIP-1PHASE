@@ -2710,7 +2710,13 @@ its `payload_hash`.
 ### `DecisionSummary`
 - **type**: struct
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: Row shape for `GET /v1/decisions` listing. `accountable_key_verified: bool` — whether `accountable_key_signature` was supplied and verifies, derived from whether the stored `decisions.accountable_key_signature` column is non-empty.
+- **purpose**: Row shape for `GET /v1/decisions` listing. `accountable_key_verified: bool` — whether `accountable_key_signature` was supplied and verifies, derived from whether the stored `decisions.accountable_key_signature` column is non-empty. `agent_key_id: String` (the `api_keys.id` of the connection that recorded this decision — distinct from `accountable_key`, which is caller-asserted and may be shared across several connections in the same tenant) and `agent_name: Option<String>` (that connection's friendly name, `None` if since revoked) let a caller answer "which named agent did this" without a second lookup — added so the dashboard's Decisions views could show/filter by agent instead of just a raw key.
+- **called_by**: `list`
+
+### `ListDecisionsQuery`
+- **type**: struct
+- **file**: `crates/hsip-api/src/routes/decisions.rs`
+- **purpose**: Query-param extractor for `GET /v1/decisions`: `agent_key_id: Option<String>` (narrow to one connection), `since_ms`/`until_ms: Option<i64>` (epoch-ms time window, matching `decisions.created_at`'s own storage format). All optional — omitting all three preserves the prior unfiltered-list behavior exactly.
 - **called_by**: `list`
 
 ### `ProofStepDto`
@@ -2754,8 +2760,8 @@ its `payload_hash`.
 ### `list` (decisions)
 - **type**: function (async handler)
 - **file**: `crates/hsip-api/src/routes/decisions.rs`
-- **purpose**: `GET /v1/decisions` — lists the tenant's decisions, newest first.
-- **inputs**: `State(state)`, `tenant: TenantId`
+- **purpose**: `GET /v1/decisions` — lists the tenant's decisions, newest first, optionally narrowed by `ListDecisionsQuery` (`?agent_key_id=`, `?since_ms=`, `?until_ms=`). `LEFT JOIN`s `api_keys` on `agent_key_id` to resolve each row's `agent_name` in the same query rather than a per-row lookup; a since-revoked connection still lists its past decisions, just with `agent_name: null`. Each optional filter is expressed as `($N IS NULL OR col = $N)` in one fixed query rather than building SQL dynamically, so it still works identically on both `sqlx::Any` backends.
+- **inputs**: `State(state)`, `tenant: TenantId`, `Query(filter): Query<ListDecisionsQuery>`
 - **outputs**: `ApiResult<Json<Vec<DecisionSummary>>>`
 - **called_by**: Axum router
 - **mutates**: nothing
@@ -5228,6 +5234,11 @@ Navigation is a **Simple/Expert mode toggle**, not progressive disclosure — th
 
 ## `dashboard/src/pages/AIWatch.jsx`
 
+### `BASE_URL`
+- **type**: const
+- **file**: `dashboard/src/pages/AIWatch.jsx`
+- **purpose**: The absolute origin used in copy-paste setup snippets (Siri Shortcut URL, Claude Desktop system prompt, capabilities URL) shown to the user for connecting an external AI. `window.location.origin` — dynamic, not a fixed port, so it's correct whether the dashboard is served from 7474 (desktop), 3000 (server mode), or an embedded/production/Docker port. Previously hardcoded to `http://127.0.0.1:7777` — the wrong port for every deployment mode this project actually documents — which silently broke every one of these copy-paste snippets. Real bug, found and fixed alongside the Decisions-page agent-filter work below.
+
 ### `formatActivity`
 - **type**: function
 - **file**: `dashboard/src/pages/AIWatch.jsx`
@@ -5829,8 +5840,8 @@ Simple-mode ("For Everyone") counterpart to `Decisions.jsx`, under the "AI Decis
 ### `DecisionRow`
 - **type**: function (React component)
 - **file**: `dashboard/src/pages/DecisionsSimple.jsx`
-- **purpose**: One decision's plain-language summary row (agent name, decision type, when) for the Simple-mode list — deliberately less technical than Expert mode's raw hash/signature display.
-- **inputs**: `d: object` (decision record), `apiKey: string`
+- **purpose**: One decision's plain-language summary row for the Simple-mode list — deliberately less technical than Expert mode's raw hash/signature display. Shows a `🤖 <agent name>` badge (from `d.agent_name`, falling back to "Unknown connection" for a since-revoked key) next to the decision type, so a row is identifiable by *which* connected agent recorded it without opening the technical-detail panel.
+- **inputs**: `d: object` (decision record — now includes `agent_key_id`/`agent_name` from `GET /v1/decisions`), `apiKey: string`
 - **outputs**: JSX
 - **calls**: `request` (as needed for detail expansion)
 - **called_by**: `DecisionsSimple`
@@ -5846,13 +5857,19 @@ Simple-mode ("For Everyone") counterpart to `Decisions.jsx`, under the "AI Decis
 - **called_by**: `DecisionsSimple`
 - **mutates**: DB via API (`api_keys`)
 
+### `TIME_WINDOWS`
+- **type**: const (module-level)
+- **file**: `dashboard/src/pages/DecisionsSimple.jsx`
+- **purpose**: Maps the time-window filter's option values (`'all' | '24h' | '7d' | '30d'`) to a millisecond duration (or `null` for "all"), used to compute `since_ms` for `GET /v1/decisions`.
+- **called_by**: `DecisionsSimple`'s `loadDecisions`
+
 ### `DecisionsSimple`
 - **type**: function (React component, default export)
 - **file**: `dashboard/src/pages/DecisionsSimple.jsx`
-- **purpose**: The "AI Decisions" tab in Simple ("For Everyone") mode — lists decisions via `DecisionRow`, offers the same "+ Connect" agent-registration flow as Expert mode's `Decisions.jsx` via `ConnectSimpleDialog`, without anchor/proof internals.
+- **purpose**: The "AI Decisions" tab in Simple ("For Everyone") mode — lists decisions via `DecisionRow`, offers the same "+ Connect" agent-registration flow as Expert mode's `Decisions.jsx` via `ConnectSimpleDialog`, without anchor/proof internals. Now also fetches `GET /v1/agents` (`loadAgents`) to populate an "All agents" / named-agent filter dropdown, and a time-window dropdown (`TIME_WINDOWS`) — both drive query params (`agent_key_id`, `since_ms`) on `GET /v1/decisions`, re-fetching (and restarting the 10s poll) whenever either filter changes, so a bank/business user can answer "what did this specific agent do in this specific window" instead of scrolling an unfiltered feed.
 - **inputs**: `apiKey: string`
 - **outputs**: JSX
-- **calls**: `request`, `timeAgo`
+- **calls**: `request`, `timeAgo`, `loadAgents`
 - **called_by**: `App` (Simple mode, `ai-decisions` tab)
 - **mutates**: nothing directly (delegates to `ConnectSimpleDialog` for key creation)
 

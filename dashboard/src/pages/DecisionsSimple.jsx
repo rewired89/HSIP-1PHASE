@@ -26,6 +26,7 @@ function DecisionRow({ d, apiKey }) {
   const [loading, setLoading] = useState(false);
   const [verifyResult, setVerifyResult] = useState(null);
   const [verifying, setVerifying] = useState(false);
+  const agentLabel = d.agent_name || 'Unknown connection';
 
   async function toggle() {
     if (!open && !proof) {
@@ -63,7 +64,18 @@ function DecisionRow({ d, apiKey }) {
       <div className="simple-decision-summary" onClick={toggle}>
         <span className="simple-decision-icon">📈</span>
         <div className="simple-decision-main">
-          <strong>{d.decision_type.replace(/[._]/g, ' ')}</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <strong>{d.decision_type.replace(/[._]/g, ' ')}</strong>
+            <span
+              title="Which connected agent recorded this decision"
+              style={{
+                fontSize: '0.7rem', padding: '0.1rem 0.5rem', borderRadius: '999px',
+                background: '#2d3748', color: '#90cdf4', whiteSpace: 'nowrap',
+              }}
+            >
+              🤖 {agentLabel}
+            </span>
+          </div>
           <span className="simple-decision-sub">{d.strategy_id} · {timeAgo(d.timestamp_iso)}</span>
         </div>
         <span className={`badge ${d.anchored ? 'granted' : 'pending'}`}>
@@ -212,29 +224,57 @@ client.record_decision(
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 
+const TIME_WINDOWS = {
+  all: null,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d':  7  * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
+
 export default function DecisionsSimple({ apiKey }) {
   const [identity, setIdentity] = useState(null);
   const [decisions, setDecisions] = useState([]);
+  const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showConnect, setShowConnect] = useState(false);
   const [desc, setDesc] = useState('');
   const [recording, setRecording] = useState(false);
   const [justRecorded, setJustRecorded] = useState(false);
+  const [filterAgent, setFilterAgent] = useState('all');
+  const [filterWindow, setFilterWindow] = useState('all');
 
   useEffect(() => {
     loadIdentity();
+    loadAgents();
+  }, []);
+
+  // Re-fetch whenever a filter changes, and keep polling on the current filter.
+  useEffect(() => {
     loadDecisions();
     const id = setInterval(loadDecisions, 10_000);
     return () => clearInterval(id);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterAgent, filterWindow]);
 
   async function loadIdentity() {
     try { setIdentity(await request('POST', '/v1/identity', null, apiKey)); } catch {}
   }
 
+  async function loadAgents() {
+    try {
+      const data = await request('GET', '/v1/agents', null, apiKey);
+      setAgents(Array.isArray(data) ? data : []);
+    } catch {}
+  }
+
   async function loadDecisions() {
     try {
-      const data = await request('GET', '/v1/decisions', null, apiKey);
+      const params = new URLSearchParams();
+      if (filterAgent !== 'all') params.set('agent_key_id', filterAgent);
+      const windowMs = TIME_WINDOWS[filterWindow];
+      if (windowMs) params.set('since_ms', String(Date.now() - windowMs));
+      const qs = params.toString();
+      const data = await request('GET', `/v1/decisions${qs ? `?${qs}` : ''}`, null, apiKey);
       setDecisions(Array.isArray(data) ? data : []);
     } catch {}
     setLoading(false);
@@ -336,10 +376,40 @@ export default function DecisionsSimple({ apiKey }) {
       </div>
 
       <div className="card">
-        <h2>Recent decisions</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <h2 style={{ margin: 0 }}>Recent decisions</h2>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <select
+              className="connect-input"
+              style={{ marginBottom: 0, width: 'auto' }}
+              value={filterAgent}
+              onChange={e => setFilterAgent(e.target.value)}
+            >
+              <option value="all">All agents</option>
+              {agents.map(a => (
+                <option key={a.key_id} value={a.key_id}>{a.name}</option>
+              ))}
+            </select>
+            <select
+              className="connect-input"
+              style={{ marginBottom: 0, width: 'auto' }}
+              value={filterWindow}
+              onChange={e => setFilterWindow(e.target.value)}
+            >
+              <option value="all">All time</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
+          </div>
+        </div>
         {loading && <p className="empty">Loading…</p>}
         {!loading && decisions.length === 0 && (
-          <p className="empty">Nothing yet — try the box above, or connect a trading bot.</p>
+          <p className="empty">
+            {(filterAgent !== 'all' || filterWindow !== 'all')
+              ? 'Nothing matches this filter — try widening it.'
+              : 'Nothing yet — try the box above, or connect a trading bot.'}
+          </p>
         )}
         <div className="simple-decision-list">
           {decisions.map(d => <DecisionRow key={d.id} d={d} apiKey={apiKey} />)}

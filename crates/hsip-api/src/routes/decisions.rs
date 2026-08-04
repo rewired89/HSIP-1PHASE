@@ -19,7 +19,7 @@
 //! whole point of the feature.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     Json,
 };
@@ -100,6 +100,23 @@ pub struct DecisionSummary {
     pub anchor_id: Option<String>,
     pub merkle_index: Option<i64>,
     pub accountable_key_verified: bool,
+    /// The `api_keys.id` of the connection that recorded this decision —
+    /// distinct from `accountable_key`, which is caller-asserted metadata
+    /// and may be shared across several connections in the same tenant.
+    pub agent_key_id: String,
+    /// The friendly name given when that connection was created (e.g.
+    /// "Predicta"), if it still exists. `None` for a since-revoked key.
+    pub agent_name: Option<String>,
+}
+
+/// Query params for `GET /v1/decisions` — all optional, all narrow the
+/// same tenant-scoped list. `since_ms`/`until_ms` are millisecond epoch
+/// timestamps, matching `decisions.created_at`'s own storage format.
+#[derive(Deserialize)]
+pub struct ListDecisionsQuery {
+    pub agent_key_id: Option<String>,
+    pub since_ms: Option<i64>,
+    pub until_ms: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -459,16 +476,28 @@ pub async fn record(
 }
 
 /// `GET /v1/decisions` — list this tenant's decisions, newest first.
+/// Optionally narrowed via query params: `?agent_key_id=...` to one
+/// connection, and/or `?since_ms=...&until_ms=...` to a time window.
 pub async fn list(
     State(state): State<AppState>,
     tenant: TenantId,
+    Query(filter): Query<ListDecisionsQuery>,
 ) -> ApiResult<Json<Vec<DecisionSummary>>> {
     let rows = sqlx::query(
-        "SELECT id, decision_type, model_version, strategy_id, event_hash, prev_hash,
-                timestamp_iso, anchor_id, merkle_index, accountable_key_signature
-         FROM decisions WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 200",
+        "SELECT d.id, d.decision_type, d.model_version, d.strategy_id, d.event_hash, d.prev_hash,
+                d.timestamp_iso, d.anchor_id, d.merkle_index, d.accountable_key_signature,
+                d.agent_key_id, k.name
+         FROM decisions d LEFT JOIN api_keys k ON d.agent_key_id = k.id
+         WHERE d.tenant_id = $1
+           AND ($2 IS NULL OR d.agent_key_id = $2)
+           AND ($3 IS NULL OR d.created_at >= $3)
+           AND ($4 IS NULL OR d.created_at <= $4)
+         ORDER BY d.created_at DESC LIMIT 200",
     )
     .bind(&tenant.0)
+    .bind(filter.agent_key_id)
+    .bind(filter.since_ms)
+    .bind(filter.until_ms)
     .fetch_all(&state.db)
     .await?;
 
@@ -491,6 +520,8 @@ pub async fn list(
                 accountable_key_verified: accountable_key_signature
                     .map(|s| !s.is_empty())
                     .unwrap_or(false),
+                agent_key_id: r.try_get(10)?,
+                agent_name: r.try_get(11)?,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
