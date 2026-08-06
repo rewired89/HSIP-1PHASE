@@ -137,8 +137,12 @@ function ReceiveDialog({ apiKey, contacts, onClose }) {
   return (
     <div className="connect-dialog">
       <div className="connect-dialog-inner" style={{ maxWidth: 520 }}>
-        <h3>Receive a message</h3>
-        <p className="connect-hint">Paste the full message you received from someone using HSIP.</p>
+        <h3>Verify a message</h3>
+        <p className="connect-hint">
+          HSIP never delivers messages for you — paste the signed text someone sent you
+          through email, Slack, text, or any other channel, and HSIP will check it's genuinely
+          theirs and unaltered.
+        </p>
         <textarea className="connect-input" rows={6}
           placeholder="Paste the HSIP message here…"
           value={raw} onChange={e => { setRaw(e.target.value); tryParse(e.target.value); }}
@@ -331,8 +335,8 @@ function Thread({ contact, messages, myKey, apiKey, contacts, onSent }) {
       <div className="thread-messages">
         {thread.length === 0 && (
           <div className="thread-empty">
-            <p>No messages yet with {contact.nickname}.</p>
-            <p>Type below, sign it, then share the proof with them so they can verify it.</p>
+            <p>Nothing signed with {contact.nickname} yet.</p>
+            <p>Write below to sign it, then copy it and send it to them yourself (email, Slack, wherever) — HSIP doesn't deliver it for you.</p>
           </div>
         )}
         {thread.map(m => (
@@ -364,17 +368,17 @@ function Thread({ contact, messages, myKey, apiKey, contacts, onSent }) {
             {uploading ? '⏳' : '📎'}
           </button>
           <textarea className="compose-input"
-            placeholder={`Message ${contact.nickname}…`}
+            placeholder={`Write something to sign for ${contact.nickname}…`}
             value={text} rows={2}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
           />
-          <button className="compose-send" onClick={send} disabled={busy || !text.trim()}>
+          <button className="compose-send" onClick={send} disabled={busy || !text.trim()} title="Sign (does not send)">
             {busy ? '…' : '✍️'}
           </button>
         </div>
         <p className="compose-hint">
-          Tap ✍️ to sign. Then <strong>Copy last message to share</strong> and send it to {contact.nickname} via any channel — they paste it into HSIP to verify.
+          Tap ✍️ to sign it — this does <strong>not</strong> send anything. Then click <strong>Copy last message to share</strong> and deliver it to {contact.nickname} yourself, through whatever channel you'd already trust. They paste it into their own HSIP to verify it's really from you.
         </p>
       </div>
     </div>
@@ -459,7 +463,7 @@ export default function Messages({ apiKey }) {
             + Add contact
           </button>
           <button className="sidebar-btn" onClick={() => setShowReceive(true)}>
-            📥 Receive
+            📥 Verify a message
           </button>
         </div>
         <div className="contact-list">
@@ -493,18 +497,21 @@ export default function Messages({ apiKey }) {
       <div className="msg-main">
         {!selectedContact ? (
           <div className="msg-empty-state">
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>💬</div>
-            <h3>Secure Messages</h3>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔏</div>
+            <h3>Signed Messages</h3>
             <p>
-              Every message is signed with your private key — mathematical proof
-              of exactly what was said and when. Useful in disputes, contracts, or court.
+              HSIP doesn't send messages for you — it signs your text with your private key,
+              giving you mathematical proof of exactly what was said and when. You still deliver
+              it yourself (email, Slack, text, court filing, wherever) and the recipient verifies
+              it's genuinely yours and unaltered. Useful for NDAs, contracts, and anything you may
+              need to prove later.
             </p>
             <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button className="primary" onClick={() => setShowAdd(true)}>
                 + Add a contact
               </button>
               <button className="consumer-reset-btn" onClick={() => setShowReceive(true)}>
-                📥 Receive a message
+                📥 Verify a message
               </button>
             </div>
           </div>
