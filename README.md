@@ -24,6 +24,12 @@ curl -sSf https://raw.githubusercontent.com/rewired89/HSIP-1PHASE/main/install.s
 brew tap rewired89/hsip https://github.com/rewired89/HSIP-1PHASE && brew install hsip
 ```
 
+## Try it live — no install
+
+A hosted sandbox instance is running at **[hsip-1phase-production-c45d.up.railway.app](https://hsip-1phase-production-c45d.up.railway.app)**. Click **"Try it free"** on the sign-in screen for an isolated tenant and a 24-hour trial API key — no download, no account. Full self-serve API walkthrough: [`docs/SANDBOX_QUICKSTART.md`](docs/SANDBOX_QUICKSTART.md). Swagger UI for the live instance: [`/docs`](https://hsip-1phase-production-c45d.up.railway.app/docs).
+
+This is a public demo for evaluation, not a production endpoint — trial keys expire in 24 hours and this deployment is not covered by any uptime guarantee. For production use, run your own instance (Quick install above, or [Deploy to Railway](DEPLOYMENT.md#deploy-to-railway--hosted-demo) for your own hosted copy).
+
 ---
 
 ## Why this exists — right now

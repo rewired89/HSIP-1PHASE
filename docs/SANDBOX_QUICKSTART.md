@@ -9,7 +9,7 @@ Each request to `/v1/sandbox/provision` gives you an isolated tenant and a
 ## Step 1 — Get a trial key
 
 ```bash
-curl -X POST https://demo.hsip.io/v1/sandbox/provision
+curl -X POST https://hsip-1phase-production-c45d.up.railway.app/v1/sandbox/provision
 ```
 
 Response:
@@ -18,10 +18,10 @@ Response:
   "api_key": "hsip_a3f9...",
   "expires_at": "2026-06-21T14:32:00Z",
   "expires_at_ms": 1750516320000,
-  "base_url": "https://demo.hsip.io",
+  "base_url": "https://hsip-1phase-production-c45d.up.railway.app",
   "note": "Trial key expires in 24 hours. Production licensing: sanchezleal1989@gmail.com",
   "quickstart": {
-    "step1_sign_message": "curl -X POST https://demo.hsip.io/v1/messages/sign ...",
+    "step1_sign_message": "curl -X POST https://hsip-1phase-production-c45d.up.railway.app/v1/messages/sign ...",
     "step2_get_identity": "...",
     "step3_view_audit_trail": "...",
     "step4_grant_consent": "...",
@@ -33,7 +33,7 @@ Response:
 Copy your `api_key` and set it:
 ```bash
 export KEY="hsip_a3f9..."
-export BASE="https://demo.hsip.io"
+export BASE="https://hsip-1phase-production-c45d.up.railway.app"
 ```
 
 ---

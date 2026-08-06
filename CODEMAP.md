@@ -5639,7 +5639,7 @@ Static data module, not logic — HSIP's consumer-facing tracker knowledge base,
 ### `ReceiveDialog`
 - **type**: function (React component)
 - **file**: `dashboard/src/pages/Messages.jsx`
-- **purpose**: Modal dialog for pasting and verifying an "Alibi proof" from a contact.
+- **purpose**: Modal dialog for pasting and verifying a signed message a contact sent through some other channel (email/Slack/etc.) — HSIP never delivers it; copy updated to say this explicitly instead of implying an inbox.
 - **inputs**: `onClose: function`
 - **outputs**: JSX
 - **calls**: `parseProof`, `request`
@@ -5669,7 +5669,7 @@ Static data module, not logic — HSIP's consumer-facing tracker knowledge base,
 ### `Thread`
 - **type**: function (React component)
 - **file**: `dashboard/src/pages/Messages.jsx`
-- **purpose**: Renders the message thread for a selected contact.
+- **purpose**: Renders the signed-message history for a selected contact and the compose box; signing (✍️) does not send anything — copy now says so — the user must copy and deliver the signed text themselves via "Copy last message to share."
 - **inputs**: `contact: object`, `messages: array`, `onSend: function`
 - **outputs**: JSX
 - **calls**: `Bubble`
