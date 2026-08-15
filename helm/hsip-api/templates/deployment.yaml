@@ -35,17 +35,17 @@ spec:
               value: {{ .Values.env.PORT | quote }}
             - name: RUST_LOG
               value: {{ .Values.env.RUST_LOG | quote }}
-            - name: HSIP_DB_PATH
-              value: "/data/hsip_api.db"
+            - name: DATABASE_URL
+              value: {{ .Values.env.DATABASE_URL | quote }}
           livenessProbe:
             httpGet:
-              path: /metrics
+              path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /metrics
+              path: /health
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10

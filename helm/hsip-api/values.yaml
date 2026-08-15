@@ -34,7 +34,9 @@ persistence:
 env:
   PORT: "3000"
   RUST_LOG: "hsip_api=info"
-  # HSIP_DB_PATH is set automatically to /data/hsip_api.db
+  # SQLite on the persistent volume by default. Point this at a
+  # postgres://... URL instead for a shared/HA deployment.
+  DATABASE_URL: "sqlite:/data/hsip.db?mode=rwc"
 
 # Prometheus scraping
 podAnnotations:
