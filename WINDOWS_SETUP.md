@@ -39,7 +39,7 @@ cat config.toml
 
 ```powershell
 # Build release binary
-cargo build --release --bin hsip-api
+cargo build --release -p hsip-api --features hsip-api/embed-dashboard
 
 # Run server
 .\target\release\hsip-api.exe
@@ -63,7 +63,7 @@ cargo build --release --bin hsip-api
 Invoke-WebRequest http://localhost:3000/health
 
 # Get admin key (shown on first run)
-$adminKey = Get-Content hsip_admin_key.txt
+$adminKey = Get-Content "$env:APPDATA\HSIP\admin.key"
 
 # Create identity
 Invoke-RestMethod -Method POST `
@@ -190,7 +190,7 @@ nssm start HSIP-API
 
 ```powershell
 # Test health endpoint
-$adminKey = Get-Content hsip_admin_key.txt
+$adminKey = Get-Content "$env:APPDATA\HSIP\admin.key"
 $start = Get-Date
 
 1..100 | ForEach-Object {
@@ -312,7 +312,7 @@ $env:RUST_LOG = "debug"
 openssl rand -hex 32 > hsip_master_key.bin
 
 # Build
-cargo build --release --bin hsip-api
+cargo build --release -p hsip-api --features hsip-api/embed-dashboard
 
 # Run
 .\target\release\hsip-api.exe

@@ -48,7 +48,7 @@ cargo run -p hsip-api
 cd dashboard && npm run dev
 ```
 
-Dashboard dev server runs at `http://localhost:5173` and proxies API calls to `:7777`.
+Dashboard dev server runs at `http://localhost:3001` and proxies `/v1/*` API calls to `http://localhost:7474` (desktop mode's default port — see `dashboard/vite.config.js` if you're running the API in server mode against `config.toml` instead, which defaults to port 3000).
 
 ### Run tests
 
@@ -56,25 +56,27 @@ Dashboard dev server runs at `http://localhost:5173` and proxies API calls to `:
 cargo test --workspace
 ```
 
-All 238 tests must pass before submitting a PR.
+The full workspace test suite must pass before submitting a PR — don't rely on a hardcoded test count here, it grows with every feature and would only go stale; `cargo test --workspace` itself is the source of truth. First build compiles `hsip-verify`'s Z3 dependency from source (~8 min, one-time, cached afterward) — see `CLAUDE.md`'s "Including hsip-verify in the Build" if that surprises you.
 
 ---
 
 ## Project Structure
 
 ```
-crates/
-  hsip-api/        REST API server (main entry point)
-  hsip-core/       Cryptographic primitives
+crates/            17 crates total — see CLAUDE.md's "Crate Map" for the full table
+  hsip-api/        REST API server (main entry point) — core, do not break
+  hsip-core/       Cryptographic primitives, no I/O — core, do not break
   hsip-dns/        DNS tracker blocker
   hsip-cli/        Command-line interface
-  hsip-session/    Session management
-  hsip-auth/       Identity and authentication
-  hsip-telemetry-guard/  Telemetry blocking engine
-  ... (16 crates total)
+  hsip-mcp/        MCP server (JSON-RPC over stdio) for AI clients
+  hsip-verify/     Z3-backed formal verification of core security properties
+  hsip-intercept/  Cross-platform network interception (Windows/Android/Linux/macOS)
+  hsip-session/, hsip-net/, hsip-auth/, hsip-reputation/, hsip-gateway/,
+  hsip-regenerative/, hsip-telemetry-guard/, hsip-integration-sdk/, hsip-common/
+                   Supporting crates — stable, don't touch unless needed
 
 dashboard/         React 18 frontend (embedded in release binary)
-  src/pages/       13 UI pages
+  src/pages/       20 UI pages, split across a Simple/Expert mode toggle
   src/data/        Tracker database (trackers.js)
 
 browser-extension/ Chrome/Firefox extension

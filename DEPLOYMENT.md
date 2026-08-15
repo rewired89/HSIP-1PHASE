@@ -545,14 +545,16 @@ curl -H "Authorization: Bearer your-secret-token" \
   https://yourdomain.com/metrics
 ```
 
-**Key Metrics:**
+**Key Metrics** (see `crates/hsip-api/src/metrics.rs` for the authoritative list — this section lists the ones that matter most operationally, not every metric):
 
 - `hsip_requests_total` — Total requests by endpoint
-- `hsip_request_duration_seconds` — Request latency histogram
 - `hsip_active_tenants` — Number of active tenants
-- `hsip_credentials_issued_total` — Total credentials issued
-- `hsip_consent_grants_total` — Total consent grants
-- `hsip_rate_limit_exceeded_total` — Rate limit violations
+- `hsip_system_health_issues{severity}` — **The one to alert on first.** A gauge (not a counter — drops back to zero once resolved) covering conditions HSIP cannot recover from automatically: an incomplete master-key rotation, zero remaining root-admin keys on the node, or OTS anchor batches that gave up retrying. See "System Health" in `CLAUDE.md`.
+- `hsip_audit_write_failures_total{action}` — An audit-trail write failed after its underlying operation already succeeded (the operation itself isn't blocked on this, but a missing audit entry is otherwise invisible).
+- `hsip_auth_failures_total{reason}` — Rejected requests by reason (includes rate-limit and replay-protection rejections).
+- `hsip_credentials_issued_total`, `hsip_decisions_recorded_total`, `hsip_messages_signed_total` — throughput counters, unlabeled by design (see `CLAUDE.md`'s "Structured QA Pass" — these used to carry unbounded caller-controlled label values, a real cardinality/info-disclosure bug, fixed by dropping the labels).
+
+There is currently no request-latency histogram exposed — the "Alerting Rules" example below reflects that; don't copy an alert for a metric that doesn't exist.
 
 ### Prometheus Configuration
 
@@ -585,17 +587,22 @@ Import the HSIP Grafana dashboard (create custom dashboard with):
 groups:
   - name: hsip_alerts
     rules:
+      - alert: HSIPSystemHealthCritical
+        expr: hsip_system_health_issues{severity="critical"} > 0
+        for: 5m
+        annotations:
+          summary: "HSIP reports a critical system-health issue (incomplete key rotation, zero root admins, or similar) — see GET /v1/admin/system-health for detail"
+
       - alert: HighErrorRate
         expr: rate(hsip_requests_total{status=~"5.."}[5m]) > 0.05
         for: 5m
         annotations:
           summary: "HSIP API error rate > 5%"
 
-      - alert: HighLatency
-        expr: histogram_quantile(0.95, rate(hsip_request_duration_seconds_bucket[5m])) > 1.0
-        for: 5m
+      - alert: AuditWriteFailures
+        expr: increase(hsip_audit_write_failures_total[15m]) > 0
         annotations:
-          summary: "HSIP API p95 latency > 1s"
+          summary: "An HSIP operation succeeded but its audit-trail entry failed to write — investigate before it recurs"
 
       - alert: ServiceDown
         expr: up{job="hsip-api"} == 0
@@ -913,6 +920,7 @@ Before going live, verify:
 - [ ] Disaster recovery procedure documented and tested
 - [ ] `cargo audit` running in CI (see `.github/workflows/security-audit.yml`)
 - [ ] Load testing performed with expected traffic patterns
+- [ ] At least one active root-admin key confirmed via `GET /v1/admin/root-admins` or `hsip keys list-root-admins` — there is no recovery path from zero root admins except editing the database directly
 
 ---
 

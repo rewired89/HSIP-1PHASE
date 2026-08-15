@@ -103,10 +103,14 @@ Write-Host "  Done!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Run HSIP:" -ForegroundColor White
 Write-Host "    hsip           " -NoNewline; Write-Host "starts the server and opens your browser" -ForegroundColor Gray
-Write-Host "    hsip --help    " -NoNewline; Write-Host "CLI reference" -ForegroundColor Gray
+Write-Host "    hsip --help    " -NoNewline; Write-Host "server startup options" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  This is the hsip-api server binary. For the separate hsip-cli tool" -ForegroundColor Gray
+Write-Host "  (agent management, trust, key rotation), build it from source:" -ForegroundColor Gray
+Write-Host "    cargo build --release -p hsip-cli" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Your API key will be saved to: $env:LOCALAPPDATA\HSIP\admin.key" -ForegroundColor Gray
-Write-Host "  Docs and API reference: http://127.0.0.1:7777/docs  (once running)" -ForegroundColor Gray
+Write-Host "  Docs and API reference: http://127.0.0.1:7474/docs  (once running)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  NOTE: Open a new terminal window for PATH changes to take effect." -ForegroundColor Yellow
 Write-Host ""
