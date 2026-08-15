@@ -1,0 +1,49 @@
+replicaCount: 1
+
+image:
+  repository: hsip-api
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  host: hsip.example.com
+  tls:
+    secretName: hsip-tls
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 1Gi
+
+env:
+  PORT: "3000"
+  RUST_LOG: "hsip_api=info"
+  # HSIP_DB_PATH is set automatically to /data/hsip_api.db
+
+# Prometheus scraping
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "3000"
+  prometheus.io/path: "/metrics"
+
+# Agent anomaly thresholds (future: configmap-driven)
+agentPolicy:
+  anomalyThreshold: 100
+  revokeThreshold: 1000
+  windowSeconds: 60
