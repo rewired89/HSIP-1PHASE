@@ -12,6 +12,8 @@ members = [
     "crates/hsip-enterprise",
     "crates/hsip-policy",
     "crates/hsip-verify",
+    "crates/hsip-proof",
+    "crates/hsip-platform",
 ]
 
 exclude = [

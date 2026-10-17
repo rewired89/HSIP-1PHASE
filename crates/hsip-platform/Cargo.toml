@@ -1,0 +1,51 @@
+[package]
+name = "hsip-platform"
+version = "0.1.0"
+edition = "2021"
+description = "HSIP Prove: multi-tenant proof platform for businesses (REST API + console)"
+license = "SEE LICENSE IN LICENSE-ENTERPRISE"
+authors = ["Nyx Systems LLC"]
+
+[lib]
+name = "hsip_platform"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hsip-platform"
+path = "src/main.rs"
+
+[features]
+# Bundle console/dist into the binary. Run `npm run build` in console/ first.
+embed-console = ["rust-embed", "mime_guess"]
+
+[dependencies]
+hsip-proof = { path = "../hsip-proof" }
+axum       = "0.7"
+tokio      = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "limit", "trace", "set-header"] }
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx       = { version = ">=0.8.1, <0.9", features = ["runtime-tokio", "any", "sqlite", "postgres"] }
+uuid       = { version = "1", features = ["v4"] }
+sha2       = "0.10"
+hex        = "0.4"
+base64     = "0.22"
+rand       = "0.8"
+anyhow     = "1"
+thiserror  = "1"
+tracing    = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+argon2     = "0.5"
+dashmap    = "5"
+chacha20poly1305 = "0.10"
+hkdf       = "0.12"
+reqwest    = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
+chrono     = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rust-embed = { version = "8", optional = true }
+mime_guess = { version = "2", optional = true }
+
+[dev-dependencies]
+tower          = { version = "0.4", features = ["util"] }
+http-body-util = "0.1"
+wiremock       = "0.6"

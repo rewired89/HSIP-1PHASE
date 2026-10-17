@@ -1,0 +1,52 @@
+name: HSIP Prove
+
+on:
+  push:
+    paths:
+      - "crates/hsip-proof/**"
+      - "crates/hsip-platform/**"
+      - "console/**"
+      - ".github/workflows/prove.yml"
+  pull_request:
+    paths:
+      - "crates/hsip-proof/**"
+      - "crates/hsip-platform/**"
+      - "console/**"
+
+permissions:
+  contents: read
+
+jobs:
+  platform:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pw
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: cargo fmt -p hsip-proof -p hsip-platform -- --check
+      - run: cargo clippy -p hsip-proof -p hsip-platform --all-targets -- -D warnings
+      - run: cargo test -p hsip-proof -p hsip-platform
+      - name: PostgreSQL compatibility
+        run: cargo test -p hsip-platform --test postgres_compat -- --ignored
+        env:
+          HSP_TEST_POSTGRES_URL: postgres://postgres:pw@127.0.0.1:5432/postgres
+      - name: Console build
+        run: npm ci && npm run build
+        working-directory: console
+      - name: Release build with embedded console
+        run: cargo build --release -p hsip-platform --features embed-console

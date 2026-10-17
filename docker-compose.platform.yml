@@ -1,0 +1,38 @@
+# HSIP Prove with PostgreSQL.
+#   cp .env.platform.example .env && edit it, then:
+#   docker compose -f docker-compose.platform.yml up -d --build
+services:
+  prove:
+    build:
+      context: .
+      dockerfile: Dockerfile.platform
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://prove:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/prove
+      HSP_MASTER_KEY: ${HSP_MASTER_KEY:?set HSP_MASTER_KEY (openssl rand -hex 32)}
+      HSP_OPERATOR_KEY: ${HSP_OPERATOR_KEY:-}
+      HSP_PUBLIC_URL: ${HSP_PUBLIC_URL:-http://localhost:8080}
+      HSP_SIGNUP: ${HSP_SIGNUP:-true}
+      HSP_OTS: ${HSP_OTS:-false}
+      RUST_LOG: info
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: prove
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: prove
+    volumes:
+      - prove-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prove -d prove"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  prove-db:

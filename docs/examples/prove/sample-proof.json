@@ -1,0 +1,50 @@
+{
+  "anchor": {
+    "anchor_id": "ae311083-2074-4280-b25b-37efdb31d5db",
+    "anchor_signature": "lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==",
+    "anchor_verify_key": "3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=",
+    "anchored_at_iso": "2026-10-17T10:03:46.679Z",
+    "inclusion_proof": [
+      {
+        "hash": "ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0",
+        "position": "left"
+      },
+      {
+        "hash": "693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9",
+        "position": "right"
+      },
+      {
+        "hash": "332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc",
+        "position": "left"
+      }
+    ],
+    "leaf_count": 7,
+    "merkle_index": 5,
+    "merkle_root": "62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f",
+    "ots_proof": null,
+    "ots_status": "disabled"
+  },
+  "envelope": {
+    "action": "loan.decision",
+    "actor": "underwriting-model-v3",
+    "format": "hsip-proof/1",
+    "metadata": {
+      "region": "eu"
+    },
+    "org_id": "bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0",
+    "payload_hash": "be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1",
+    "prev_hash": "0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f",
+    "proof_id": "6d0589e0-d325-4422-90a5-56c481af6893",
+    "seq": "2",
+    "stream_id": "87a8ef8b-ff11-40f3-8641-a847d63a983c",
+    "subject": "application-1002",
+    "timestamp_iso": "2026-10-17T10:03:41.154Z",
+    "timestamp_ms": "1792231421154"
+  },
+  "event_hash": "d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b",
+  "format": "hsip-proof-bundle/1",
+  "org_name": "Acme Lending (sample)",
+  "org_verify_key": "p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=",
+  "sign_algo": "ED25519",
+  "signature": "W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg=="
+}

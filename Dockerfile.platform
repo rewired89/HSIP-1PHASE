@@ -1,0 +1,33 @@
+# HSIP Prove platform: single static-ish binary with the console embedded.
+#   docker build -f Dockerfile.platform -t hsip-prove .
+#   docker run -p 8080:8080 -v hsip-prove-data:/data hsip-prove
+
+FROM node:22-slim AS console
+WORKDIR /app/console
+COPY console/package.json console/package-lock.json ./
+RUN npm ci
+COPY console/ ./
+RUN npm run build
+
+FROM rust:1-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config build-essential \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY --from=console /app/console/dist ./console/dist
+RUN cargo build --release -p hsip-platform --features embed-console \
+    && cargo build --release -p hsip-proof
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --home-dir /data hsip
+COPY --from=build /src/target/release/hsip-platform /usr/local/bin/hsip-platform
+COPY --from=build /src/target/release/hsip-proof /usr/local/bin/hsip-proof
+USER hsip
+ENV HSP_DATA_DIR=/data HSP_BIND=0.0.0.0:8080
+VOLUME /data
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD curl -fsS http://127.0.0.1:8080/health || exit 1
+ENTRYPOINT ["hsip-platform"]
