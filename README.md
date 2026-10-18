@@ -1,147 +1,80 @@
-**HSIP**
+# HSIP
 
-Consent-based secure communication protocol with strong cryptography and explicit user authorization at the transport layer.
+**A notary for AI decisions.** HSIP gives companies tamper-evident, independently verifiable proof of what their automated systems decided and when.
 
-HSIP enforces consent through capability tokens, ensuring that communication only occurs when explicitly granted.
-Unlike application-layer solutions, HSIP embeds consent directly into the protocol itself.
+Your systems send a SHA-256 fingerprint of each decision. HSIP signs it, chains it to the previous one, batches it into a Merkle tree and anchors the root. Anyone, including an auditor, a regulator or a court expert, can then verify the record offline with open code, without trusting us. The content of your decisions never reaches HSIP.
 
-**Status: Alpha
-Platforms: Windows 10/11 (Linux & macOS planned)**
+> A proof shows that a record existed, unaltered, at a given time. It does not show the decision was right.
 
-**Features**
-🔐 Core Protocol
-Identity based on Ed25519
-Capability tokens (time-bounded, permission-scoped)
-Encrypted sessions using X25519 + ChaCha20-Poly1305
-Optional reputation-based peer filtering
-Explicit, cryptographically enforced consent
+## How it works
 
-**🔧 Included in this Release**
-Background daemon with HTTP API
-System tray indicator (Windows)
-CLI tools for debugging and testing
-Optional local gateway (for development and inspection)
+1. **Record.** `POST /v1/ingest` with the hash of a decision. Back comes a signed, chained proof.
+2. **Anchor.** Records are batched about every minute into an RFC 6962 Merkle tree. The signed root can also be timestamped on Bitcoin through OpenTimestamps.
+3. **Verify.** `hsip-proof verify proof.json` checks the signature, the hash chain and the Merkle path, offline.
+4. **Export.** Evidence packs bundle a range of records under a signed manifest, with a printable report.
 
-**Quick Start (Windows)**
-Install:
-# Download the installer from Releases
-# Run: HSIP-Setup.exe
+### Who holds the signing key
 
-Check status:
-curl http://127.0.0.1:8787/status
+By default the platform holds each organization's key. An organization can switch to **customer-held keys**: you generate the key on your own machine, register only the public key, and sign every record yourself. A breach of the platform then cannot forge your records. See [Honest limits](docs/PROVE_PLATFORM.md) for what this does and does not cover.
 
-Expected output:
-{
-  "protected": true,
-  "active_sessions": 0
-}
+## Quick start
 
-**Use Cases**
-Telemedicine – patient-controlled access to sessions and data
-IoT – device-to-device authorization with token expiration
-Finance – consent-verifiable operations (PSD2/Open Banking workflows)
-Privacy Apps – enforce user preferences cryptographically
+```powershell
+cargo run -p hsip-platform            # http://127.0.0.1:8080, console included once built
+cd console; npm install; npm run build   # build the console first
+```
 
-**Architecture Overview**
-hsip-cli             # CLI for testing and development
-  └── communicates with:
-      hsip-daemon    # Background service with HTTP API
-        ├── /status
-        ├── /sessions
-        └── /consent
+Sign up in the console, create a stream and an API key, then:
 
-hsip-tray            # System tray companion (optional)
-hsip-gateway         # Local proxy for testing use cases (optional)
+```python
+from hsip_prove import Prove
+prove = Prove("http://127.0.0.1:8080", api_key)
+prove.record({"application": "48211", "decision": "approve"},
+             stream="loan-decisions", actor="underwriting-model-v3", action="loan.decision")
+```
 
+Verify independently:
 
-**Documentation**
-Protocol Specification — docs/PROTOCOL_SPEC.md
-API Reference — docs/API_REFERENCE.md
-Examples — docs/EXAMPLES.md
+```powershell
+cargo install --path crates/hsip-proof
+hsip-proof verify proof.json
+```
 
-**Development**
-Build from source:
-git clone https://github.com/rewired89/HSIP.git
-cd HSIP
-cargo build --release
+For your own signing key: `hsip-proof keygen`, then register it in Settings, Key custody.
 
-**Run tests:**
-cargo test
+## What's in the repo
 
-**Contributions welcome.**
- See CONTRIBUTING
-.
+| Path | What it is |
+|---|---|
+| `crates/hsip-proof` | Open proof format and offline verifier (`hsip-proof`). RFC 6962 Merkle, RFC 8785 JCS, Ed25519. |
+| `crates/hsip-platform` | The multi-tenant platform server: accounts, organizations, streams, API keys, anchoring, evidence packs, plans. SQLite or PostgreSQL. |
+| `console/` | Business console and public pages (verify, shared proofs). |
+| `sdk/prove-python`, `sdk/prove-node` | Dependency-free client SDKs, with customer-held key support. |
+| `docs/` | Platform guide, proof format, audit notes, and the protocol documents below. |
+| `crates/hsip-core` and related | The HSIP consent and secure-session protocol (Ed25519, X25519, ChaCha20-Poly1305). Separate from the platform. |
 
-**Current Status**
-✔ Working
-Consent token creation/validation
-Secure session establishment
-Reputation filtering
-Background daemon + tools
-Windows integration
+## Documentation
 
-**🚧 In Progress**
-Cross-platform support (Linux/macOS)
-Developer SDKs (Python/JS)
-Extended test coverage
+- [Platform guide, configuration and honest limits](docs/PROVE_PLATFORM.md)
+- [Proof format specification](docs/PROVE_PROOF_FORMAT.md)
+- [Security self-scan and audit guide](docs/PROVE_AUDIT.md)
+- [Sample proof and evidence pack](docs/examples/prove/)
+- [Consent protocol specification](docs/PROTOCOL_SPEC.md) and [architecture](docs/PHASE2_ARCHITECTURE.md)
+- [Security policy](SECURITY.md)
 
-**📝 Planned**
-Session resumption
-Connection migration
-Multi-device identity workflow
+## Development
 
-**Security**
-HSIP is currently in alpha and not yet recommended for production deployments.
+```powershell
+cargo test -p hsip-proof -p hsip-platform
+cargo clippy -p hsip-proof -p hsip-platform --all-targets -- -D warnings
+```
 
-**Cryptography**
-Ed25519 for identity and signatures
-X25519 for key agreement
-ChaCha20-Poly1305 for authenticated encryption
+Scope Cargo commands with `-p`; the full workspace also builds unrelated crates. Contributions: see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
-**Reporting**
-Please report vulnerabilities privately to:
-nyxsystemsllc@gmail.com
+## Security
 
-**License**
-HSIP Community License (Non-Commercial)
-Free for personal, educational, research, and open-source projects
-Commercial use requires an Enterprise License from Nyx Systems LLC
-See the full license in LICENSE.
-For commercial inquiries: nyxsystemsllc@gmail.com
-
-**Contact**
-GitHub Issues: https://github.com/rewired89/HSIP/issues
-Email: nyxsystemsllc@gmail.com
-
-<<<<<<< HEAD
-**Audits:**
-- Mozilla security audit: In progress
-- Additional audits planned
-
-**Cryptography:**
-- Ed25519 (identity/signatures)
-- X25519 (key exchange)
-- ChaCha20-Poly1305 (encryption)
-
-**Report vulnerabilities:** nyxsystemsllc@gmail.com
-
----
+Cryptography: Ed25519 signatures, SHA-256, RFC 6962 Merkle trees, ChaCha20-Poly1305 for keys at rest. Report vulnerabilities privately to nyxsystemsllc@gmail.com. No independent third-party audit has been completed yet.
 
 ## License
 
-**HSIP Community License** (Non-Commercial Use Only)
-
-- ✅ **FREE for:** Personal, educational, research, and open-source projects
-- ❌ **Requires Enterprise License for:** Commercial use, business operations, paid services
-
-See [LICENSE](./LICENSE) file for full terms.
-For commercial licensing: nyxsystemsllc@gmail.com
-
----
-
-## Contact
-
-- GitHub: [Issues](https://github.com/rewired89/HSIP/issues)
-- Email: nyxsystemsllc@gmail.com
-=======
->>>>>>> 731c98a551750235e27c2d5e85a0b5798cfedc39
+HSIP Community License (non-commercial): free for personal, educational, research and open-source use. Commercial use requires an Enterprise License from Nyx Systems LLC. See [LICENSE](LICENSE). Commercial inquiries: nyxsystemsllc@gmail.com.
