@@ -77,7 +77,7 @@ The bundle's `anchor` block carries `merkle_root`, `merkle_index`, `leaf_count`,
 {
   "format": "hsip-evidence-pack/1",
   "org_name": "", "org_verify_key": "", "stream_name": "", "generated_at_iso": "",
-  "manifest": { "org_id": "", "stream_id": "", "from_ms": 0, "to_ms": 0, "event_hashes": ["..."] },
+  "manifest": { "org_id": "", "stream_id": "", "from_ms": 0, "to_ms": 0, "event_hashes": ["..."], "issuer_keys": ["base64 keys, only when proofs were signed by more than the pack key"] },
   "manifest_hash": "hex",
   "manifest_signature": "base64",
   "proofs": [ "<bundle>", "..." ]
@@ -89,7 +89,7 @@ manifest_hash      = SHA256( JCS(manifest) )
 manifest_signature = Ed25519_sign(org_key, manifest_hash)
 ```
 
-A pack verifies when: the manifest hash matches, the manifest signature verifies, `manifest.event_hashes` equals the included proofs' hashes in order (so removing or adding a record fails), every bundle verifies, all bundles share `org_verify_key`, and the records form a contiguous chain across the range.
+A pack verifies when: the manifest hash matches, the manifest signature verifies, `manifest.event_hashes` equals the included proofs' hashes in order (so removing or adding a record fails), every bundle verifies, all bundles share `org_verify_key` or, when the manifest carries `issuer_keys` (organizations that switched to customer-held keys sign some records themselves), every bundle's key is listed there, and the records form a contiguous chain across the range.
 
 ## 7. What a valid result proves, and what it does not
 

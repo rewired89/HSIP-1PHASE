@@ -82,12 +82,23 @@ pub async fn create(
     for row in &rows {
         proofs.push(engine::bundle_for(&s.db, &ProofRow::from_row(row)?, &info, &mut cache).await?);
     }
+    let mut issuer_keys: Vec<String> = Vec::new();
+    for b in &proofs {
+        if b.org_verify_key != info.verify_key && !issuer_keys.contains(&b.org_verify_key) {
+            issuer_keys.push(b.org_verify_key.clone());
+        }
+    }
+    if !issuer_keys.is_empty() && proofs.iter().any(|b| b.org_verify_key == info.verify_key) {
+        issuer_keys.push(info.verify_key.clone());
+    }
+    issuer_keys.sort();
     let manifest = PackManifest {
         org_id: org.clone(),
         stream_id: r.stream_id.clone(),
         from_ms: from,
         to_ms: to,
         event_hashes: proofs.iter().map(|b| b.event_hash.clone()).collect(),
+        issuer_keys,
     };
     let key = s
         .org_signing_key(&org)

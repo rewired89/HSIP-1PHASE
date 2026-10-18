@@ -8,7 +8,7 @@
 //
 // The record's content never leaves your process: only its SHA-256 is sent.
 
-import { createHash } from 'node:crypto'
+import { createHash, createPrivateKey, sign as edSign } from 'node:crypto'
 
 export class ProveError extends Error {
   constructor(status, code, message) {
@@ -30,11 +30,28 @@ export function hashPayload(record) {
   return createHash('sha256').update(data).digest('hex')
 }
 
+// Customer-held keys: pass `signingKey` (the private key from `hsip-proof keygen`,
+// as the JSON text or the base64 seed) and records are signed here, so the
+// platform never holds your key.
+const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex')
+
+function loadSigner(material) {
+  let m = String(material).trim()
+  if (m.startsWith('{')) m = JSON.parse(m).private_key_b64
+  return createPrivateKey({ key: Buffer.concat([PKCS8_ED25519_PREFIX, Buffer.from(m, 'base64')]), format: 'der', type: 'pkcs8' })
+}
+
+/** RFC 8785 canonical JSON for the string-only envelope, then SHA-256 hex. */
+export function eventHash(envelope) {
+  return createHash('sha256').update(canonical(envelope)).digest('hex')
+}
+
 export class Prove {
-  constructor(baseUrl, apiKey, { timeoutMs = 15000 } = {}) {
+  constructor(baseUrl, apiKey, { timeoutMs = 15000, signingKey } = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, '')
     this.apiKey = apiKey
     this.timeoutMs = timeoutMs
+    this.signer = signingKey ? loadSigner(signingKey) : null
   }
 
   async #request(method, path, body, auth = true) {
@@ -57,12 +74,41 @@ export class Prove {
   }
 
   /** Record one proof. */
-  record(record, opts) {
-    return this.#request('POST', '/v1/ingest', this.#item(record, opts))
+  async record(record, opts) {
+    const item = this.#item(record, opts)
+    if (!this.signer) return this.#request('POST', '/v1/ingest', item)
+    for (let attempt = 0; ; attempt++) {
+      const prep = await this.#request('POST', '/v1/ingest/prepare', item)
+      const env = prep.envelope
+      if (eventHash(env) !== String(prep.event_hash).toLowerCase()) throw new ProveError(0, 'tampered', "the platform's event_hash does not match its envelope")
+      for (const k of ['actor', 'action', 'subject', 'payload_hash']) {
+        if (env[k] !== item[k]) throw new ProveError(0, 'tampered', `the platform changed \`${k}\``)
+      }
+      if (canonical(env.metadata) !== canonical(item.metadata)) throw new ProveError(0, 'tampered', 'the platform changed `metadata`')
+      const signature = edSign(null, Buffer.from(prep.event_hash, 'hex'), this.signer).toString('base64')
+      try {
+        return await this.#request('POST', '/v1/ingest/commit', { ...(opts.stream ? { stream: opts.stream } : {}), envelope: env, signature })
+      } catch (e) {
+        if (e.status !== 409 || attempt >= 2) throw e // another writer moved the chain: prepare again
+      }
+    }
   }
 
   /** Record up to 100 items in order: [{ record, actor, action, ... }]. */
   async recordBatch(items, { stream } = {}) {
+    if (this.signer) {
+      const results = []
+      for (const i of items) {
+        try {
+          const r = await this.record(i.record, { ...i, stream })
+          results.push({ ok: true, proof_id: r.proof_id, seq: r.seq, event_hash: r.event_hash })
+        } catch (e) {
+          results.push({ ok: false, error: e.message })
+          break
+        }
+      }
+      return results
+    }
     const out = await this.#request('POST', '/v1/ingest/batch', {
       ...(stream ? { stream } : {}),
       items: items.map((i) => this.#item(i.record, { ...i, stream: undefined })),

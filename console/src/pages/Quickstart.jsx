@@ -71,7 +71,24 @@ export async function prove(record, { actor, action, subject = '', stream = '${s
   if (!res.ok) throw new Error((await res.json()).error?.message ?? res.statusText)
   return (await res.json()).proof_id
 }`
-          const code = { curl, python, node }[tab]
+          const own = `# Customer-held key: records are signed on your machine, the platform never sees the key.
+# 1. hsip-proof keygen > hsip-key.json      (keep it secret, back it up)
+# 2. register it once in Settings > Key custody
+
+# Python (pip install cryptography)
+from hsip_prove import Prove
+prove = Prove("${base}", os.environ["HSIP_PROVE_KEY"], signing_key_b64=open("hsip-key.json").read())
+prove.record({"application": "48211"}, actor="underwriting-model-v3", action="loan.decision", stream="${slug}")
+
+// Node 18+
+import { Prove } from './index.mjs'
+const prove = new Prove('${base}', process.env.HSIP_PROVE_KEY, { signingKey: fs.readFileSync('hsip-key.json', 'utf8') })
+await prove.record({ application: '48211' }, { actor: 'underwriting-model-v3', action: 'loan.decision', stream: '${slug}' })
+
+# Without an SDK: POST /v1/ingest/prepare (same body as /v1/ingest) returns {envelope, event_hash};
+# check event_hash against the envelope, sign its 32 bytes with Ed25519, then
+# POST /v1/ingest/commit {envelope, signature}.`
+          const code = { curl, python, node, own }[tab]
           return (
             <div className="col" style={{ gap: 16 }}>
               <Card title="1. Create a key">
@@ -80,7 +97,7 @@ export async function prove(record, { actor, action, subject = '', stream = '${s
                 {!stream && <p className="small muted" style={{ marginTop: 10 }}>You have no streams yet. Create one on the <Link to="/streams">Streams</Link> page; the examples below use the slug “{slug}”.</p>}
               </Card>
               <Card title="2. Record a proof">
-                <Tabs tabs={[['curl', 'curl'], ['python', 'Python'], ['node', 'Node.js']]} value={tab} onChange={setTab} />
+                <Tabs tabs={[['curl', 'curl'], ['python', 'Python'], ['node', 'Node.js'], ['own', 'Your own key']]} value={tab} onChange={setTab} />
                 <CodeBlock code={code} />
                 <p className="small muted" style={{ marginTop: 10 }}>Batch up to 100 records per call with <code>POST /v1/ingest/batch</code> and <code>{'{"items": [...]}'}</code>. Records in one stream are chained in the order they are accepted, so use one stream per independent system to keep write throughput high.</p>
               </Card>

@@ -45,6 +45,7 @@ const SCHEMA: &[&str] = &[
         status TEXT NOT NULL,
         signing_key_enc TEXT NOT NULL,
         verify_key_b64 TEXT NOT NULL,
+        customer_verify_key TEXT,
         created_at BIGINT NOT NULL
     )",
     "CREATE TABLE IF NOT EXISTS users (
@@ -123,6 +124,7 @@ const SCHEMA: &[&str] = &[
         created_at BIGINT NOT NULL,
         anchor_id TEXT,
         merkle_index BIGINT,
+        signer_key TEXT,
         UNIQUE (stream_id, seq),
         UNIQUE (stream_id, prev_hash)
     )",
@@ -185,9 +187,20 @@ const SCHEMA: &[&str] = &[
     )",
 ];
 
+/// Columns added after the first release. Fresh databases already have them
+/// from `SCHEMA`; for older databases the `ALTER` adds them. A "duplicate
+/// column" error just means the column is already there, so errors are ignored.
+const ADD_COLUMNS: &[&str] = &[
+    "ALTER TABLE organizations ADD COLUMN customer_verify_key TEXT",
+    "ALTER TABLE proofs ADD COLUMN signer_key TEXT",
+];
+
 pub async fn run_migrations(pool: &AnyPool) -> Result<()> {
     for stmt in SCHEMA {
         sqlx::query(stmt).execute(pool).await?;
+    }
+    for stmt in ADD_COLUMNS {
+        let _ = sqlx::query(stmt).execute(pool).await;
     }
     Ok(())
 }

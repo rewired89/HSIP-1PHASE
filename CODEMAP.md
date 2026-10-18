@@ -24,7 +24,7 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 - `crypto.rs` `encrypt_secret`/`decrypt_secret` (ChaCha20-Poly1305, HKDF), `sha256_hex`, `random_token(prefix)`, `hash_password`/`verify_password` (Argon2id), `ct_eq`.
 - `errors.rs` `ApiError` (400/401/402/403/404/409/429/500), converts sqlx/anyhow errors without leaking text.
 - `auth.rs` `Role`, `bearer`, `session_user`, `member(state, headers, org)` (404 for non-members), `Member::{require_admin,require_write,require_owner,actor}`, `api_key` (+rate limit, touches `last_used_at`), `operator`, `client_ip`.
-- `engine.rs` core. `record(state, NewProof)` validates, enforces org status + plan limit, signs with the org key, chains with retry on unique violation, bumps `usage_monthly`. mutates: `proofs`, `usage_monthly`. called_by: `routes::proofs`, `audit::log`. `bundle_for(db, row, org, cache)` rebuilds a bundle with Merkle path (`AnchorCache` per request). `fetch_proof`, `org_info`, `month_usage`, `ProofRow`, `ProofSummary`, `PROOF_COLS`.
+- `engine.rs` core. `record(state, NewProof)` validates, enforces org status + plan limit, signs with the org key, chains with retry on unique violation, bumps `usage_monthly`. mutates: `proofs`, `usage_monthly`. called_by: `routes::proofs`, `audit::log`. `bundle_for(db, row, org, cache)` rebuilds a bundle with Merkle path (`AnchorCache` per request). `prepare(state, NewProof)` and `commit(...)` implement customer-held keys (the customer signs `event_hash`; `commit` verifies it against `organizations.customer_verify_key`, checks the ±300s window and that seq/prev_hash equal the current tip, then inserts with `signer_key`). `record` refuses user streams for such orgs (409). `fetch_proof`, `org_info`, `month_usage`, `ProofRow`, `ProofSummary`, `PROOF_COLS`.
 - `audit.rs` `log(state, org, actor, action, subject, detail)` best-effort proof into the org's system stream. called_by: most mutating routes.
 - `anchor.rs` OpenTimestamps client (ported from HSIP-1PHASE: `submit_digest_to`, `check_for_upgrade`, `extract_pending_calendar_uri`, `contains_bitcoin_attestation`), `run_cycle` (batch unanchored proofs into a Merkle tree, sign root with anchor key, optional OTS, atomic claim), `retry_unreachable`, `run_upgrade_cycle`, `spawn` (5 s due-check loop, 15 min upgrade loop). mutates: `anchors`, `proofs.anchor_id/merkle_index`.
 - `qb.rs` `Where` builder (`eq_s`, `cmp_i`, `contains_any`, `raw`) and `bind_args` for dynamic filters on both backends.
@@ -35,9 +35,9 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 ### routes/ (all registered in `routes/mod.rs`)
 
 - `account.rs` signup (also records a `signup` lead), login, logout, me, `create_org` (key + owner + system stream), invite preview/accept, new org. mutates: `users`, `sessions`, `organizations`, `memberships`, `streams`, `invites`.
-- `orgs.rs` get org (+ usage, role), rename, `usage`, `overview` (stats, 24 h/30 d buckets, top actions/actors), `request_plan` (lead), `request_service` (`service_request` lead, admin only), `fingerprint(vk)`.
+- `orgs.rs` get org (+ usage, role), rename, `usage`, `overview` (stats, 24 h/30 d buckets, top actions/actors), `request_plan` (lead), `request_service` (`service_request` lead, admin only), `fingerprint(vk)`, `set_custody` (owner registers a customer public key after `verify_registration`; audit `org.custody_enabled`/`rotated`; `get` returns `custody`).
 - `streams.rs` list (with stats), create (plan stream limit), update/archive (admin).
-- `proofs.rs` `ingest`, `ingest_batch`, `api_get` (API key); `console_record`, `list` (filters, paging), `get_one`, `create_share`, `list_shares`, `revoke_share`, `integrity` (recompute a stream's chain).
+- `proofs.rs` `ingest`, `ingest_prepare`, `ingest_commit`, `ingest_batch`, `api_get` (API key); `console_record`, `list` (filters, paging), `get_one`, `create_share`, `list_shares`, `revoke_share`, `integrity` (recompute a stream's chain).
 - `keys.rs` list/create/revoke API keys (admin). Raw key returned once.
 - `team.rs` members list, invite (seat limit), revoke invite, set role, remove; last-owner guards.
 - `evidence.rs` create (self-verifies before release, plan size cap), list, `pack` (JSON), `report_html`. mutates: `evidence_exports`.
@@ -58,6 +58,7 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 
 ## Other
 
+- `hsip-proof` also exposes customer-key helpers: `generate_signing_key`, `verify_key_b64`, `registration_digest`/`sign_registration`/`verify_registration`, `verify_hash_signature`, `check_prepared`; CLI `keygen`, `register-proof`. `PackManifest.issuer_keys` lists extra signer keys.
 - `sdk/prove-python/hsip_prove.py`, `sdk/prove-node/index.mjs` ingest/read/verify clients; identical `hash_payload` output across languages for ASCII keys.
 - `docs/PROVE_PLATFORM.md`, `docs/PROVE_PROOF_FORMAT.md`, `docs/examples/prove/` (real fixtures).
 - `Dockerfile.platform`, `docker-compose.platform.yml`, `.env.platform.example`, `.github/workflows/prove.yml`.

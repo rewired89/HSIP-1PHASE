@@ -39,10 +39,13 @@ pub fn api(state: AppState) -> Router {
         .route("/v1/orgs", post(account::new_org))
         // machine API (API keys)
         .route("/v1/ingest", post(proofs::ingest))
+        .route("/v1/ingest/prepare", post(proofs::ingest_prepare))
+        .route("/v1/ingest/commit", post(proofs::ingest_commit))
         .route("/v1/ingest/batch", post(proofs::ingest_batch))
         .route("/v1/proofs/:id", get(proofs::api_get))
         // organization console
         .route("/v1/orgs/:org", get(orgs::get).patch(orgs::rename))
+        .route("/v1/orgs/:org/key-custody", post(orgs::set_custody))
         .route("/v1/orgs/:org/overview", get(orgs::overview))
         .route("/v1/orgs/:org/usage", get(orgs::usage))
         .route("/v1/orgs/:org/plan-request", post(orgs::request_plan))

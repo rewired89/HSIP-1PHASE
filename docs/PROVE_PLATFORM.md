@@ -70,6 +70,9 @@ Machine API (Bearer `hsp_...`):
 ```
 POST /v1/ingest            {stream?, actor, action, subject?, payload_hash, metadata?}   ingest key
 POST /v1/ingest/batch      {stream?, items:[...]}  up to 100, recorded in order            ingest key
+POST /v1/ingest/prepare    same body as /v1/ingest; customer-held keys only: returns {envelope, event_hash}, stores nothing   ingest key
+POST /v1/ingest/commit     {stream?, envelope, signature}  customer-held keys: verifies your Ed25519 signature, then chains and stores   ingest key
+POST /v1/orgs/:org/key-custody  {verify_key, proof}  owner: register your own public key (proof from `hsip-proof register-proof`)   session
 GET  /v1/proofs/:id        full bundle + verification                                      read key
 ```
 
@@ -91,7 +94,7 @@ Errors are `{"error":{"code","message"}}`. Internal error text is logged, never 
 
 ### Honest limits
 
-1. **The platform holds each organization's signing key** (custodial). A compromised or malicious platform operator could sign new records. What bounds this: customers receive the signed bundle at ingest and can keep it, so any later server-side alteration fails against their copy; and with `HSP_OTS=true` batch roots are committed to Bitcoin, so history cannot be rewritten past the confirmation. Customer-held signing keys (BYOK or client-side signing) are the planned next step for customers who cannot accept custody.
+1. **By default the platform holds each organization's signing key** (custodial). A compromised or malicious platform operator could sign new records for such an organization. **Customer-held keys** remove this: an owner registers their own public key (Settings > Key custody), records are then signed on the customer's side via `/v1/ingest/prepare` + `/v1/ingest/commit`, and the platform never sees the private key. Limits that remain: the switch is opt-in and one-way per organization; a lost customer key cannot be recovered by us; the platform key still signs the activity log and evidence-pack manifests (the platform attests completeness, not authorship); the platform still chooses timestamps within a 5 minute window and orders records (the anchor, not the timestamp, is the evidence of time). For organizations that have not switched, what bounds custody risk: customers receive the signed bundle at ingest and can keep it, so any later server-side alteration fails against their copy; and with `HSP_OTS=true` batch roots are committed to Bitcoin, so history cannot be rewritten past the confirmation. Customer-held signing keys (BYOK or client-side signing) are the planned next step for customers who cannot accept custody.
 2. **Without `HSP_OTS`, "time" is only as trustworthy as the operator**: the anchor key is the platform's own.
 3. **Low-entropy records are guessable from their hash.** If a record is just `"approve"`, anyone can hash candidates. Include a random salt inside the hashed record (the SDKs and samples do) and keep the salt with the original.
 4. A proof shows a record existed, unaltered, at a time. It does not show the decision was right, and only covers what the customer chooses to send.

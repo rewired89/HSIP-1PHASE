@@ -46,6 +46,8 @@ export default function StreamDetail() {
     if (!s) throw new Error('Stream not found')
     return s
   }, [org.id, sid])
+  const own = useLoad(() => org.get(''), [org.id])
+  const customer = own.data?.custody?.mode === 'customer'
   const [testing, setTesting] = useState(false)
   const [tick, setTick] = useState(0)
   const [integrity, setIntegrity] = useState(null)
@@ -67,7 +69,8 @@ export default function StreamDetail() {
             {s.archived && <Badge>Archived</Badge>}
             <Link className="btn" to="/evidence" state={{ stream: s.id }}>Export evidence</Link>
             <button className="btn" onClick={check} disabled={checking}>{checking ? 'Checking…' : 'Check integrity'}</button>
-            {org.canWrite && !s.archived && <button className="btn primary" onClick={() => setTesting(true)}>Send test proof</button>}
+            {org.canWrite && !s.archived && !customer && <button className="btn primary" onClick={() => setTesting(true)}>Send test proof</button>}
+            {customer && <span className="small muted">Your own key signs here, so the console can't send test proofs. Use an SDK.</span>}
           </PageHeader>
           <div className="col" style={{ gap: 16 }}>
             <div className="grid g4">

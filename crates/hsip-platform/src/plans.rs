@@ -143,8 +143,8 @@ pub const SERVICES: &[Service] = &[
     Service {
         id: "byok",
         name: "Customer-held signing keys",
-        summary: "Your organization signs its own records so the platform never holds your key. Planned.",
-        status: "roadmap",
+        summary: "Your organization signs its own records so the platform never holds your key. Turn it on yourself in Settings.",
+        status: "available",
     },
     Service {
         id: "sso",

@@ -711,7 +711,7 @@ async fn free_signups_become_prospects_and_service_requests_reach_the_operator()
         .any(|s| s["id"] == "dedicated" && s["status"] == "available"));
     assert!(svc
         .iter()
-        .any(|s| s["id"] == "byok" && s["status"] == "roadmap"));
+        .any(|s| s["id"] == "sso" && s["status"] == "roadmap"));
     assert_eq!(meta["name"], "HSIP");
 
     // Unknown services are rejected; real ones are recorded for the operator.
@@ -792,4 +792,268 @@ async fn free_signups_become_prospects_and_service_requests_reach_the_operator()
     )
     .await;
     assert_eq!(st, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn customer_held_keys_full_flow() {
+    let e = env().await;
+    let t = signup(&e, "owner@bank.test", "Bank").await;
+    let sid = stream(&e, &t, "Loans").await;
+    let (key, _) = api_key(&e, &t, "ingest", Some(&sid)).await;
+    let ckey = hsip_proof::generate_signing_key();
+    let cvk = hsip_proof::verify_key_b64(&ckey);
+    let url = format!("/v1/orgs/{}/key-custody", t.org);
+
+    // Platform-signed record before the switch.
+    let (st, v) = ingest(&e, &key, &sid, 1).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    // Prepare is refused while the platform holds the key.
+    let prep =
+        json!({"actor":"m","action":"a","subject":"s","payload_hash":hash_of("x"),"metadata":{}});
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        "/v1/ingest/prepare",
+        Some(&key),
+        Some(prep.clone()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // Registration: wrong proof (made for another org) is rejected.
+    let bad = hsip_proof::sign_registration("someone-else", &ckey);
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &url,
+        Some(&t.token),
+        Some(json!({"verify_key": cvk, "proof": bad})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let proof = hsip_proof::sign_registration(&t.org, &ckey);
+    // Only the owner may register.
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &url,
+        None,
+        Some(json!({"verify_key": cvk, "proof": proof})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, v) = call(
+        &e.app,
+        "POST",
+        &url,
+        Some(&t.token),
+        Some(json!({"verify_key": cvk, "proof": proof})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (_, o) = call(
+        &e.app,
+        "GET",
+        &format!("/v1/orgs/{}", t.org),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    assert_eq!(o["custody"]["mode"], "customer");
+
+    // Single-step ingest is now refused.
+    let (st, _) = ingest(&e, &key, &sid, 2).await;
+    assert_eq!(st, StatusCode::CONFLICT);
+
+    // Prepare, check, sign, commit.
+    let meta = std::collections::BTreeMap::new();
+    let mut commit_body = Value::Null;
+    let mut first_id = String::new();
+    for n in 0..3 {
+        let payload = hash_of(&format!("c{n}"));
+        let (st, p) = call(&e.app, "POST", "/v1/ingest/prepare", Some(&key), Some(
+            json!({"actor":"m","action":"a","subject":"s","payload_hash":payload,"metadata":{}}))).await;
+        assert_eq!(st, StatusCode::OK, "{p}");
+        let env: hsip_proof::Envelope = serde_json::from_value(p["envelope"].clone()).unwrap();
+        hsip_proof::check_prepared(
+            &env,
+            p["event_hash"].as_str().unwrap(),
+            "m",
+            "a",
+            "s",
+            &payload,
+            &meta,
+        )
+        .unwrap();
+        let (_, sig) = hsip_proof::sign_envelope(&env, &ckey).unwrap();
+        let body = json!({"envelope": p["envelope"], "signature": sig});
+        // Signature by a different key is rejected.
+        let other = hsip_proof::generate_signing_key();
+        let (_, osig) = hsip_proof::sign_envelope(&env, &other).unwrap();
+        let (st, _) = call(
+            &e.app,
+            "POST",
+            "/v1/ingest/commit",
+            Some(&key),
+            Some(json!({"envelope": p["envelope"], "signature": osig})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        // Tampered envelope is rejected.
+        let mut tampered = p["envelope"].clone();
+        tampered["actor"] = json!("evil");
+        let (st, _) = call(
+            &e.app,
+            "POST",
+            "/v1/ingest/commit",
+            Some(&key),
+            Some(json!({"envelope": tampered, "signature": sig})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        let (st, v) = call(
+            &e.app,
+            "POST",
+            "/v1/ingest/commit",
+            Some(&key),
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        assert_eq!(v["bundle"]["org_verify_key"], cvk);
+        // Replay of the same commit is refused (chain moved on).
+        let (st, _) = call(
+            &e.app,
+            "POST",
+            "/v1/ingest/commit",
+            Some(&key),
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        if n == 0 {
+            first_id = v["proof_id"].as_str().unwrap().into();
+        }
+        commit_body = v["bundle"].clone();
+    }
+    // Public verification of a customer-signed bundle.
+    let (_, pv) = call(&e.app, "POST", "/v1/verify", None, Some(commit_body)).await;
+    assert_eq!(pv["valid"], true, "{pv}");
+
+    // A stale prepare is refused once the chain has moved.
+    let (_, p1) = call(
+        &e.app,
+        "POST",
+        "/v1/ingest/prepare",
+        Some(&key),
+        Some(prep.clone()),
+    )
+    .await;
+    let (_, p2) = call(
+        &e.app,
+        "POST",
+        "/v1/ingest/prepare",
+        Some(&key),
+        Some(prep.clone()),
+    )
+    .await;
+    let env1: hsip_proof::Envelope = serde_json::from_value(p1["envelope"].clone()).unwrap();
+    let env2: hsip_proof::Envelope = serde_json::from_value(p2["envelope"].clone()).unwrap();
+    let (_, s1) = hsip_proof::sign_envelope(&env1, &ckey).unwrap();
+    let (_, s2) = hsip_proof::sign_envelope(&env2, &ckey).unwrap();
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        "/v1/ingest/commit",
+        Some(&key),
+        Some(json!({"envelope": p1["envelope"], "signature": s1})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        "/v1/ingest/commit",
+        Some(&key),
+        Some(json!({"envelope": p2["envelope"], "signature": s2})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+
+    // Anchor, then the stored proof (mixed signers) still verifies.
+    anchor::run_cycle(&e.state, &[]).await.unwrap();
+    let (_, v) = call(
+        &e.app,
+        "GET",
+        &format!("/v1/orgs/{}/proofs/{first_id}", t.org),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    assert_eq!(v["verification"]["valid"], true, "{v}");
+    assert_eq!(v["verification"]["anchored"], true, "{v}");
+    let (_, v) = call(
+        &e.app,
+        "GET",
+        &format!("/v1/orgs/{}/streams/{sid}/integrity", t.org),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    assert_eq!(v["intact"], true, "{v}");
+
+    // Evidence pack across mixed signers verifies; swapping a signer key fails.
+    let (st, ev) = call(
+        &e.app,
+        "POST",
+        &format!("/v1/orgs/{}/evidence", t.org),
+        Some(&t.token),
+        Some(json!({"stream_id": sid})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{ev}");
+    let eid = ev["id"].as_str().unwrap();
+    let (_, pack) = call(
+        &e.app,
+        "GET",
+        &format!("/v1/orgs/{}/evidence/{eid}/pack", t.org),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    assert!(
+        pack["manifest"]["issuer_keys"].as_array().unwrap().len() == 2,
+        "{pack}"
+    );
+    let (_, pv) = call(&e.app, "POST", "/v1/verify", None, Some(pack.clone())).await;
+    assert_eq!(pv["valid"], true, "{pv}");
+    let mut forged = pack.clone();
+    let evil = hsip_proof::verify_key_b64(&hsip_proof::generate_signing_key());
+    forged["manifest"]["issuer_keys"] = json!([evil]);
+    let (_, pv) = call(&e.app, "POST", "/v1/verify", None, Some(forged)).await;
+    assert_eq!(pv["valid"], false);
+
+    // Console test-proof path is blocked too: system stream still verifies.
+    let (_, sys) = call(
+        &e.app,
+        "GET",
+        &format!("/v1/orgs/{}/streams", t.org),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    for s in sys.as_array().cloned().unwrap_or_default() {
+        if s["kind"] == "system" {
+            let id = s["id"].as_str().unwrap();
+            let (_, v) = call(
+                &e.app,
+                "GET",
+                &format!("/v1/orgs/{}/streams/{id}/integrity", t.org),
+                Some(&t.token),
+                None,
+            )
+            .await;
+            assert_eq!(v["intact"], true, "{v}");
+        }
+    }
 }

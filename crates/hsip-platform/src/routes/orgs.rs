@@ -75,11 +75,16 @@ pub async fn get(
     Path(org): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let m = auth::member(&s, &headers, &org).await?;
-    let r = sqlx::query("SELECT name, slug, plan, status, verify_key_b64, created_at FROM organizations WHERE id = $1")
+    let r = sqlx::query("SELECT name, slug, plan, status, verify_key_b64, created_at, customer_verify_key FROM organizations WHERE id = $1")
         .bind(&org).fetch_one(&s.db).await?;
     let plan_id: String = r.try_get(2)?;
     let vk: String = r.try_get(4)?;
+    let ck: Option<String> = r.try_get(6)?;
     Ok(Json(json!({
+        "custody": match &ck {
+            Some(k) => json!({ "mode": "customer", "customer_key": k, "fingerprint": fingerprint(k) }),
+            None => json!({ "mode": "platform" }),
+        },
         "org": {
             "id": org, "name": r.try_get::<String,_>(0)?, "slug": r.try_get::<String,_>(1)?,
             "plan": plan_id, "status": r.try_get::<String,_>(3)?,
@@ -319,4 +324,67 @@ pub async fn request_service(
     )
     .await;
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct CustodyReq {
+    pub verify_key: String,
+    /// Signature by `verify_key` over the registration digest, made with
+    /// `hsip-proof register-proof`. Proves you hold the private key.
+    pub proof: String,
+}
+
+/// `POST /v1/orgs/:org/key-custody` (owner): register the organization's own
+/// public key. From then on records are signed by the customer, not the
+/// platform. Registering again rotates the key; there is no way back to
+/// platform signing (old records stay valid under the key that signed them).
+pub async fn set_custody(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(org): Path<String>,
+    Json(r): Json<CustodyReq>,
+) -> ApiResult<Json<Value>> {
+    let m = auth::member(&s, &headers, &org).await?;
+    m.require_owner()?;
+    let vk = r.verify_key.trim().to_string();
+    if !hsip_proof::is_valid_verify_key(&vk) {
+        return Err(ApiError::BadRequest(
+            "verify_key must be a base64 Ed25519 public key".into(),
+        ));
+    }
+    if !hsip_proof::verify_registration(&org, &vk, r.proof.trim()) {
+        return Err(ApiError::BadRequest(
+            "the registration proof does not verify; create it with `hsip-proof register-proof`"
+                .into(),
+        ));
+    }
+    let info = crate::engine::org_info(&s.db, &org).await?;
+    if vk == info.verify_key {
+        return Err(ApiError::BadRequest(
+            "that is the platform's own key; generate your own".into(),
+        ));
+    }
+    let rotated = info.customer_key.is_some();
+    sqlx::query("UPDATE organizations SET customer_verify_key = $1 WHERE id = $2")
+        .bind(&vk)
+        .bind(&org)
+        .execute(&s.db)
+        .await?;
+    audit::log(
+        &s,
+        &org,
+        &m.actor(),
+        if rotated {
+            "org.custody_rotated"
+        } else {
+            "org.custody_enabled"
+        },
+        &fingerprint(&vk),
+        "",
+    )
+    .await;
+    Ok(Json(json!({
+        "ok": true,
+        "custody": { "mode": "customer", "customer_key": vk, "fingerprint": fingerprint(&vk) },
+    })))
 }

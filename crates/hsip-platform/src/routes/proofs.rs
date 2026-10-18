@@ -141,6 +141,67 @@ pub async fn ingest(
     Ok(Json(ingest_json(&b)))
 }
 
+/// `POST /v1/ingest/prepare` (API key, `ingest` scope): customer-held keys,
+/// step 1. Returns the unsaved envelope and its `event_hash` to sign.
+pub async fn ingest_prepare(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(r): Json<IngestReq>,
+) -> ApiResult<Json<Value>> {
+    let k = auth::api_key(&s, &headers).await?;
+    require_scope(&k, "ingest")?;
+    let stream = resolve_stream(&s, &k.org_id, k.stream_id.as_deref(), r.stream.as_deref()).await?;
+    let (envelope, event_hash) = engine::prepare(
+        &s,
+        &NewProof {
+            org_id: &k.org_id,
+            stream_id: &stream,
+            key_id: Some(&k.key_id),
+            actor: &r.item.actor,
+            action: &r.item.action,
+            subject: &r.item.subject,
+            payload_hash: &r.item.payload_hash,
+            metadata: r.item.metadata.clone(),
+        },
+    )
+    .await?;
+    Ok(Json(json!({
+        "envelope": envelope,
+        "event_hash": event_hash,
+        "sign": "Ed25519 signature over the 32 raw bytes of event_hash, base64",
+        "valid_for_seconds": engine::COMMIT_WINDOW_MS / 1000,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct CommitReq {
+    pub stream: Option<String>,
+    pub envelope: hsip_proof::Envelope,
+    pub signature: String,
+}
+
+/// `POST /v1/ingest/commit` (API key, `ingest` scope): customer-held keys,
+/// step 2. Verifies the customer's signature, then chains and stores.
+pub async fn ingest_commit(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(r): Json<CommitReq>,
+) -> ApiResult<Json<Value>> {
+    let k = auth::api_key(&s, &headers).await?;
+    require_scope(&k, "ingest")?;
+    let stream = resolve_stream(&s, &k.org_id, k.stream_id.as_deref(), r.stream.as_deref()).await?;
+    let b = engine::commit(
+        &s,
+        &k.org_id,
+        &stream,
+        Some(&k.key_id),
+        r.envelope,
+        &r.signature,
+    )
+    .await?;
+    Ok(Json(ingest_json(&b)))
+}
+
 /// `POST /v1/ingest/batch`: up to 100 items, recorded in order. A failure
 /// stops the batch so later items never land ahead of an earlier one.
 pub async fn ingest_batch(

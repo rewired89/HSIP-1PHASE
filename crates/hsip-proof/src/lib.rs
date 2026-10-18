@@ -304,6 +304,12 @@ pub struct PackManifest {
     /// Event hashes in sequence order. Hashing this list is what the org
     /// signs, so an omitted or inserted record changes the signature.
     pub event_hashes: Vec<String>,
+    /// Verify keys that signed the included proofs, when they are not all
+    /// the pack's `org_verify_key` (customer-held keys, or a stream that
+    /// switched custody). Empty for packs where one key signed everything,
+    /// and then omitted from the JSON so those packs stay byte-compatible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issuer_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -392,7 +398,7 @@ pub fn verify_pack(p: &EvidencePack) -> PackVerification {
 
     let mut invalid = Vec::new();
     let mut anchored_count = 0;
-    let mut same_org_key = true;
+    let mut issuers_ok = true;
     for b in &p.proofs {
         let v = verify_bundle(b);
         if !v.valid {
@@ -401,8 +407,13 @@ pub fn verify_pack(p: &EvidencePack) -> PackVerification {
         if v.anchored {
             anchored_count += 1;
         }
-        if b.org_verify_key != p.org_verify_key {
-            same_org_key = false;
+        let allowed = if p.manifest.issuer_keys.is_empty() {
+            b.org_verify_key == p.org_verify_key
+        } else {
+            p.manifest.issuer_keys.contains(&b.org_verify_key)
+        };
+        if !allowed {
+            issuers_ok = false;
         }
     }
     checks.push(check(
@@ -416,11 +427,18 @@ pub fn verify_pack(p: &EvidencePack) -> PackVerification {
     ));
     checks.push(check(
         "single_issuer",
-        Some(same_org_key),
-        if same_org_key {
-            "All proofs share the pack's organization key."
+        Some(issuers_ok),
+        if issuers_ok {
+            if p.manifest.issuer_keys.is_empty() {
+                "All proofs share the pack's organization key.".to_string()
+            } else {
+                format!(
+                    "Every proof is signed by one of the {} declared issuer keys.",
+                    p.manifest.issuer_keys.len()
+                )
+            }
         } else {
-            "A proof was signed under a different key than the pack's."
+            "A proof was signed under a key the signed manifest does not declare.".to_string()
         },
     ));
 
@@ -460,6 +478,115 @@ pub fn verify_pack(p: &EvidencePack) -> PackVerification {
         anchored_count,
         checks,
     }
+}
+
+// ------------------------------------------------------------ customer-held keys
+//
+// A customer generates their own Ed25519 key, registers the public half with
+// the platform, and signs every record themselves. The platform prepares the
+// envelope (sequence, previous hash, time), the customer checks it matches
+// what they asked for, signs `event_hash`, and the platform verifies, chains
+// and anchors it. The platform never sees the private key.
+
+pub const CUSTODY_DOMAIN: &str = "hsip-custody-v1";
+
+/// A fresh Ed25519 signing key from the operating system's randomness.
+#[must_use]
+pub fn generate_signing_key() -> SigningKey {
+    SigningKey::generate(&mut rand::rngs::OsRng)
+}
+
+/// Rebuilds a signing key from its base64 32-byte seed.
+#[must_use]
+pub fn signing_key_from_b64(seed_b64: &str) -> Option<SigningKey> {
+    let seed: [u8; 32] = B64.decode(seed_b64.trim()).ok()?.try_into().ok()?;
+    Some(SigningKey::from_bytes(&seed))
+}
+
+#[must_use]
+pub fn seed_b64(key: &SigningKey) -> String {
+    B64.encode(key.to_bytes())
+}
+
+#[must_use]
+pub fn verify_key_b64(key: &SigningKey) -> String {
+    B64.encode(key.verifying_key().to_bytes())
+}
+
+/// True when `vk_b64` is a well-formed Ed25519 public key.
+#[must_use]
+pub fn is_valid_verify_key(vk_b64: &str) -> bool {
+    vk_from_b64(vk_b64).is_some()
+}
+
+/// Verifies an Ed25519 signature (base64) over a 32-byte hash (hex) with a
+/// public key (base64).
+#[must_use]
+pub fn verify_hash_signature(vk_b64: &str, hash_hex: &str, sig_b64: &str) -> bool {
+    (|| {
+        let vk = vk_from_b64(vk_b64)?;
+        let sig = sig_from_b64(sig_b64)?;
+        let h: [u8; 32] = hex::decode(hash_hex).ok()?.try_into().ok()?;
+        Some(vk.verify(&h, &sig).is_ok())
+    })()
+    .unwrap_or(false)
+}
+
+/// What a customer signs to register a key: binds the key to one
+/// organization, so a signature for one org cannot register the key in
+/// another, and proves the registrant holds the private key.
+#[must_use]
+pub fn registration_digest(org_id: &str, verify_key_b64: &str) -> [u8; 32] {
+    Sha256::digest(format!("{CUSTODY_DOMAIN}|{org_id}|{verify_key_b64}").as_bytes()).into()
+}
+
+#[must_use]
+pub fn sign_registration(org_id: &str, key: &SigningKey) -> String {
+    let d = registration_digest(org_id, &verify_key_b64(key));
+    B64.encode(key.sign(&d).to_bytes())
+}
+
+#[must_use]
+pub fn verify_registration(org_id: &str, verify_key_b64: &str, sig_b64: &str) -> bool {
+    verify_hash_signature(
+        verify_key_b64,
+        &hex::encode(registration_digest(org_id, verify_key_b64)),
+        sig_b64,
+    )
+}
+
+/// The client-side safety check before signing a prepared envelope. A
+/// customer-held key must never sign a hash the platform hands over blindly:
+/// recompute it from the envelope and confirm the envelope says what the
+/// customer asked to record.
+pub fn check_prepared(
+    env: &Envelope,
+    event_hash_hex: &str,
+    actor: &str,
+    action: &str,
+    subject: &str,
+    payload_hash: &str,
+    metadata: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let recomputed = event_hash(env)
+        .map(hex::encode)
+        .map_err(|e| e.to_string())?;
+    if !recomputed.eq_ignore_ascii_case(event_hash_hex) {
+        return Err("event_hash does not match the envelope".into());
+    }
+    if env.format != ENVELOPE_FORMAT {
+        return Err("unexpected envelope format".into());
+    }
+    if env.actor != actor || env.action != action || env.subject != subject {
+        return Err("envelope actor, action or subject differs from the request".into());
+    }
+    if !env.payload_hash.eq_ignore_ascii_case(payload_hash) {
+        return Err("envelope payload_hash differs from the request".into());
+    }
+    if &env.metadata != metadata {
+        return Err("envelope metadata differs from the request".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -604,6 +731,7 @@ mod tests {
             from_ms: 0,
             to_ms: i64::MAX,
             event_hashes: proofs.iter().map(|b| b.event_hash.clone()).collect(),
+            issuer_keys: vec![],
         };
         let (mh, ms) = sign_manifest(&manifest, k).unwrap();
         EvidencePack {
@@ -659,5 +787,120 @@ mod tests {
             .checks
             .iter()
             .any(|c| c.name == "hash_chain" && c.ok == Some(false)));
+    }
+
+    #[test]
+    fn customer_key_registration_binds_key_to_org() {
+        let k = generate_signing_key();
+        let sig = sign_registration("org-1", &k);
+        let vk = verify_key_b64(&k);
+        assert!(verify_registration("org-1", &vk, &sig));
+        assert!(
+            !verify_registration("org-2", &vk, &sig),
+            "signature must not transfer to another org"
+        );
+        let other = verify_key_b64(&generate_signing_key());
+        assert!(
+            !verify_registration("org-1", &other, &sig),
+            "signature must not register someone else's key"
+        );
+        assert!(is_valid_verify_key(&vk) && !is_valid_verify_key("not-a-key"));
+        assert_eq!(
+            signing_key_from_b64(&seed_b64(&k)).unwrap().to_bytes(),
+            k.to_bytes()
+        );
+    }
+
+    #[test]
+    fn check_prepared_refuses_to_sign_a_doctored_envelope() {
+        let k = key(1);
+        let e = env(1, "");
+        let (h, _) = sign_envelope(&e, &k).unwrap();
+        let md = e.metadata.clone();
+        assert!(check_prepared(
+            &e,
+            &h,
+            &e.actor,
+            &e.action,
+            &e.subject,
+            &e.payload_hash,
+            &md
+        )
+        .is_ok());
+        // the platform swaps the action but keeps a hash that matches the swapped envelope
+        let mut evil = e.clone();
+        evil.action = "loan.approve".into();
+        let evil_hash = hex::encode(event_hash(&evil).unwrap());
+        assert!(check_prepared(
+            &evil,
+            &evil_hash,
+            &e.actor,
+            &e.action,
+            &e.subject,
+            &e.payload_hash,
+            &md
+        )
+        .is_err());
+        // the platform sends a hash that does not match the envelope
+        assert!(check_prepared(
+            &e,
+            &evil_hash,
+            &e.actor,
+            &e.action,
+            &e.subject,
+            &e.payload_hash,
+            &md
+        )
+        .is_err());
+        // payload swapped
+        let mut p = e.clone();
+        p.payload_hash = sha256_hex(b"other");
+        let ph = hex::encode(event_hash(&p).unwrap());
+        assert!(check_prepared(
+            &p,
+            &ph,
+            &e.actor,
+            &e.action,
+            &e.subject,
+            &e.payload_hash,
+            &md
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn pack_with_mixed_issuers_needs_them_declared() {
+        let (platform, customer) = (key(1), key(5));
+        let b1 = bundle(env(1, ""), &platform);
+        let b2 = bundle(env(2, &b1.event_hash), &customer);
+        let proofs = vec![b1, b2];
+        let pk = B64.encode(platform.verifying_key().to_bytes());
+        let ck = B64.encode(customer.verifying_key().to_bytes());
+        let manifest = |issuers: Vec<String>| PackManifest {
+            org_id: "org1".into(),
+            stream_id: "s1".into(),
+            from_ms: 0,
+            to_ms: i64::MAX,
+            event_hashes: proofs.iter().map(|b| b.event_hash.clone()).collect(),
+            issuer_keys: issuers,
+        };
+        let build = |m: PackManifest| {
+            let (mh, ms) = sign_manifest(&m, &platform).unwrap();
+            EvidencePack {
+                format: PACK_FORMAT.into(),
+                org_name: "Acme".into(),
+                org_verify_key: pk.clone(),
+                stream_name: "Loans".into(),
+                generated_at_iso: "2026-10-18T00:00:00Z".into(),
+                manifest: m,
+                manifest_hash: mh,
+                manifest_signature: ms,
+                proofs: proofs.clone(),
+            }
+        };
+        assert!(verify_pack(&build(manifest(vec![pk.clone(), ck.clone()]))).valid);
+        // undeclared issuer: the customer's records are not covered by the manifest's list
+        assert!(!verify_pack(&build(manifest(vec![pk.clone()]))).valid);
+        assert!(!verify_pack(&build(manifest(vec![]))).valid);
     }
 }
