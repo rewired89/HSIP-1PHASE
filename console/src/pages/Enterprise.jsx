@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api.js'
-import { useOrg } from '../auth.jsx'
+import { useAuth, useOrg } from '../auth.jsx'
 import { Badge, Card, Gate, Modal, PageHeader, useLoad, useToast } from '../ui.jsx'
 
 const STATUS = {
@@ -32,6 +32,8 @@ export function ServiceGrid({ services, onRequest }) {
 
 export default function Enterprise() {
   const org = useOrg()
+  const { status } = useAuth()
+  const signedIn = status === 'in'
   const toast = useToast()
   const st = useLoad(() => api.get('/v1/meta', { token: null }), [])
   const [req, setReq] = useState(null)
@@ -53,8 +55,17 @@ export default function Enterprise() {
   return (
     <>
       <PageHeader title="Enterprise" sub="Everything we offer beyond the self-service plans. Pick what matters and we will follow up.">
-        <Link className="btn" to="/billing">Compare plans</Link>
-        {org.isAdmin && <Link className="btn primary" to="/billing">Request Enterprise</Link>}
+        {signedIn ? (
+          <>
+            <Link className="btn" to="/billing">Compare plans</Link>
+            {org.isAdmin && <Link className="btn primary" to="/billing">Request Enterprise</Link>}
+          </>
+        ) : (
+          <>
+            <Link className="btn" to="/login">Sign in</Link>
+            <Link className="btn primary" to="/signup">Start free</Link>
+          </>
+        )}
       </PageHeader>
       <Gate state={st}>
         {(meta) => {
@@ -66,14 +77,15 @@ export default function Enterprise() {
                   <ul style={{ margin: 0, paddingLeft: 18 }}>{ent.highlights.map((h) => <li key={h}>{h}</li>)}</ul>
                   <div className="muted">
                     Custom volumes, dedicated or self-hosted deployment, and the services below. Pricing is agreed per deployment.
-                    {!org.isAdmin && <div className="note" style={{ marginTop: 10 }}>Ask an organization admin or owner to send a request.</div>}
+                    {signedIn && !org.isAdmin && <div className="note" style={{ marginTop: 10 }}>Ask an organization admin or owner to send a request.</div>}
+                    {!signedIn && <div className="note" style={{ marginTop: 10 }}>Create a free account (or sign in) to send a request. You can look around first.</div>}
                   </div>
                 </div>
               </Card>
-              <ServiceGrid services={meta.services} onRequest={org.isAdmin ? setReq : null} />
+              <ServiceGrid services={meta.services} onRequest={signedIn && org.isAdmin ? setReq : null} />
               <div className="note">
                 “Planned” items are not built yet. Registering interest helps us prioritize them, and we will not sell them as available.
-                {hasOperator && <> You have the operator key loaded: <Link to="/operator">open the operator console</Link> to see requests.</>}
+                {' '}Running HSIP yourself? <Link to="/operator">Open the admin console</Link> to see requests and prospects.
               </div>
             </div>
           )

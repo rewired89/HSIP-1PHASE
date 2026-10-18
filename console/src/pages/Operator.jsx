@@ -98,7 +98,7 @@ export default function Operator() {
   const lock = () => { try { sessionStorage.removeItem(KEY) } catch { /* ignore */ } setKey(''); setInput('') }
   return (
     <>
-      <PageHeader title="Operator console" sub="Platform-wide view for the team running HSIP. Not visible to customers." />
+      <PageHeader title="Admin console" sub="Platform-wide view for the team running HSIP: customers, free-plan prospects, leads and service requests. Not visible to customers." />
       {key ? <Console opKey={key} onLock={lock} /> : (
         <Card>
           <form className="col" style={{ maxWidth: 420 }} onSubmit={unlock}>

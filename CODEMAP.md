@@ -54,7 +54,7 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 
 - `main.jsx`, `App.jsx` router (public: landing, login, signup, invite, verify, shared proof, operator; protected: shell routes). `Shell.jsx` sidebar/topbar, theme toggle, error boundary.
 - `api.js` fetch wrapper, token in localStorage, `request/api/qs`. `auth.jsx` `AuthProvider`, `useAuth`, `useOrg` (org-bound helpers, role flags). `ui.jsx` toasts, `useLoad`, `Gate`, `ErrorBoundary`, Card/Stat/Badge/Modal/Tabs/CopyField/CodeBlock/BarChart/Meter/Checks/Verdict. `format.js`, `icons.jsx`, `styles.css` (tokens, light/dark).
-- `pages/`: `Landing` (+ `PublicFrame`, pricing from `/v1/meta`, lead form), `AuthPages`, `Overview`, `Streams`, `StreamDetail` (integrity, test proof), `Records` (`RecordsTable`), `ProofDetail`, `ProofView` (shared view + original-content check), `SharedProof`, `Verify`, `Evidence`, `ApiKeys`, `Quickstart`, `Team`, `Billing`, `Enterprise` (+ `ServiceGrid`, also on the landing page), `Activity`, `Settings`, `Operator` (prospects table, free-only filter, CSV export, leads).
+- `pages/`: `Landing` (+ `PublicFrame`, pricing from `/v1/meta`, lead form), `AuthPages`, `Overview`, `Streams`, `StreamDetail` (integrity, test proof), `Records` (`RecordsTable`), `ProofDetail`, `ProofView` (shared view + original-content check), `SharedProof`, `Verify`, `Evidence`, `ApiKeys`, `Quickstart`, `Team`, `Billing`, `Enterprise` (+ `ServiceGrid`; public route `/enterprise`, works signed out, linked from landing nav and login; `/operator` is the "Admin login"), `Activity`, `Settings`, `Operator` (prospects table, free-only filter, CSV export, leads).
 
 ## Other
 

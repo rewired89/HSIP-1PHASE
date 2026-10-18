@@ -55,6 +55,7 @@ export default function App() {
             <Route path="/signup" element={<Signup />} />
             <Route path="/invite/:token" element={<Invite />} />
             <Route path="/verify" element={<Either><Verify /></Either>} />
+            <Route path="/enterprise" element={<Either><Enterprise /></Either>} />
             <Route path="/p/:token" element={<PublicFrame><SharedProof /></PublicFrame>} />
             <Route path="/operator" element={<PublicFrame><Operator /></PublicFrame>} />
             <Route element={<Protected />}>
@@ -68,7 +69,6 @@ export default function App() {
               <Route path="/api-keys" element={<ApiKeys />} />
               <Route path="/team" element={<Team />} />
               <Route path="/billing" element={<Billing />} />
-              <Route path="/enterprise" element={<Enterprise />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

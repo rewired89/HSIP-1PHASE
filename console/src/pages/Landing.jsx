@@ -12,6 +12,7 @@ export function PublicFrame({ children }) {
       <nav className="land-nav" aria-label="Site">
         <Link to="/" className="brand"><Logo /> <span>HSIP</span></Link>
         <span className="grow" />
+        <Link to="/enterprise">Enterprise</Link>
         <Link to="/verify">Verify a proof</Link>
         <Link to="/login">Sign in</Link>
         <Link to="/signup" className="btn primary">Start free</Link>
@@ -41,8 +42,9 @@ export default function Landing() {
         <span className="grow" />
         <a href="#how">How it works</a>
         <a href="#pricing">Pricing</a>
-        <a href="#enterprise">Enterprise</a>
+        <Link to="/enterprise">Enterprise</Link>
         <Link to="/verify">Verify a proof</Link>
+        <Link to="/operator">Admin login</Link>
         <Link to="/login">Sign in</Link>
         <Link to="/signup" className="btn primary">Start free</Link>
       </nav>

@@ -52,7 +52,7 @@ export function Login() {
   const s = useSubmit(async () => { signIn(await api.post('/v1/auth/login', f, { token: null })); nav('/') })
   if (status === 'in') return <Navigate to="/" replace />
   return (
-    <Frame title="Sign in" sub="Welcome back." foot={<>New here? <Link to="/signup">Create an organization</Link></>}>
+    <Frame title="Sign in" sub="Welcome back." foot={<>New here? <Link to="/signup">Create an organization</Link><br />Running HSIP? <Link to="/operator">Admin login</Link> · <Link to="/enterprise">See Enterprise options</Link></>}>
       <form className="col" onSubmit={s.run}>
         <label className="f">Work email<input type="email" autoComplete="username" required value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
         <label className="f">Password<input type="password" autoComplete="current-password" required value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></label>
