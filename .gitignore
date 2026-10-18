@@ -81,3 +81,6 @@ tools/
 !console/package-lock.json
 !sdk/prove-node/package.json
 !docs/examples/prove/*.json
+
+# Outside-review bundles (generated)
+review-bundles/
