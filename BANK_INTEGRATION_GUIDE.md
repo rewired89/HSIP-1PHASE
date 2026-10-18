@@ -558,8 +558,6 @@ See `examples/` directory for:
 
 ### Documentation
 - Python SDK: `sdk/python/README.md`
-- iOS SDK: `sdk/ios/HSIP/README.md`
-- Android SDK: `sdk/android/hsip/README.md`
 
 ### Contact
 - Email: support@nyxsystems.com

@@ -197,8 +197,6 @@ checkStatus();
 The daemon is designed to work with the HSIP banking SDKs:
 
 - **Python SDK**: `sdk/python/hsip_banking/`
-- **iOS SDK**: `sdk/ios/` (coming soon)
-- **Android SDK**: `sdk/android/` (coming soon)
 
 These SDKs communicate with the daemon to:
 1. Sign outgoing bank messages with Ed25519 signatures

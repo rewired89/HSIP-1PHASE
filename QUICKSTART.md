@@ -270,7 +270,7 @@ Before production:
 ## Next Steps
 
 1. **Read full guide:** `BANK_INTEGRATION_GUIDE.md`
-2. **Explore examples:** `sdk/python/examples/`, `sdk/ios/HSIP/README.md`
+2. **Explore examples:** `sdk/python/examples/`
 3. **Get support:** support@nyxsystems.com
 
 ---
