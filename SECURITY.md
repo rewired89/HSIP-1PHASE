@@ -47,7 +47,6 @@ HSIP implements the following security measures:
 
 ### Security Audits
 
-See [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) for detailed security audit reports.
 
 ### Dependencies
 

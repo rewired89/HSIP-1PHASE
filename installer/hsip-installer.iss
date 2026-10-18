@@ -55,7 +55,6 @@ Source: "run-tray.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Documentation
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
-Source: "..\BUILD_INSTALLER.md"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Security Test Scripts (for advanced users)
 Source: "..\security_tests\*.py"; DestDir: "{app}\security_tests"; Flags: ignoreversion
