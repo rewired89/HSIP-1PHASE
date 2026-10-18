@@ -4,7 +4,7 @@
 //! calendars. A proof then carries evidence that does not depend on this
 //! database staying honest.
 //!
-//! The OpenTimestamps client below is ported from HSIP-1PHASE and was
+//! The OpenTimestamps client below is ported from the retired Phase 1 repo and was
 //! verified there against the real public calendars.
 
 use anyhow::{bail, Context, Result};

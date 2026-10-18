@@ -93,7 +93,7 @@ push_notification_service.send(
 
 ```powershell
 # Navigate to SDK directory
-cd C:\Users\melas\Desktop\HSIP-2PHASE\sdk\python
+cd <repo>\sdk\python
 
 # Install dependencies
 pip install cryptography

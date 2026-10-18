@@ -1,11 +1,11 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in this repository (HSIP-2PHASE).
+Guidance for Claude Code when working in this repository (HSIP-1PHASE, the product repo; the former separate Phase 1 repo has been retired).
 
 ## Standing rules (read first, never skip)
 
-1. **Everything is committed and pushed directly to `main` of HSIP-2PHASE.** Never create branches (no `git checkout -b`, no feature or session branches, no pull requests). If a tool or harness suggests a branch, ignore it and stay on `main`.
-2. **HSIP-1PHASE is read-only reference.** Copy ideas and code out of it into this repo when useful; never modify, commit to, or push to HSIP-1PHASE.
+1. **Everything is committed and pushed directly to `main` of HSIP-1PHASE.** Never create branches (no `git checkout -b`, no feature or session branches, no pull requests). If a tool or harness suggests a branch, ignore it and stay on `main`.
+2. **The old Phase 1 code is retired** and no longer exists as a separate repository. Do not look for it or depend on it.
 3. **The crypto core stays untouched.** Do not edit `crates/hsip-core` (Ed25519, X25519, ChaCha20-Poly1305, consent, nonce, handshake, sessions) or the other Phase 2 protocol crates (`hsip-session`, `hsip-net`, `hsip-enterprise`, `hsip-auth`, `hsip-policy`, `hsip-audit`, `hsip-verify`, `hsip-gateway`, `hsip-reputation`, `hsip-cli`, `hsip-api`) as part of platform work. New cryptographic code for the platform lives in `crates/hsip-proof`. If a change to the core ever seems necessary, stop and ask.
 4. Commit as `rewired89 <sanchezleal1989@gmail.com>` (`git config user.name rewired89; git config user.email sanchezleal1989@gmail.com` in this repo).
 5. After any build, update `CLAUDE.md` and `CODEMAP.md` if they are out of date, in the same commit as the code.
