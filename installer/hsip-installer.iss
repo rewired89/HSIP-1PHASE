@@ -55,7 +55,6 @@ Source: "run-tray.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Documentation
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
-Source: "RELEASE_NOTES_v0.2.1.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\BUILD_INSTALLER.md"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Security Test Scripts (for advanced users)
@@ -66,7 +65,6 @@ Source: "..\security_tests\*.md"; DestDir: "{app}\security_tests"; Flags: ignore
 [Icons]
 Name: "{group}\HSIP Status"; Filename: "{app}\{#MyAppTrayName}"
 Name: "{group}\HSIP Documentation"; Filename: "{app}\README.md"
-Name: "{group}\Release Notes"; Filename: "{app}\RELEASE_NOTES_v0.2.1.md"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 [Run]
