@@ -1,4 +1,4 @@
-# HSIP Prove: proof format
+# HSIP: proof format
 
 This is the wire format behind every proof, share link and evidence pack. It is deliberately small so that a third party can reimplement the verifier in an afternoon. The reference implementation is `crates/hsip-proof` (`hsip-proof verify <file>`); checked-in fixtures are in `docs/examples/prove/`, pinned by `crates/hsip-proof/tests/samples.rs`.
 

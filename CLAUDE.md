@@ -14,7 +14,9 @@ Guidance for Claude Code when working in this repository (HSIP-2PHASE).
 
 ## Strategic direction
 
-HSIP's Phase 2 protocol work (consent, identity, secure messaging) stays as is. The commercial product is now **HSIP Prove: a platform sold to companies that gives them tamper-evident, independently verifiable proof of what their automated systems decided and when.** Customers send SHA-256 fingerprints, the platform signs, chains, batches and anchors them, and anyone can verify the result offline with open code. We sell proof, not a protocol.
+HSIP's Phase 2 protocol work (consent, identity, secure messaging) stays as is. The commercial product is now **HSIP: a platform sold to companies that gives them tamper-evident, independently verifiable proof of what their automated systems decided and when.** Customers send SHA-256 fingerprints, the platform signs, chains, batches and anchors them, and anyone can verify the result offline with open code. We sell proof, not a protocol.
+
+The product is branded simply **HSIP** (never "HSIP Prove") in all user-facing text; crate, file and doc names (`hsip-proof`, `PROVE_*.md`) keep their names.
 
 Read `docs/PROVE_PLATFORM.md` (product, config, security model, honest limits) and `docs/PROVE_PROOF_FORMAT.md` (wire format) before changing the platform.
 

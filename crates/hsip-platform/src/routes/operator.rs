@@ -1,4 +1,4 @@
-//! Platform-operator console API (the company running HSIP Prove, not a
+//! Platform-operator console API (the company running HSIP, not a
 //! customer). Gated by `HSP_OPERATOR_KEY`; 404 when that is not configured.
 
 use axum::{
@@ -25,7 +25,11 @@ pub async fn overview(State(s): State<AppState>, headers: HeaderMap) -> ApiResul
         "SELECT o.id, o.name, o.slug, o.plan, o.status, o.created_at,
                 (SELECT COUNT(*) FROM memberships m WHERE m.org_id = o.id),
                 (SELECT COUNT(*) FROM streams st WHERE st.org_id = o.id AND st.kind = 'user'),
-                (SELECT COUNT(*) FROM proofs p WHERE p.org_id = o.id)
+                (SELECT COUNT(*) FROM proofs p WHERE p.org_id = o.id),
+                (SELECT u.email FROM memberships m JOIN users u ON u.id = m.user_id
+                   WHERE m.org_id = o.id AND m.role = 'owner' ORDER BY m.created_at ASC LIMIT 1),
+                (SELECT MAX(p.created_at) FROM proofs p
+                   WHERE p.org_id = o.id AND p.stream_id IN (SELECT id FROM streams WHERE kind = 'user'))
          FROM organizations o ORDER BY o.created_at DESC LIMIT 500",
     )
     .fetch_all(&s.db)
@@ -46,6 +50,7 @@ pub async fn overview(State(s): State<AppState>, headers: HeaderMap) -> ApiResul
             "id": id, "name": r.try_get::<String,_>(1)?, "slug": r.try_get::<String,_>(2)?, "plan": r.try_get::<String,_>(3)?,
             "status": r.try_get::<String,_>(4)?, "created_at": r.try_get::<i64,_>(5)?, "members": r.try_get::<i64,_>(6)?,
             "streams": r.try_get::<i64,_>(7)?, "proofs_total": r.try_get::<i64,_>(8)?, "proofs_month": used,
+            "owner_email": r.try_get::<Option<String>,_>(9)?, "last_proof_at": r.try_get::<Option<i64>,_>(10)?,
         }));
     }
     let users: i64 = sqlx::query("SELECT COUNT(*) FROM users")

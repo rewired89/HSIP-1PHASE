@@ -1,6 +1,6 @@
 # CODEMAP
 
-Entries cover the HSIP Prove platform code. The Phase 2 protocol crates are untouched and are not mapped here. Format: **purpose**, `calls`, `called_by`, `mutates`.
+Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched and are not mapped here. Format: **purpose**, `calls`, `called_by`, `mutates`.
 
 ## crates/hsip-proof (open format + verifier, no I/O)
 
@@ -28,21 +28,21 @@ Entries cover the HSIP Prove platform code. The Phase 2 protocol crates are unto
 - `audit.rs` `log(state, org, actor, action, subject, detail)` best-effort proof into the org's system stream. called_by: most mutating routes.
 - `anchor.rs` OpenTimestamps client (ported from HSIP-1PHASE: `submit_digest_to`, `check_for_upgrade`, `extract_pending_calendar_uri`, `contains_bitcoin_attestation`), `run_cycle` (batch unanchored proofs into a Merkle tree, sign root with anchor key, optional OTS, atomic claim), `retry_unreachable`, `run_upgrade_cycle`, `spawn` (5 s due-check loop, 15 min upgrade loop). mutates: `anchors`, `proofs.anchor_id/merkle_index`.
 - `qb.rs` `Where` builder (`eq_s`, `cmp_i`, `contains_any`, `raw`) and `bind_args` for dynamic filters on both backends.
-- `plans.rs` `PLANS`, `get(id)`, `exists(id)`; limits and display prices (placeholders).
+- `plans.rs` `PLANS`, `get(id)`, `exists(id)`; limits and display prices (placeholders). `SERVICES` enterprise catalogue (`available`/`on_request`/`roadmap`), `service_exists`.
 - `report.rs` `render(...)` printable HTML evidence report (escaped, CSP meta).
 - `ui.rs` `serve(uri, dir)` console static files (embedded with `embed-console`, else from disk), SPA fallback, no path traversal.
 
 ### routes/ (all registered in `routes/mod.rs`)
 
-- `account.rs` signup, login, logout, me, `create_org` (key + owner + system stream), invite preview/accept, new org. mutates: `users`, `sessions`, `organizations`, `memberships`, `streams`, `invites`.
-- `orgs.rs` get org (+ usage, role), rename, `usage`, `overview` (stats, 24 h/30 d buckets, top actions/actors), `request_plan` (lead), `fingerprint(vk)`.
+- `account.rs` signup (also records a `signup` lead), login, logout, me, `create_org` (key + owner + system stream), invite preview/accept, new org. mutates: `users`, `sessions`, `organizations`, `memberships`, `streams`, `invites`.
+- `orgs.rs` get org (+ usage, role), rename, `usage`, `overview` (stats, 24 h/30 d buckets, top actions/actors), `request_plan` (lead), `request_service` (`service_request` lead, admin only), `fingerprint(vk)`.
 - `streams.rs` list (with stats), create (plan stream limit), update/archive (admin).
 - `proofs.rs` `ingest`, `ingest_batch`, `api_get` (API key); `console_record`, `list` (filters, paging), `get_one`, `create_share`, `list_shares`, `revoke_share`, `integrity` (recompute a stream's chain).
 - `keys.rs` list/create/revoke API keys (admin). Raw key returned once.
 - `team.rs` members list, invite (seat limit), revoke invite, set role, remove; last-owner guards.
 - `evidence.rs` create (self-verifies before release, plan size cap), list, `pack` (JSON), `report_html`. mutates: `evidence_exports`.
 - `public.rs` health, meta, `verify`, `match_content`, `view_share`, `org_key`, `lead`. No auth on verify.
-- `operator.rs` overview, `set_plan`, `set_status` (suspend), leads. Gated by `HSP_OPERATOR_KEY`.
+- `operator.rs` overview (owner email, last proof, usage per org), `set_plan`, `set_status` (suspend), leads (`signup`, `contact`, `plan_request`, `service_request`). Gated by `HSP_OPERATOR_KEY`.
 
 ### tests/
 
@@ -54,7 +54,7 @@ Entries cover the HSIP Prove platform code. The Phase 2 protocol crates are unto
 
 - `main.jsx`, `App.jsx` router (public: landing, login, signup, invite, verify, shared proof, operator; protected: shell routes). `Shell.jsx` sidebar/topbar, theme toggle, error boundary.
 - `api.js` fetch wrapper, token in localStorage, `request/api/qs`. `auth.jsx` `AuthProvider`, `useAuth`, `useOrg` (org-bound helpers, role flags). `ui.jsx` toasts, `useLoad`, `Gate`, `ErrorBoundary`, Card/Stat/Badge/Modal/Tabs/CopyField/CodeBlock/BarChart/Meter/Checks/Verdict. `format.js`, `icons.jsx`, `styles.css` (tokens, light/dark).
-- `pages/`: `Landing` (+ `PublicFrame`, pricing from `/v1/meta`, lead form), `AuthPages`, `Overview`, `Streams`, `StreamDetail` (integrity, test proof), `Records` (`RecordsTable`), `ProofDetail`, `ProofView` (shared view + original-content check), `SharedProof`, `Verify`, `Evidence`, `ApiKeys`, `Quickstart`, `Team`, `Billing`, `Activity`, `Settings`, `Operator`.
+- `pages/`: `Landing` (+ `PublicFrame`, pricing from `/v1/meta`, lead form), `AuthPages`, `Overview`, `Streams`, `StreamDetail` (integrity, test proof), `Records` (`RecordsTable`), `ProofDetail`, `ProofView` (shared view + original-content check), `SharedProof`, `Verify`, `Evidence`, `ApiKeys`, `Quickstart`, `Team`, `Billing`, `Enterprise` (+ `ServiceGrid`, also on the landing page), `Activity`, `Settings`, `Operator` (prospects table, free-only filter, CSV export, leads).
 
 ## Other
 

@@ -9,7 +9,7 @@ function Frame({ title, sub, children, foot }) {
   return (
     <div className="auth">
       <div className="auth-art">
-        <div className="row" style={{ gap: 12 }}><Logo size={36} /><strong style={{ fontSize: 18 }}>HSIP Prove</strong></div>
+        <div className="row" style={{ gap: 12 }}><Logo size={36} /><strong style={{ fontSize: 18 }}>HSIP</strong></div>
         <h1>Evidence that holds up when someone asks, “how do we know?”</h1>
         <p>Every decision your systems make becomes a signed, hash-chained, independently verifiable record. We hold fingerprints, never your data.</p>
         <ul>

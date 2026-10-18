@@ -1,4 +1,4 @@
-//! HSIP Prove: the open proof format and its independent verifier.
+//! HSIP: the open proof format and its independent verifier.
 //!
 //! Everything here is a pure function of its inputs. A customer, auditor or
 //! regulator can run it with no account and no network, which is the whole

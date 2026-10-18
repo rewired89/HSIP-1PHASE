@@ -1,4 +1,4 @@
-//! HSIP Prove platform: multi-tenant proof service for businesses.
+//! HSIP platform: multi-tenant proof service for businesses.
 //!
 //! The cryptography lives in `hsip-proof` (open format, pure verifier).
 //! This crate adds accounts, organizations, streams, API keys, anchoring,

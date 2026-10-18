@@ -1,4 +1,4 @@
-# HSIP Prove platform: single static-ish binary with the console embedded.
+# HSIP platform: single static-ish binary with the console embedded.
 #   docker build -f Dockerfile.platform -t hsip-prove .
 #   docker run -p 8080:8080 -v hsip-prove-data:/data hsip-prove
 

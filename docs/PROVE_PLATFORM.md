@@ -1,4 +1,4 @@
-# HSIP Prove platform
+# HSIP platform
 
 A multi-tenant service businesses use to **prove what their automated systems decided, and when**. Customers send a SHA-256 fingerprint of each decision (never the content). The platform signs it, chains it to the previous record, batches it into a signed Merkle tree, optionally commits the root to Bitcoin, and hands back a self-contained bundle anyone can verify offline.
 
@@ -56,6 +56,13 @@ First run creates `./data/platform.db` and `./data/master.key` (mode 0600). **Ba
 - **API keys**: `hsp_...`, scope `ingest` or `read`, optionally bound to one stream. Stored as SHA-256 only; shown once.
 - **Plans**: `free`, `team`, `business`, `enterprise` (`crates/hsip-platform/src/plans.rs`). Limits on proofs/month, streams, seats and evidence-pack size are enforced by the API (HTTP 402). **Prices there are placeholders; set them before selling.** There is no payment processor: customers request a plan in the console and the operator applies it (`/operator`). Wire Stripe or similar into `routes/operator.rs::set_plan` when ready.
 
+## Prospects and enterprise services
+
+- **Every free sign-up is a prospect.** Signing up records a `signup` lead (email, company) and the operator console (`/operator`, needs `HSP_OPERATOR_KEY`) lists every organization with its owner's email, plan, proofs this month and in total, last proof time and member count. Filter to "Free plan only" and download a CSV to plan offers. Usage is the signal: a free org near its limit, or one that exported evidence, is the natural upgrade conversation.
+- **Enterprise page** (`/enterprise` in the console, signed-in users of any plan; also the landing page's Enterprise section) lists the service catalogue in `plans.rs::SERVICES`, each marked `available`, `on_request` or `roadmap` so nothing planned is sold as shipped. Admins and owners click **Request this** / **Register interest**; it becomes a `service_request` lead in the operator console. Nothing is provisioned automatically.
+- Plan requests from the Plan & usage page arrive as `plan_request` leads. The operator applies the plan from the customer table.
+- To preview the Enterprise experience on your own account, open `/operator`, enter the operator key, and switch your organization's plan to `enterprise`.
+
 ## API summary
 
 Machine API (Bearer `hsp_...`):
@@ -66,9 +73,9 @@ POST /v1/ingest/batch      {stream?, items:[...]}  up to 100, recorded in order 
 GET  /v1/proofs/:id        full bundle + verification                                      read key
 ```
 
-Public (no auth): `POST /v1/verify` (bundle or evidence pack), `POST /v1/verify/match` (compare original content with a bundle), `GET /v1/public/shares/:token`, `GET /v1/public/orgs/:slug` (published key), `POST /v1/leads`, `GET /v1/meta`, `GET /health`.
+Public (no auth): `POST /v1/verify` (bundle or evidence pack), `POST /v1/verify/match` (compare original content with a bundle), `GET /v1/public/shares/:token`, `GET /v1/public/orgs/:slug` (published key), `POST /v1/leads`, `GET /v1/meta` (plans and services), `GET /health`.
 
-Console API (Bearer `hss_...` session, under `/v1/orgs/:org/...`): overview, usage, streams (+ integrity check), proofs (list with filters, detail, share), shares, api-keys, members, invites, evidence (create, list, pack, printable report), plan-request. Accounts: `/v1/auth/{signup,login,logout,me,invite/:token,accept-invite}`, `POST /v1/orgs`.
+Console API (Bearer `hss_...` session, under `/v1/orgs/:org/...`): overview, usage, streams (+ integrity check), proofs (list with filters, detail, share), shares, api-keys, members, invites, evidence (create, list, pack, printable report), plan-request, service-request. Accounts: `/v1/auth/{signup,login,logout,me,invite/:token,accept-invite}`, `POST /v1/orgs`.
 
 Operator (Bearer `HSP_OPERATOR_KEY`): `/v1/operator/{overview,leads,orgs/:id/plan,orgs/:id/status}`.
 

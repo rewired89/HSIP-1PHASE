@@ -85,3 +85,75 @@ pub fn get(id: &str) -> &'static Plan {
 pub fn exists(id: &str) -> bool {
     PLANS.iter().any(|p| p.id == id)
 }
+
+/// Enterprise services catalogue shown in the console and on the landing
+/// page. `status` is deliberately honest: `available` exists today,
+/// `on_request` is delivered by our team, `roadmap` is not built yet.
+#[derive(Debug, Clone, Serialize)]
+pub struct Service {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub summary: &'static str,
+    pub status: &'static str,
+}
+
+pub const SERVICES: &[Service] = &[
+    Service {
+        id: "dedicated",
+        name: "Dedicated or self-hosted deployment",
+        summary: "Run the platform in your own cloud or datacenter, with your own database and master key. Nothing leaves your network.",
+        status: "available",
+    },
+    Service {
+        id: "evidence",
+        name: "Audit and regulator evidence packs",
+        summary: "Signed, independently verifiable exports of any period, with a printable report. Larger pack sizes on Enterprise.",
+        status: "available",
+    },
+    Service {
+        id: "bitcoin_anchor",
+        name: "Bitcoin-backed timestamps",
+        summary: "Commit batch roots to Bitcoin through OpenTimestamps so history cannot be rewritten, even by us.",
+        status: "available",
+    },
+    Service {
+        id: "integration",
+        name: "Integration and onboarding support",
+        summary: "We help decide what to record, wire up your first systems, and design what an auditor will ask for.",
+        status: "on_request",
+    },
+    Service {
+        id: "support_sla",
+        name: "Priority support and SLA",
+        summary: "Named contact, response-time commitments and incident escalation.",
+        status: "on_request",
+    },
+    Service {
+        id: "retention",
+        name: "Custom retention and data residency",
+        summary: "Keep records where and for as long as your policies require. Delivered through dedicated deployment.",
+        status: "on_request",
+    },
+    Service {
+        id: "security_review",
+        name: "Security questionnaire support",
+        summary: "We answer vendor-security questionnaires and walk your team through the design and its limits.",
+        status: "on_request",
+    },
+    Service {
+        id: "byok",
+        name: "Customer-held signing keys",
+        summary: "Your organization signs its own records so the platform never holds your key. Planned.",
+        status: "roadmap",
+    },
+    Service {
+        id: "sso",
+        name: "SSO (SAML / OIDC) and SCIM",
+        summary: "Sign in with your identity provider and provision people automatically. Planned.",
+        status: "roadmap",
+    },
+];
+
+pub fn service_exists(id: &str) -> bool {
+    SERVICES.iter().any(|s| s.id == id)
+}

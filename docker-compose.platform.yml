@@ -1,4 +1,4 @@
-# HSIP Prove with PostgreSQL.
+# HSIP with PostgreSQL.
 #   cp .env.platform.example .env && edit it, then:
 #   docker compose -f docker-compose.platform.yml up -d --build
 services:

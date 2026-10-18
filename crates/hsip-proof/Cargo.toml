@@ -2,7 +2,7 @@
 name = "hsip-proof"
 version = "0.1.0"
 edition = "2021"
-description = "HSIP Prove: open proof format and pure, DB-free verifier (RFC 6962 Merkle, RFC 8785 JCS, Ed25519)"
+description = "HSIP: open proof format and pure, DB-free verifier (RFC 6962 Merkle, RFC 8785 JCS, Ed25519)"
 license = "SEE LICENSE IN LICENSE-ENTERPRISE"
 authors = ["Nyx Systems LLC"]
 

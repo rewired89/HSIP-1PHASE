@@ -30,13 +30,14 @@ pub async fn health(State(s): State<AppState>) -> ApiResult<Json<Value>> {
 
 pub async fn meta(State(s): State<AppState>) -> Json<Value> {
     Json(json!({
-        "name": "HSIP Prove",
+        "name": "HSIP",
         "version": env!("CARGO_PKG_VERSION"),
         "signup_open": s.cfg.signup_open,
         "ots_enabled": s.cfg.ots_enabled,
         "anchor_verify_key": base64_std(&s.anchor_key.verifying_key().to_bytes()),
         "proof_format": hp::BUNDLE_FORMAT,
         "plans": plans::PLANS,
+        "services": plans::SERVICES,
     }))
 }
 

@@ -272,3 +272,51 @@ pub async fn request_plan(
     audit::log(&s, &org, &m.actor(), "billing.plan_requested", &r.plan, "").await;
     Ok(Json(json!({ "ok": true })))
 }
+
+#[derive(Deserialize)]
+pub struct ServiceRequest {
+    pub service: String,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// Interest in an enterprise service. Recorded for the operator; nothing is
+/// provisioned automatically.
+pub async fn request_service(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(org): Path<String>,
+    Json(r): Json<ServiceRequest>,
+) -> ApiResult<Json<Value>> {
+    let m = auth::member(&s, &headers, &org).await?;
+    m.require_admin()?;
+    if !plans::service_exists(&r.service) {
+        return Err(ApiError::BadRequest("unknown service".into()));
+    }
+    if r.message.len() > 1000 {
+        return Err(ApiError::BadRequest(
+            "message must be at most 1000 characters".into(),
+        ));
+    }
+    let info = engine::org_info(&s.db, &org).await?;
+    sqlx::query("INSERT INTO leads (id, org_id, email, company, message, kind, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+        .bind(Uuid::new_v4().to_string())
+        .bind(&org)
+        .bind(&m.user.email)
+        .bind(&info.name)
+        .bind(format!("[{}] {}", r.service, r.message.trim()))
+        .bind("service_request")
+        .bind(now_ms())
+        .execute(&s.db)
+        .await?;
+    audit::log(
+        &s,
+        &org,
+        &m.actor(),
+        "billing.service_requested",
+        &r.service,
+        "",
+    )
+    .await;
+    Ok(Json(json!({ "ok": true })))
+}

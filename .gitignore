@@ -76,7 +76,7 @@ tools/
 
 **/__pycache__/
 
-# HSIP Prove platform: these JSON files are source, not scratch output
+# HSIP platform: these JSON files are source, not scratch output
 !console/package.json
 !console/package-lock.json
 !sdk/prove-node/package.json

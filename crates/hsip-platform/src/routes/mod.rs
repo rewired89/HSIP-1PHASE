@@ -46,6 +46,7 @@ pub fn api(state: AppState) -> Router {
         .route("/v1/orgs/:org/overview", get(orgs::overview))
         .route("/v1/orgs/:org/usage", get(orgs::usage))
         .route("/v1/orgs/:org/plan-request", post(orgs::request_plan))
+        .route("/v1/orgs/:org/service-request", post(orgs::request_service))
         .route(
             "/v1/orgs/:org/streams",
             get(streams::list).post(streams::create),

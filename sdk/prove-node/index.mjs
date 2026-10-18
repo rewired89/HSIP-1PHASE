@@ -1,4 +1,4 @@
-// HSIP Prove client for Node 18+. No dependencies.
+// HSIP client for Node 18+. No dependencies.
 //
 //   import { Prove } from './index.mjs'
 //   const prove = new Prove('https://prove.example.com', process.env.HSIP_PROVE_KEY)

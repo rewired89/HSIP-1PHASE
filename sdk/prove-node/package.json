@@ -1,7 +1,7 @@
 {
   "name": "@hsip/prove",
   "version": "0.1.0",
-  "description": "HSIP Prove client: record tamper-evident proofs of decisions",
+  "description": "HSIP client: record tamper-evident proofs of decisions",
   "type": "module",
   "main": "index.mjs",
   "engines": { "node": ">=18" },

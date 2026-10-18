@@ -696,3 +696,100 @@ async fn concurrent_ingest_never_forks_the_chain() {
     assert_eq!(i["checked"], ok);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn free_signups_become_prospects_and_service_requests_reach_the_operator() {
+    let e = env().await;
+    let op = "operator-key-for-tests-0123456789";
+    let t = signup(&e, "founder@prospect.test", "Prospect Ltd").await;
+
+    // Catalogue is public and honest about status.
+    let (_, meta) = call(&e.app, "GET", "/v1/meta", None, None).await;
+    let svc = meta["services"].as_array().unwrap();
+    assert!(svc
+        .iter()
+        .any(|s| s["id"] == "dedicated" && s["status"] == "available"));
+    assert!(svc
+        .iter()
+        .any(|s| s["id"] == "byok" && s["status"] == "roadmap"));
+    assert_eq!(meta["name"], "HSIP");
+
+    // Unknown services are rejected; real ones are recorded for the operator.
+    let path = format!("/v1/orgs/{}/service-request", t.org);
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &path,
+        Some(&t.token),
+        Some(json!({"service": "nope"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &path,
+        Some(&t.token),
+        Some(json!({"service": "dedicated", "message": "EU data residency"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    let (_, leads) = call(&e.app, "GET", "/v1/operator/leads", Some(op), None).await;
+    let kinds: Vec<&str> = leads["leads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["kind"].as_str().unwrap())
+        .collect();
+    assert!(
+        kinds.contains(&"signup") && kinds.contains(&"service_request"),
+        "{kinds:?}"
+    );
+    assert!(leads["leads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["email"] == "founder@prospect.test"
+            && l["message"].as_str().unwrap().contains("EU data residency")));
+
+    // Operator sees who owns the free account and when it was last active.
+    let (_, ov) = call(&e.app, "GET", "/v1/operator/overview", Some(op), None).await;
+    assert_eq!(ov["orgs"][0]["owner_email"], "founder@prospect.test");
+    assert_eq!(ov["orgs"][0]["plan"], "free");
+    assert!(ov["orgs"][0]["last_proof_at"].is_null());
+
+    // Auditors cannot request services on the organization's behalf.
+    let (_, inv) = call(
+        &e.app,
+        "POST",
+        &format!("/v1/orgs/{}/invites", t.org),
+        Some(&t.token),
+        Some(json!({"email":"aud@prospect.test","role":"auditor"})),
+    )
+    .await;
+    let tok = inv["invite_url"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_string();
+    let (_, acc) = call(
+        &e.app,
+        "POST",
+        "/v1/auth/accept-invite",
+        None,
+        Some(json!({"token": tok, "name": "Aud", "password": "correct-horse-battery"})),
+    )
+    .await;
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &path,
+        acc["token"].as_str(),
+        Some(json!({"service": "sso"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+}

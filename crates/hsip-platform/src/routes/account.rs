@@ -208,6 +208,19 @@ pub async fn signup(
             other => other.into(),
         })?;
     let org_id = create_org(&s, &uid, &email, &r.org_name).await?;
+    // Every free sign-up is a prospect. Best effort: never fail sign-up over it.
+    if let Err(e) = sqlx::query("INSERT INTO leads (id, org_id, email, company, message, kind, created_at) VALUES ($1,$2,$3,$4,$5,'signup',$6)")
+        .bind(Uuid::new_v4().to_string())
+        .bind(&org_id)
+        .bind(&email)
+        .bind(r.org_name.trim())
+        .bind(format!("{name} signed up on the free plan"))
+        .bind(now_ms())
+        .execute(&s.db)
+        .await
+    {
+        tracing::error!(error = %e, "could not record signup lead");
+    }
     let token = new_session(&s, &uid).await?;
     Ok(Json(json!({
         "token": token,

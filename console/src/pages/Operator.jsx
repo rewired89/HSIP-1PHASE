@@ -1,10 +1,17 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api.js'
-import { ago, fmtDay, fmtNum } from '../format.js'
+import { ago, download, fmtDay, fmtNum } from '../format.js'
 import { Badge, Card, Gate, PageHeader, Stat, useLoad, useToast } from '../ui.jsx'
 
-const KEY = 'hsip_prove_operator'
+const KEY = 'hsip_operator'
 const stored = () => { try { return sessionStorage.getItem(KEY) || '' } catch { return '' } }
+
+function exportCsv(orgs) {
+  const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+  const rows = [['organization', 'owner_email', 'plan', 'proofs_this_month', 'proofs_total', 'streams', 'members', 'last_proof', 'signed_up']]
+  orgs.forEach((o) => rows.push([o.name, o.owner_email, o.plan, o.proofs_month, o.proofs_total, o.streams, o.members, o.last_proof_at ? new Date(o.last_proof_at).toISOString() : '', new Date(o.created_at).toISOString()]))
+  download('hsip-prospects.csv', rows.map((r) => r.map(q).join(',')).join('\n'), 'text/csv')
+}
 
 function Console({ opKey, onLock }) {
   const toast = useToast()
@@ -14,6 +21,7 @@ function Console({ opKey, onLock }) {
     return { ov, leads: leads.leads }
   }, [opKey])
 
+  const [onlyFree, setOnlyFree] = useState(false)
   const act = async (fn, msg) => { try { await fn(); toast(msg); st.reload() } catch (e) { toast(e.message, 'bad') } }
 
   return (
@@ -26,20 +34,30 @@ function Console({ opKey, onLock }) {
             <Stat label="Anchor batches" value={fmtNum(ov.totals.anchors)} detail={ov.ots_enabled ? `${ov.totals.ots_pending} pending · ${ov.totals.ots_unreachable} retrying` : 'OpenTimestamps off'} />
             <Stat label="Leads" value={fmtNum(ov.totals.leads)} />
           </div>
-          <Card title="Customers" flush>
+          <Card
+            title="Customers and prospects"
+            flush
+            actions={
+              <div className="row">
+                <label className="row small"><input type="checkbox" style={{ width: 'auto' }} checked={onlyFree} onChange={(e) => setOnlyFree(e.target.checked)} /> Free plan only</label>
+                <button className="btn sm" onClick={() => exportCsv(ov.orgs)}>Download CSV</button>
+              </div>
+            }
+          >
             <div className="table-wrap">
               <table className="t">
-                <thead><tr><th>Organization</th><th>Plan</th><th>This month</th><th>Total</th><th>Streams</th><th>Members</th><th>Since</th><th>Status</th></tr></thead>
+                <thead><tr><th>Organization</th><th>Owner</th><th>Plan</th><th>This month</th><th>Total</th><th>Last proof</th><th>Streams</th><th>Members</th><th>Since</th><th>Status</th></tr></thead>
                 <tbody>
-                  {ov.orgs.map((o) => (
+                  {ov.orgs.filter((o) => !onlyFree || o.plan === 'free').map((o) => (
                     <tr key={o.id}>
                       <td><strong>{o.name}</strong><div className="small muted mono">{o.slug}</div></td>
+                      <td className="small">{o.owner_email || '–'}</td>
                       <td>
                         <select className="inline-input" value={o.plan} aria-label={`Plan for ${o.name}`} onChange={(e) => act(() => api.post(`/v1/operator/orgs/${o.id}/plan`, { plan: e.target.value }, opts), 'Plan updated')}>
                           {['free', 'team', 'business', 'enterprise'].map((p) => <option key={p}>{p}</option>)}
                         </select>
                       </td>
-                      <td>{fmtNum(o.proofs_month)}</td><td>{fmtNum(o.proofs_total)}</td><td>{o.streams}</td><td>{o.members}</td>
+                      <td>{fmtNum(o.proofs_month)}</td><td>{fmtNum(o.proofs_total)}</td><td className="small">{o.last_proof_at ? ago(o.last_proof_at) : 'never'}</td><td>{o.streams}</td><td>{o.members}</td>
                       <td className="small">{fmtDay(o.created_at)}</td>
                       <td>
                         <button className={`btn sm ${o.status === 'suspended' ? 'danger' : ''}`} onClick={() => act(() => api.post(`/v1/operator/orgs/${o.id}/status`, { status: o.status === 'active' ? 'suspended' : 'active' }, opts), o.status === 'active' ? 'Suspended' : 'Reactivated')}>
@@ -57,7 +75,7 @@ function Console({ opKey, onLock }) {
               <div className="table-wrap">
                 <table className="t">
                   <thead><tr><th>When</th><th>Type</th><th>Company</th><th>Email</th><th>Message</th></tr></thead>
-                  <tbody>{leads.map((l) => <tr key={l.id}><td className="nowrap">{ago(l.created_at)}</td><td><Badge kind={l.kind === 'plan_request' ? 'brand' : ''}>{l.kind}</Badge></td><td>{l.company}</td><td>{l.email}</td><td style={{ maxWidth: 360 }}>{l.message}</td></tr>)}</tbody>
+                  <tbody>{leads.map((l) => <tr key={l.id}><td className="nowrap">{ago(l.created_at)}</td><td><Badge kind={l.kind === 'plan_request' || l.kind === 'service_request' ? 'brand' : l.kind === 'signup' ? 'ok' : ''}>{l.kind.replace('_', ' ')}</Badge></td><td>{l.company}</td><td>{l.email}</td><td style={{ maxWidth: 360 }}>{l.message}</td></tr>)}</tbody>
                 </table>
               </div>
             )}
@@ -80,7 +98,7 @@ export default function Operator() {
   const lock = () => { try { sessionStorage.removeItem(KEY) } catch { /* ignore */ } setKey(''); setInput('') }
   return (
     <>
-      <PageHeader title="Operator console" sub="Platform-wide view for the team running HSIP Prove. Not visible to customers." />
+      <PageHeader title="Operator console" sub="Platform-wide view for the team running HSIP. Not visible to customers." />
       {key ? <Console opKey={key} onLock={lock} /> : (
         <Card>
           <form className="col" style={{ maxWidth: 420 }} onSubmit={unlock}>

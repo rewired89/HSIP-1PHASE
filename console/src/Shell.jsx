@@ -20,6 +20,7 @@ const NAV = [
   ['Organization', [
     ['/team', 'Team', 'users'],
     ['/billing', 'Plan & usage', 'card'],
+    ['/enterprise', 'Enterprise', 'op'],
     ['/settings', 'Settings', 'cog'],
   ]],
 ]
@@ -43,12 +44,12 @@ export default function Shell({ children }) {
   const loc = useLocation()
   const nav = useNavigate()
   useEffect(() => setOpen(false), [loc.pathname])
-  const hasOperator = (() => { try { return !!sessionStorage.getItem('hsip_prove_operator') } catch { return false } })()
+  const hasOperator = (() => { try { return !!sessionStorage.getItem('hsip_operator') } catch { return false } })()
 
   return (
     <div className="shell">
       <aside className={`side ${open ? 'open' : ''}`} aria-label="Primary">
-        <div className="brand"><Logo /><div>HSIP Prove<small>Proof-of-record platform</small></div></div>
+        <div className="brand"><Logo /><div>HSIP<small>Proof-of-record platform</small></div></div>
         {orgs.length > 1 ? (
           <select className="orgpick" value={orgId || ''} onChange={(e) => { switchOrg(e.target.value); nav('/') }} aria-label="Organization">
             {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}

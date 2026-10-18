@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     anchor::spawn(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!("HSIP Prove listening on {bind} (public URL {public_url})");
+    tracing::info!("HSIP listening on {bind} (public URL {public_url})");
     tracing::info!(
         "sign-up: {} | OpenTimestamps: {} | operator console: {}",
         if signup { "open" } else { "closed" },

@@ -1,4 +1,4 @@
-"""HSIP Prove client. Standard library only.
+"""HSIP client. Standard library only.
 
     from hsip_prove import Prove
     prove = Prove("https://prove.example.com", api_key)          # an `ingest` key

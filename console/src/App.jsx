@@ -16,6 +16,7 @@ import ApiKeys from './pages/ApiKeys.jsx'
 import Quickstart from './pages/Quickstart.jsx'
 import Team from './pages/Team.jsx'
 import Billing from './pages/Billing.jsx'
+import Enterprise from './pages/Enterprise.jsx'
 import Activity from './pages/Activity.jsx'
 import Settings from './pages/Settings.jsx'
 import Operator from './pages/Operator.jsx'
@@ -67,6 +68,7 @@ export default function App() {
               <Route path="/api-keys" element={<ApiKeys />} />
               <Route path="/team" element={<Team />} />
               <Route path="/billing" element={<Billing />} />
+              <Route path="/enterprise" element={<Enterprise />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

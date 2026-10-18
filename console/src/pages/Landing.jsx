@@ -4,12 +4,13 @@ import { api } from '../api.js'
 import { money, fmtNum } from '../format.js'
 import { Logo } from '../icons.jsx'
 import { Card, useToast } from '../ui.jsx'
+import { ServiceGrid } from './Enterprise.jsx'
 
 export function PublicFrame({ children }) {
   return (
     <div>
       <nav className="land-nav" aria-label="Site">
-        <Link to="/" className="brand"><Logo /> <span>HSIP Prove</span></Link>
+        <Link to="/" className="brand"><Logo /> <span>HSIP</span></Link>
         <span className="grow" />
         <Link to="/verify">Verify a proof</Link>
         <Link to="/login">Sign in</Link>
@@ -31,14 +32,16 @@ const FEATURES = [
 
 export default function Landing() {
   const [plans, setPlans] = useState([])
-  useEffect(() => { api.get('/v1/meta', { token: null }).then((m) => setPlans(m.plans)).catch(() => {}) }, [])
+  const [services, setServices] = useState([])
+  useEffect(() => { api.get('/v1/meta', { token: null }).then((m) => { setPlans(m.plans); setServices(m.services || []) }).catch(() => {}) }, [])
   return (
     <div>
       <nav className="land-nav" aria-label="Site">
-        <Link to="/" className="brand"><Logo /> <span>HSIP Prove</span></Link>
+        <Link to="/" className="brand"><Logo /> <span>HSIP</span></Link>
         <span className="grow" />
         <a href="#how">How it works</a>
         <a href="#pricing">Pricing</a>
+        <a href="#enterprise">Enterprise</a>
         <Link to="/verify">Verify a proof</Link>
         <Link to="/login">Sign in</Link>
         <Link to="/signup" className="btn primary">Start free</Link>
@@ -48,7 +51,7 @@ export default function Landing() {
         <div>
           <span className="badge brand">For AI agents, automated decisions and regulated workflows</span>
           <h1 style={{ marginTop: 14 }}>Prove what your systems decided, and when.</h1>
-          <p className="lead">HSIP Prove turns every automated decision into a signed, chained, independently verifiable record. When a regulator, customer or court asks “how do you know?”, you hand them a proof instead of a log file.</p>
+          <p className="lead">HSIP turns every automated decision into a signed, chained, independently verifiable record. When a regulator, customer or court asks “how do you know?”, you hand them a proof instead of a log file.</p>
           <div className="row wrap">
             <Link to="/signup" className="btn primary" style={{ padding: '11px 20px' }}>Start free</Link>
             <a href="#contact" className="btn" style={{ padding: '11px 20px' }}>Talk to sales</a>
@@ -108,8 +111,14 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="section alt" id="contact"><ContactForm /></section>
-      <footer className="foot small">© {new Date().getFullYear()} Nyx Systems LLC · HSIP Prove. Proof format and verifier are open: run <span className="mono">hsip-proof verify</span> on any bundle.</footer>
+      <section className="section alt" id="enterprise">
+        <h2>Enterprise services</h2>
+        <p className="lead">For teams that need their own deployment, larger volumes or hands-on help. Each item says plainly whether it exists today.</p>
+        <ServiceGrid services={services} />
+      </section>
+
+      <section className="section" id="contact"><ContactForm /></section>
+      <footer className="foot small">© {new Date().getFullYear()} Nyx Systems LLC · HSIP. Proof format and verifier are open: run <span className="mono">hsip-proof verify</span> on any bundle. <Link to="/operator">Operator</Link></footer>
     </div>
   )
 }

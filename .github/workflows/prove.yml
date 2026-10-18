@@ -1,4 +1,4 @@
-name: HSIP Prove
+name: HSIP platform
 
 on:
   push:
