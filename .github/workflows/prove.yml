@@ -50,3 +50,17 @@ jobs:
         working-directory: console
       - name: Release build with embedded console
         run: cargo build --release -p hsip-platform --features embed-console
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --locked
+      # rsa (RUSTSEC-2023-0071) is only in the lockfile via sqlx-mysql, which is not compiled here and has no patch.
+      - run: cargo audit --ignore RUSTSEC-2023-0071
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm audit --omit=dev --audit-level=high
+        working-directory: console

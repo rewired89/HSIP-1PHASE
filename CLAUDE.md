@@ -28,7 +28,7 @@ Read `docs/PROVE_PLATFORM.md` (product, config, security model, honest limits) a
 | `crates/hsip-platform` | Multi-tenant platform server (Axum + sqlx Any: SQLite/PostgreSQL). Accounts, orgs, streams, API keys, anchoring, evidence, plans, operator API, serves the console. | Platform work |
 | `console/` | React + Vite business console and public pages (landing, verify, shared proof, operator). | Platform work |
 | `sdk/prove-python`, `sdk/prove-node` | Dependency-free client SDKs for the platform. | Platform work |
-| `docs/PROVE_*.md`, `docs/examples/prove/` | Platform docs and pinned format fixtures. | Platform work |
+| `docs/PROVE_*.md`, `docs/examples/prove/` | Platform docs, audit guide (`PROVE_AUDIT.md`) and pinned format fixtures. | Platform work |
 | `Dockerfile.platform`, `docker-compose.platform.yml`, `.env.platform.example`, `.github/workflows/prove.yml` | Deployment and CI for the platform. | Platform work |
 | `crates/hsip-core` and the other Phase 2 crates | Protocol and crypto core. | **Do not modify** |
 
