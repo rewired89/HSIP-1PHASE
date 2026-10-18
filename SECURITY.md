@@ -45,8 +45,6 @@ HSIP implements the following security measures:
 - **Session Security:** Perfect forward secrecy through ephemeral key exchange
 - **Memory Safety:** 100% safe Rust code in core implementation (0% unsafe)
 
-### Security Audits
-
 
 ### Dependencies
 
