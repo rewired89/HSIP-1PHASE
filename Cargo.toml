@@ -13,6 +13,7 @@ members = [
     "crates/hsip-policy",
     "crates/hsip-verify",
     "crates/hsip-proof",
+    "crates/hsip-verify-web",
     "crates/hsip-platform",
 ]
 

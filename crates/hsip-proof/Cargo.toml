@@ -9,6 +9,7 @@ authors = ["Nyx Systems LLC"]
 [[bin]]
 name = "hsip-proof"
 path = "src/bin/hsip_proof.rs"
+required-features = ["keygen"]
 
 [dependencies]
 serde      = { version = "1", features = ["derive"] }
@@ -18,4 +19,9 @@ sha2       = "0.10"
 hex        = "0.4"
 base64     = "0.22"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
-rand       = "0.8"
+rand       = { version = "0.8", optional = true }
+
+[features]
+default = ["keygen"]
+# Key generation needs OS randomness; the in-browser verifier builds without it.
+keygen = ["dep:rand"]

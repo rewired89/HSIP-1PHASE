@@ -58,6 +58,7 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 
 ## Other
 
+- `crates/hsip-verify-web/src/lib.rs` `verify(text)` (wasm-bindgen export) and `verify_text`: dispatch a pasted bundle or pack to `hsip_proof::verify_bundle`/`verify_pack`; pure, returns JSON. Built with `hsip-proof` default features off (no `keygen`/`rand`). `verifier/index.html` is the static page (CSP blocks all outside requests; samples embedded); `verifier/pkg/` is the generated wasm.
 - `hsip-proof` also exposes customer-key helpers: `generate_signing_key`, `verify_key_b64`, `registration_digest`/`sign_registration`/`verify_registration`, `verify_hash_signature`, `check_prepared`; CLI `keygen`, `register-proof`. `PackManifest.issuer_keys` lists extra signer keys.
 - `sdk/prove-python/hsip_prove.py`, `sdk/prove-node/index.mjs` ingest/read/verify clients; identical `hash_payload` output across languages for ASCII keys.
 - `docs/PROVE_PLATFORM.md`, `docs/PROVE_PROOF_FORMAT.md`, `docs/examples/prove/` (real fixtures).

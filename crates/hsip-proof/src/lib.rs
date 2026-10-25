@@ -491,6 +491,7 @@ pub fn verify_pack(p: &EvidencePack) -> PackVerification {
 pub const CUSTODY_DOMAIN: &str = "hsip-custody-v1";
 
 /// A fresh Ed25519 signing key from the operating system's randomness.
+#[cfg(feature = "keygen")]
 #[must_use]
 pub fn generate_signing_key() -> SigningKey {
     SigningKey::generate(&mut rand::rngs::OsRng)

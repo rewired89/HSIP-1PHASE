@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>HSIP Proof Check</title>
+<style>
+:root{--bg:#fff;--fg:#14171f;--mut:#5b6472;--line:#d9dde5;--ok:#0b7a3b;--bad:#b3261e;--na:#6b7280;--card:#f6f7f9}
+@media (prefers-color-scheme:dark){:root{--bg:#10131a;--fg:#eceff4;--mut:#9aa3b2;--line:#2a303c;--ok:#4cc27f;--bad:#ff7b72;--na:#9aa3b2;--card:#171b24}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
+main{max-width:760px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:26px;margin:0 0 6px}p{margin:8px 0}.mut{color:var(--mut)}
+textarea{width:100%;min-height:170px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:12px;font:13px/1.45 ui-monospace,monospace}
+button,label.file{background:var(--fg);color:var(--bg);border:0;border-radius:8px;padding:10px 16px;font:inherit;cursor:pointer;display:inline-block}
+button.alt,label.file{background:var(--card);color:var(--fg);border:1px solid var(--line)}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+#result{margin-top:20px;display:none;border:1px solid var(--line);border-radius:10px;padding:18px;background:var(--card)}
+.verdict{font-size:22px;font-weight:700}.ok{color:var(--ok)}.bad{color:var(--bad)}
+ul{list-style:none;padding:0;margin:14px 0 0}li{padding:10px 0;border-top:1px solid var(--line)}
+.tag{font-weight:700;margin-right:8px}.na{color:var(--na)}
+.note{margin-top:28px;padding:14px;border:1px solid var(--line);border-radius:10px;font-size:14px}
+a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<main>
+<h1>HSIP Proof Check</h1>
+<p class="mut">Drop in an HSIP proof file or evidence pack and see whether it is genuine or has been altered. The check runs inside this page, on your computer. Nothing is uploaded.</p>
+
+<textarea id="input" spellcheck="false" placeholder="Paste the proof JSON here, or choose a file."></textarea>
+<div class="row">
+  <button id="go">Check it</button>
+  <label class="file">Choose file<input id="file" type="file" accept=".json,application/json" hidden></label>
+  <button class="alt" id="s1">Try a genuine sample</button>
+  <button class="alt" id="s2">Try a tampered sample</button>
+</div>
+
+<div id="result" role="status" aria-live="polite"></div>
+
+<div class="note">
+<strong>Don't just trust this page.</strong>
+<ul style="margin-top:8px">
+<li>It makes no network requests after loading. Turn your wifi off and it still works. Its security policy blocks it from contacting any other site.</li>
+<li>It runs the same open-source verifier as the <code>hsip-proof</code> command-line tool (source: <code>crates/hsip-proof</code> in the HSIP repository). For a result you can rely on in a dispute, run that tool on your own machine.</li>
+<li>This page is plain static files. Anyone can host their own copy.</li>
+<li>A genuine result means the record is unaltered since it was signed. It does not mean the decision it describes was right.</li>
+</ul>
+</div>
+</main>
+
+<script type="module">
+import init, { verify } from "./pkg/hsip_verify_web.js";
+const GOOD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"loan.decision\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
+const BAD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"something.else\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
+const LABEL = {
+  content_hash: "Record unchanged (its fingerprint is recomputed and matches)",
+  signature: "Signed by the organization's key",
+  format: "Known proof format",
+  batch_inclusion: "Included in the batch that was timestamped",
+  anchor_signature: "Batch signed by the timestamping key",
+  manifest_hash: "Pack contents match their summary",
+  manifest_signature: "Pack summary is signed",
+};
+const $ = (id) => document.getElementById(id);
+const out = $("result");
+const ready = init();
+
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+async function run(text){
+  await ready;
+  const r = JSON.parse(verify(text));
+  out.style.display = "block";
+  if (r.error) { out.innerHTML = '<div class="verdict bad">Cannot read this file</div><p>' + esc(r.error) + "</p>"; return; }
+  const res = r.result;
+  const what = r.kind === "evidence_pack" ? "evidence pack" : "proof";
+  let h = r.valid
+    ? '<div class="verdict ok">Genuine</div><p>This ' + what + ' passed every check that applies.</p>'
+    : '<div class="verdict bad">Altered or invalid</div><p>This ' + what + ' failed at least one check. Do not rely on it.</p>';
+  h += "<ul>";
+  for (const c of res.checks) {
+    const tag = c.ok === true ? '<span class="tag ok">Passed</span>' : c.ok === false ? '<span class="tag bad">Failed</span>' : '<span class="tag na">Not applicable</span>';
+    h += "<li>" + tag + "<strong>" + esc(LABEL[c.name] || c.name) + '</strong><br><span class="mut">' + esc(c.detail) + "</span></li>";
+  }
+  h += "</ul>";
+  out.innerHTML = h;
+}
+$("go").onclick = () => run($("input").value);
+$("s1").onclick = () => { $("input").value = GOOD; run(GOOD); };
+$("s2").onclick = () => { $("input").value = BAD; run(BAD); };
+$("file").onchange = async (e) => { const f = e.target.files[0]; if (!f) return; const t = await f.text(); $("input").value = t; run(t); };
+</script>
+</body>
+</html>
