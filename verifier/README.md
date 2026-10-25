@@ -8,7 +8,7 @@ The page needs to be served over http (browsers will not run WebAssembly from a 
 
 ```powershell
 cd verifier
-python -m http.server 8000     # then open http://127.0.0.1:8000
+python3 -m http.server 8000    # use `python` on Windows; then open http://127.0.0.1:8000
 ```
 
 Or upload the folder to any static host (GitHub Pages works). Anyone can host their own copy.
