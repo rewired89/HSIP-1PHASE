@@ -80,6 +80,30 @@ if (!('encodeInto' in cachedTextEncoder)) {
 let WASM_VECTOR_LEN = 0;
 
 /**
+ * Checks recorded proofs (a proof, a list, or an evidence pack, as JSON text)
+ * against a signed permission (JSON text). Pure function, no network.
+ * @param {string} mandate
+ * @param {string} proofs
+ * @returns {string}
+ */
+export function check_permission(mandate, proofs) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(mandate, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(proofs, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.check_permission(ptr0, len0, ptr1, len1);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Verifies a proof bundle or an evidence pack given as JSON text.
  * Always returns JSON: `{kind, valid, result, org_name?}` or `{error}`.
  * @param {string} text

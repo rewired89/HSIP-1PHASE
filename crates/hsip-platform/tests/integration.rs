@@ -1057,3 +1057,156 @@ async fn customer_held_keys_full_flow() {
         }
     }
 }
+
+#[tokio::test]
+async fn permissions_flag_records_outside_what_was_allowed() {
+    use hsip_proof::{mandate::*, signing_key_from_b64, verify_key_b64};
+    let e = env().await;
+    let t = signup(&e, "owner@perm.test", "Perm Co").await;
+    let sid = stream(&e, &t, "Agent actions").await;
+    let (key, _) = api_key(&e, &t, "ingest", Some(&sid)).await;
+    let grantor =
+        signing_key_from_b64(&hsip_proof::seed_b64(&hsip_proof::generate_signing_key())).unwrap();
+    let now = hsip_platform::db::now_ms();
+    let body = MandateBody {
+        format: MANDATE_FORMAT.into(),
+        mandate_id: "m-1".into(),
+        grantor_key: verify_key_b64(&grantor),
+        agent: "pay-bot".into(),
+        valid_from_ms: now - 3_600_000,
+        valid_until_ms: now + 3_600_000,
+        rules: Rules {
+            allowed_actions: vec!["pay".into()],
+            max_per_period: Some(RateRule {
+                count: 2,
+                period_secs: 3600,
+            }),
+            max_amount: Some(AmountRule {
+                field: "amount".into(),
+                limit: 100,
+            }),
+            allowed_values: Default::default(),
+        },
+    };
+    let m = sign_mandate(body, &grantor).unwrap();
+    let url = format!("/v1/orgs/{}/mandates", t.org);
+
+    // A tampered mandate is refused, the genuine one is stored once.
+    let mut forged = serde_json::to_value(&m).unwrap();
+    forged["rules"]["max_amount"]["limit"] = json!(1_000_000);
+    let (st, _) = call(&e.app, "POST", &url, Some(&t.token), Some(forged)).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let (st, v) = call(
+        &e.app,
+        "POST",
+        &url,
+        Some(&t.token),
+        Some(serde_json::to_value(&m).unwrap()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &url,
+        Some(&t.token),
+        Some(serde_json::to_value(&m).unwrap()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+
+    let send =
+        |action: &'static str, amount: &'static str, n: usize| {
+            let (app, key, sid) = (e.app.clone(), key.clone(), sid.clone());
+            async move {
+                call(&app, "POST", "/v1/ingest", Some(&key), Some(json!({
+                "stream": sid, "actor": "pay-bot", "action": action, "subject": format!("r{n}"),
+                "payload_hash": hash_of(&format!("rec {n}")), "metadata": {"amount": amount}
+            }))).await
+            }
+        };
+    assert_eq!(send("pay", "50", 1).await.0, StatusCode::OK);
+    assert_eq!(send("pay", "250", 2).await.0, StatusCode::OK); // over the amount
+    assert_eq!(send("transfer", "10", 3).await.0, StatusCode::OK); // wrong action, also 3rd in the hour
+                                                                   // Another actor is ignored.
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        "/v1/ingest",
+        Some(&key),
+        Some(json!({
+            "stream": sid, "actor": "someone-else", "action": "pay", "subject": "x",
+            "payload_hash": hash_of("other"), "metadata": {"amount": "99999"}
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    let rurl = format!("/v1/orgs/{}/mandates/m-1/report?stream_id={sid}", t.org);
+    let (st, v) = call(&e.app, "GET", &rurl, Some(&t.token), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let rules: Vec<String> = v["report"]["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["rule"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        rules.contains(&"amount_over_limit".to_string()),
+        "{rules:?}"
+    );
+    assert!(
+        rules.contains(&"action_not_allowed".to_string()),
+        "{rules:?}"
+    );
+    assert!(rules.contains(&"rate_exceeded".to_string()), "{rules:?}");
+    assert_eq!(v["report"]["checked"], 3);
+    assert_eq!(v["report"]["within_permission"], false);
+
+    // The same answer offline, from the mandate and an evidence pack.
+    let (_, ev) = call(
+        &e.app,
+        "POST",
+        &format!("/v1/orgs/{}/evidence", t.org),
+        Some(&t.token),
+        Some(json!({"stream_id": sid})),
+    )
+    .await;
+    let eid = ev["id"].as_str().unwrap();
+    let (_, pack) = call(
+        &e.app,
+        "GET",
+        &format!("/v1/orgs/{}/evidence/{eid}/pack", t.org),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    let proofs = proofs_from_value(pack).unwrap();
+    let offline = evaluate(&m, &proofs);
+    assert_eq!(
+        offline.violations.len(),
+        v["report"]["violations"].as_array().unwrap().len()
+    );
+
+    // Auditors may read but not create or revoke.
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &format!("/v1/orgs/{}/mandates/m-1/revoke", t.org),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &format!("/v1/orgs/{}/mandates/m-1/revoke", t.org),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, l) = call(&e.app, "GET", &url, Some(&t.token), None).await;
+    assert!(l["mandates"][0]["revoked_at"].is_i64());
+}

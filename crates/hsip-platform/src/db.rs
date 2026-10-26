@@ -157,6 +157,17 @@ const SCHEMA: &[&str] = &[
         revoked_at BIGINT,
         views BIGINT NOT NULL
     )",
+    "CREATE TABLE IF NOT EXISTS mandates (
+        org_id TEXT NOT NULL,
+        mandate_id TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        grantor_key TEXT NOT NULL,
+        mandate_json TEXT NOT NULL,
+        revoked_at BIGINT,
+        created_by TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        PRIMARY KEY (org_id, mandate_id)
+    )",
     "CREATE TABLE IF NOT EXISTS evidence_exports (
         id TEXT PRIMARY KEY,
         org_id TEXT NOT NULL,

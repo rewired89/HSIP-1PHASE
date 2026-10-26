@@ -38,6 +38,13 @@ a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
 
 <div id="result" role="status" aria-live="polite"></div>
 
+<h2 style="font-size:20px;margin:36px 0 4px">Check records against a permission</h2>
+<p class="mut">Paste a signed permission (made with <code>hsip-proof mandate-sign</code>) and the proofs or evidence pack. The page lists every record that falls outside what was allowed. Same offline check, same rules.</p>
+<textarea id="perm" spellcheck="false" placeholder="Signed permission (JSON)" style="min-height:110px"></textarea>
+<textarea id="perm-proofs" spellcheck="false" placeholder="Proofs: one proof, a list of proofs, or an evidence pack (JSON)" style="min-height:110px;margin-top:10px"></textarea>
+<div class="row"><button id="pgo">Check against the permission</button></div>
+<div id="presult" role="status" aria-live="polite" style="display:none;margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:18px;background:var(--card)"></div>
+
 <div class="note">
 <strong>Don't just trust this page.</strong>
 <ul style="margin-top:8px">
@@ -50,7 +57,7 @@ a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
 </main>
 
 <script type="module">
-import init, { verify } from "./pkg/hsip_verify_web.js";
+import init, { verify, check_permission } from "./pkg/hsip_verify_web.js";
 const GOOD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"loan.decision\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
 const BAD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"something.else\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
 const LABEL = {
@@ -86,6 +93,21 @@ async function run(text){
   h += "</ul>";
   out.innerHTML = h;
 }
+$("pgo").onclick = async () => {
+  await ready;
+  const r = JSON.parse(check_permission($("perm").value, $("perm-proofs").value));
+  const box = $("presult"); box.style.display = "block";
+  if (r.error) { box.innerHTML = '<div class="verdict bad">Cannot check</div><p>' + esc(r.error) + "</p>"; return; }
+  const x = r.report;
+  if (!x.mandate_genuine) { box.innerHTML = '<div class="verdict bad">Permission not genuine</div><p>Its signature or format is invalid, so nothing was checked against it.</p>'; return; }
+  if (x.checked === 0) { box.innerHTML = '<div class="verdict">Nothing to check</div><p>None of these records were made by the agent named in the permission (' + x.ignored + " ignored), so nothing was checked.</p>"; return; }
+  let h = x.within_permission
+    ? '<div class="verdict ok">Inside the permission</div><p>All ' + x.checked + " checked records are within what was allowed.</p>"
+    : '<div class="verdict bad">' + x.violations.length + " outside the permission</div><p>" + x.checked + " records checked for this agent, " + x.ignored + " for other actors ignored. A record can be genuine and still outside what was allowed.</p>";
+  h += "<ul>";
+  for (const v of x.violations) h += '<li><span class="tag bad">Outside</span><strong>seq ' + esc(v.seq) + " &middot; " + esc(v.rule) + '</strong><br><span class="mut">' + esc(v.detail) + "</span></li>";
+  box.innerHTML = h + "</ul>";
+};
 $("go").onclick = () => run($("input").value);
 $("s1").onclick = () => { $("input").value = GOOD; run(GOOD); };
 $("s2").onclick = () => { $("input").value = BAD; run(BAD); };

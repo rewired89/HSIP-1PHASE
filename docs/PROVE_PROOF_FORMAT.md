@@ -4,6 +4,17 @@ This is the wire format behind every proof, share link and evidence pack. It is 
 
 Primitives: SHA-256, Ed25519, RFC 8785 JSON Canonicalization (JCS), RFC 6962 Merkle trees. Nothing else.
 
+## Permission format (`hsip-mandate/1`)
+
+```
+{ "format": "hsip-mandate/1", "mandate_id": "...", "grantor_key": "<base64 Ed25519 public key>",
+  "agent": "<matches envelope.actor>", "valid_from_ms": 0, "valid_until_ms": 0,
+  "rules": { "allowed_actions": [], "max_per_period": {"count": 0, "period_secs": 0},
+             "max_amount": {"field": "amount", "limit": 0}, "allowed_values": {"payee": ["..."]} },
+  "signature": "<base64>" }
+```
+`signature` = Ed25519 over `SHA256(JCS(all fields except signature))`. Checking records against it: `hsip_proof::evaluate_mandate`.
+
 ## 1. Envelope (the signed statement)
 
 ```json

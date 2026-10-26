@@ -13,6 +13,27 @@ pub fn verify(text: &str) -> String {
     verify_text(text).to_string()
 }
 
+/// Checks recorded proofs (a proof, a list, or an evidence pack, as JSON text)
+/// against a signed permission (JSON text). Pure function, no network.
+#[wasm_bindgen]
+pub fn check_permission(mandate: &str, proofs: &str) -> String {
+    check_permission_text(mandate, proofs).to_string()
+}
+
+pub fn check_permission_text(mandate: &str, proofs: &str) -> Value {
+    let m: hsip_proof::Mandate = match serde_json::from_str(mandate) {
+        Ok(m) => m,
+        Err(_) => return json!({ "error": "The permission is not a valid HSIP mandate." }),
+    };
+    let parsed = serde_json::from_str::<Value>(proofs)
+        .map_err(|_| "The proofs are not valid JSON.".to_string())
+        .and_then(hsip_proof::proofs_from_value);
+    match parsed {
+        Ok(p) => json!({ "report": hsip_proof::evaluate_mandate(&m, &p) }),
+        Err(e) => json!({ "error": e }),
+    }
+}
+
 pub fn verify_text(text: &str) -> Value {
     let body: Value = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -61,6 +82,12 @@ mod tests {
         let r = verify_text(pack);
         assert_eq!(r["kind"], "evidence_pack");
         assert_eq!(r["valid"], true);
+    }
+
+    #[test]
+    fn permission_check_rejects_junk_without_panicking() {
+        assert!(check_permission_text("{}", "[]")["error"].is_string());
+        assert!(check_permission_text("nope", "[]")["error"].is_string());
     }
 
     #[test]

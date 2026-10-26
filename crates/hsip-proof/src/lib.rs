@@ -12,6 +12,7 @@
 //! 3. **External time** (optional): OpenTimestamps commitment of that root.
 //!    Carried in the bundle, not checked here.
 
+pub mod mandate;
 pub mod merkle;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -20,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+pub use mandate::{
+    evaluate as evaluate_mandate, proofs_from_value, sign_mandate, verify_mandate, Mandate,
+    MandateBody, MandateReport, Violation, MANDATE_FORMAT,
+};
 pub use merkle::{MerkleTree, ProofStep, Side};
 
 pub const ENVELOPE_FORMAT: &str = "hsip-proof/1";

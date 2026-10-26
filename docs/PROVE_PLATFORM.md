@@ -92,6 +92,19 @@ Errors are `{"error":{"code","message"}}`. Internal error text is logged, never 
 - Request bodies are capped (2 MB default, 32 MB for `/v1/verify`). Responses carry `nosniff`, frame-deny, no-referrer and a CSP. The printable evidence report is HTML-escaped and carries its own restrictive CSP.
 - Record content never reaches the platform. `actor`, `action`, `subject` and `metadata` **are stored in clear** (they power search); do not put secrets there.
 
+### Permissions (mandates)
+
+A person or organization signs a permission with their own Ed25519 key: which agent, which actions, a time window, a rate limit, a numeric limit on a metadata field (for example `amount`), and allowed values for other metadata fields. The platform stores it and can report which recorded proofs fall outside it. The check is the pure function `hsip_proof::evaluate_mandate`, so anyone can repeat it offline with the permission and an evidence pack: `hsip-proof mandate-sign`, `hsip-proof mandate-check`, or the Proof Check page.
+
+```
+POST /v1/orgs/:org/mandates                 signed mandate JSON (developer or above)
+GET  /v1/orgs/:org/mandates                 list
+POST /v1/orgs/:org/mandates/:id/revoke      admin; later records show as after_revocation on this platform
+GET  /v1/orgs/:org/mandates/:id/report?stream_id=   violations for that agent's records in a stream
+```
+
+What this is and is not: it **proves after the fact** what was recorded against what was allowed. It does not stop an agent, it cannot see actions nobody recorded, and the numbers it checks (`amount`, `payee`, ...) are metadata the recording system declares, so a dishonest recorder can understate them. A record can be genuine and still outside the permission. The grantor key is identified by the signer out of band; the platform does not vouch for who that person is. Platform revocation is not a grantor-signed statement; use `valid_until_ms` inside the signed mandate for what an offline checker will see.
+
 ### Honest limits
 
 1. **By default the platform holds each organization's signing key** (custodial). A compromised or malicious platform operator could sign new records for such an organization. **Customer-held keys** remove this: an owner registers their own public key (Settings > Key custody), records are then signed on the customer's side via `/v1/ingest/prepare` + `/v1/ingest/commit`, and the platform never sees the private key. Limits that remain: the switch is opt-in and one-way per organization; a lost customer key cannot be recovered by us; the platform key still signs the activity log and evidence-pack manifests (the platform attests completeness, not authorship); the platform still chooses timestamps within a 5 minute window and orders records (the anchor, not the timestamp, is the evidence of time). For organizations that have not switched, what bounds custody risk: customers receive the signed bundle at ingest and can keep it, so any later server-side alteration fails against their copy; and with `HSP_OTS=true` batch roots are committed to Bitcoin, so history cannot be rewritten past the confirmation. Customer-held signing keys (BYOK or client-side signing) are the planned next step for customers who cannot accept custody.

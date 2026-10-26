@@ -9,6 +9,7 @@ use crate::state::AppState;
 pub mod account;
 pub mod evidence;
 pub mod keys;
+pub mod mandates;
 pub mod operator;
 pub mod orgs;
 pub mod proofs;
@@ -85,6 +86,12 @@ pub fn api(state: AppState) -> Router {
             get(evidence::list).post(evidence::create),
         )
         .route("/v1/orgs/:org/evidence/:id/pack", get(evidence::pack))
+        .route(
+            "/v1/orgs/:org/mandates",
+            get(mandates::list).post(mandates::create),
+        )
+        .route("/v1/orgs/:org/mandates/:id/revoke", post(mandates::revoke))
+        .route("/v1/orgs/:org/mandates/:id/report", get(mandates::report))
         .route(
             "/v1/orgs/:org/evidence/:id/report",
             get(evidence::report_html),

@@ -58,6 +58,7 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 
 ## Other
 
+- `crates/hsip-proof/src/mandate.rs` `Mandate`/`MandateBody`/`Rules`, `sign_mandate`, `verify_mandate`, `evaluate` (rules: allowed_actions, time window, max_per_period, max_amount on a metadata field, allowed_values; reports `Violation`s), `proofs_from_value`. CLI `hsip-proof mandate-sign`/`mandate-check`. `routes/mandates.rs` `create`, `list`, `revoke`, `report` (table `mandates`); wasm `check_permission` powers the Proof Check page's permission box.
 - `crates/hsip-verify-web/src/lib.rs` `verify(text)` (wasm-bindgen export) and `verify_text`: dispatch a pasted bundle or pack to `hsip_proof::verify_bundle`/`verify_pack`; pure, returns JSON. Built with `hsip-proof` default features off (no `keygen`/`rand`). `verifier/index.html` is the static page (CSP blocks all outside requests; samples embedded); `verifier/pkg/` is the generated wasm.
 - `hsip-proof` also exposes customer-key helpers: `generate_signing_key`, `verify_key_b64`, `registration_digest`/`sign_registration`/`verify_registration`, `verify_hash_signature`, `check_prepared`; CLI `keygen`, `register-proof`. `PackManifest.issuer_keys` lists extra signer keys.
 - `sdk/prove-python/hsip_prove.py`, `sdk/prove-node/index.mjs` ingest/read/verify clients; identical `hash_payload` output across languages for ASCII keys.

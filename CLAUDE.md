@@ -25,6 +25,7 @@ Read `docs/PROVE_PLATFORM.md` (product, config, security model, honest limits) a
 | Path | Role | Touch? |
 |---|---|---|
 | `crates/hsip-proof` | Open proof format + pure verifier (`hsip-proof verify`). RFC 6962 Merkle, RFC 8785 JCS, Ed25519. No I/O. | Platform work |
+| `crates/hsip-proof/src/mandate.rs` | Permissions: signed `hsip-mandate/1` plus the pure `evaluate` check of proofs against it. Platform side: `routes/mandates.rs`, table `mandates`. | Platform work |
 | `crates/hsip-verify-web`, `verifier/` | The open verifier compiled to WebAssembly plus a static, offline "Proof Check" page (no network after load, hostable anywhere). Rebuild steps in `verifier/README.md`; the wasm-bindgen CLI version must match `Cargo.lock`. | Platform work |
 | `crates/hsip-platform` | Multi-tenant platform server (Axum + sqlx Any: SQLite/PostgreSQL). Accounts, orgs, streams, API keys, anchoring, evidence, plans, operator API, serves the console. | Platform work |
 | `console/` | React + Vite business console and public pages (landing, verify, shared proof, operator). | Platform work |
