@@ -13,6 +13,10 @@ python3 -m http.server 8000    # use `python` on Windows; then open http://127.0
 
 Or upload the folder to any static host (GitHub Pages works). Anyone can host their own copy.
 
+## Hosting
+
+`.github/workflows/pages.yml` publishes this folder to GitHub Pages on every change. One-time setup: repository Settings, Pages, Source: GitHub Actions. The page then appears at `https://<owner>.github.io/<repo>/`.
+
 ## Rebuild the WebAssembly
 
 ```powershell
