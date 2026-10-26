@@ -10,6 +10,7 @@ const NAV = [
     ['/streams', 'Streams', 'stream'],
     ['/records', 'Records', 'list'],
     ['/evidence', 'Evidence', 'doc'],
+    ['/permissions', 'Permissions', 'shield'],
     ['/verify', 'Verify', 'shield'],
     ['/activity', 'Audit trail', 'check'],
   ]],

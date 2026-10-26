@@ -10,6 +10,7 @@ import StreamDetail from './pages/StreamDetail.jsx'
 import Records from './pages/Records.jsx'
 import ProofDetail from './pages/ProofDetail.jsx'
 import Evidence from './pages/Evidence.jsx'
+import Permissions from './pages/Permissions.jsx'
 import Verify from './pages/Verify.jsx'
 import SharedProof from './pages/SharedProof.jsx'
 import ApiKeys from './pages/ApiKeys.jsx'
@@ -64,6 +65,7 @@ export default function App() {
               <Route path="/records" element={<Records />} />
               <Route path="/records/:pid" element={<ProofDetail />} />
               <Route path="/evidence" element={<Evidence />} />
+              <Route path="/permissions" element={<Permissions />} />
               <Route path="/activity" element={<Activity />} />
               <Route path="/quickstart" element={<Quickstart />} />
               <Route path="/api-keys" element={<ApiKeys />} />
