@@ -103,6 +103,8 @@ POST /v1/orgs/:org/mandates/:id/revoke      admin; later records show as after_r
 GET  /v1/orgs/:org/mandates/:id/report?stream_id=   violations for that agent's records in a stream
 ```
 
+Permissions can be created without a command line on the Proof Check page (`verifier/`), where the key is generated and kept in the browser.
+
 What this is and is not: it **proves after the fact** what was recorded against what was allowed. It does not stop an agent, it cannot see actions nobody recorded, and the numbers it checks (`amount`, `payee`, ...) are metadata the recording system declares, so a dishonest recorder can understate them. A record can be genuine and still outside the permission. The grantor key is identified by the signer out of band; the platform does not vouch for who that person is. Platform revocation is not a grantor-signed statement; use `valid_until_ms` inside the signed mandate for what an offline checker will see.
 
 ### Honest limits

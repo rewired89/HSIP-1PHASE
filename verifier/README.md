@@ -22,4 +22,6 @@ cargo build -p hsip-verify-web --target wasm32-unknown-unknown --release
 wasm-bindgen --target web --no-typescript --out-dir verifier/pkg target/wasm32-unknown-unknown/release/hsip_verify_web.wasm
 ```
 
+The page can also create a permission: fill in the rules, generate a key (made and kept in the page, downloaded as `my-key.json`), sign, and download `permission.json`. It is the same format `hsip-proof mandate-sign` produces and the console's Permissions page accepts.
+
 A genuine result means the record is unaltered since it was signed. It does not mean the decision it describes was right. For a result you rely on in a dispute, run `hsip-proof verify` on your own machine.

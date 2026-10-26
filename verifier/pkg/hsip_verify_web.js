@@ -104,6 +104,51 @@ export function check_permission(mandate, proofs) {
 }
 
 /**
+ * Public key (base64) for a 32-byte seed (base64) made by the browser's
+ * secure random generator. Returns an empty string for a bad seed.
+ * @param {string} seed_b64
+ * @returns {string}
+ */
+export function public_key(seed_b64) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(seed_b64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.public_key(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Signs a permission body (JSON text) with the seed. The key never leaves
+ * the page. Returns the signed permission, or `{error}`.
+ * @param {string} seed_b64
+ * @param {string} body
+ * @returns {string}
+ */
+export function sign_permission(seed_b64, body) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(seed_b64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(body, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.sign_permission(ptr0, len0, ptr1, len1);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Verifies a proof bundle or an evidence pack given as JSON text.
  * Always returns JSON: `{kind, valid, result, org_name?}` or `{error}`.
  * @param {string} text

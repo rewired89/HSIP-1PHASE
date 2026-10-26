@@ -34,6 +34,41 @@ pub fn check_permission_text(mandate: &str, proofs: &str) -> Value {
     }
 }
 
+/// Public key (base64) for a 32-byte seed (base64) made by the browser's
+/// secure random generator. Returns an empty string for a bad seed.
+#[wasm_bindgen]
+pub fn public_key(seed_b64: &str) -> String {
+    hsip_proof::signing_key_from_b64(seed_b64)
+        .map(|k| hsip_proof::verify_key_b64(&k))
+        .unwrap_or_default()
+}
+
+/// Signs a permission body (JSON text) with the seed. The key never leaves
+/// the page. Returns the signed permission, or `{error}`.
+#[wasm_bindgen]
+pub fn sign_permission(seed_b64: &str, body: &str) -> String {
+    sign_permission_text(seed_b64, body).to_string()
+}
+
+pub fn sign_permission_text(seed_b64: &str, body: &str) -> Value {
+    let Some(key) = hsip_proof::signing_key_from_b64(seed_b64) else {
+        return json!({ "error": "That is not a valid private key." });
+    };
+    let mut b: hsip_proof::MandateBody = match serde_json::from_str(body) {
+        Ok(b) => b,
+        Err(e) => return json!({ "error": format!("The rules are not valid: {e}") }),
+    };
+    b.format = hsip_proof::MANDATE_FORMAT.into();
+    b.grantor_key = hsip_proof::verify_key_b64(&key);
+    if b.agent.trim().is_empty() || b.mandate_id.trim().is_empty() {
+        return json!({ "error": "An agent name and a permission id are required." });
+    }
+    match hsip_proof::sign_mandate(b, &key) {
+        Ok(m) => json!({ "mandate": m }),
+        Err(e) => json!({ "error": e }),
+    }
+}
+
 pub fn verify_text(text: &str) -> Value {
     let body: Value = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -82,6 +117,19 @@ mod tests {
         let r = verify_text(pack);
         assert_eq!(r["kind"], "evidence_pack");
         assert_eq!(r["valid"], true);
+    }
+
+    #[test]
+    fn browser_signed_permission_verifies_and_rejects_bad_input() {
+        let seed = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        assert!(!public_key(seed).is_empty());
+        assert!(public_key("nope").is_empty());
+        let body = r#"{"format":"","mandate_id":"m","grantor_key":"","agent":"bot","valid_from_ms":0,"valid_until_ms":10,"rules":{}}"#;
+        let r = sign_permission_text(seed, body);
+        let m: hsip_proof::Mandate = serde_json::from_value(r["mandate"].clone()).unwrap();
+        assert!(hsip_proof::verify_mandate(&m));
+        assert!(sign_permission_text("nope", body)["error"].is_string());
+        assert!(sign_permission_text(seed, "{}")["error"].is_string());
     }
 
     #[test]

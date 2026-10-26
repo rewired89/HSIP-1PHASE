@@ -21,6 +21,7 @@ ul{list-style:none;padding:0;margin:14px 0 0}li{padding:10px 0;border-top:1px so
 .tag{font-weight:700;margin-right:8px}.na{color:var(--na)}
 .note{margin-top:28px;padding:14px;border:1px solid var(--line);border-radius:10px;font-size:14px}
 a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
+.grid{display:grid;gap:12px}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:560px){.two{grid-template-columns:1fr}}.f{display:block;font-size:14px}.f input,.f select{width:100%;margin-top:4px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px;font:inherit}
 </style>
 </head>
 <body>
@@ -37,6 +38,21 @@ a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
 </div>
 
 <div id="result" role="status" aria-live="polite"></div>
+
+<h2 style="font-size:20px;margin:36px 0 4px">Create a permission</h2>
+<p class="mut">Say what an agent may do and sign it with your own key. The key is made and kept in this page, on your computer. Nothing is sent anywhere.</p>
+<div class="grid">
+<label class="f">Agent name <span class="mut">(the name it records its actions under)</span><input id="c-agent" placeholder="pay-bot"></label>
+<label class="f">Allowed actions <span class="mut">(comma separated, empty means any)</span><input id="c-actions" placeholder="pay, refund"></label>
+<div class="two"><label class="f">Valid from<input id="c-from" type="datetime-local"></label><label class="f">Valid until<input id="c-until" type="datetime-local"></label></div>
+<div class="two"><label class="f">Limit on a number in the record <span class="mut">(field name)</span><input id="c-field" placeholder="amount"></label><label class="f">Largest allowed value<input id="c-limit" type="number" min="0" placeholder="100"></label></div>
+<div class="two"><label class="f">At most this many records<input id="c-count" type="number" min="1" placeholder="3"></label><label class="f">in this period<select id="c-period"><option value="3600">hour</option><option value="86400">day</option><option value="604800">week</option></select></label></div>
+<div class="two"><label class="f">Only these values for a field <span class="mut">(field name)</span><input id="c-vfield" placeholder="payee"></label><label class="f">Allowed values <span class="mut">(comma separated)</span><input id="c-values" placeholder="acme, globex"></label></div>
+<label class="f">Your private key <span class="mut">(keep it secret and backed up; whoever holds it can grant permissions as you)</span><textarea id="c-key" spellcheck="false" style="min-height:70px" placeholder="Click Generate a new key, or paste a key file made by hsip-proof keygen"></textarea></label>
+</div>
+<div class="row"><button class="alt" id="c-gen">Generate a new key</button><button id="c-sign">Sign permission</button></div>
+<div id="c-out" style="display:none;margin-top:12px"><textarea id="c-signed" spellcheck="false" readonly style="min-height:150px"></textarea><div class="row"><button class="alt" id="c-dl">Download permission.json</button><button class="alt" id="c-use">Use it in the check below</button></div></div>
+<div id="c-err" class="bad" style="margin-top:8px"></div>
 
 <h2 style="font-size:20px;margin:36px 0 4px">Check records against a permission</h2>
 <p class="mut">Paste a signed permission (made with <code>hsip-proof mandate-sign</code>) and the proofs or evidence pack. The page lists every record that falls outside what was allowed. Same offline check, same rules.</p>
@@ -57,7 +73,7 @@ a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
 </main>
 
 <script type="module">
-import init, { verify, check_permission } from "./pkg/hsip_verify_web.js";
+import init, { verify, check_permission, public_key, sign_permission } from "./pkg/hsip_verify_web.js";
 const GOOD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"loan.decision\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
 const BAD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"something.else\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
 const LABEL = {
@@ -108,6 +124,51 @@ $("pgo").onclick = async () => {
   for (const v of x.violations) h += '<li><span class="tag bad">Outside</span><strong>seq ' + esc(v.seq) + " &middot; " + esc(v.rule) + '</strong><br><span class="mut">' + esc(v.detail) + "</span></li>";
   box.innerHTML = h + "</ul>";
 };
+
+const b64 = (u8) => btoa(String.fromCharCode(...u8));
+function saveFile(name, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+const pad = (n) => String(n).padStart(2, "0");
+const local = (d) => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+$("c-from").value = local(new Date());
+$("c-until").value = local(new Date(Date.now() + 30 * 86400000));
+const list = (t) => t.split(",").map((x) => x.trim()).filter(Boolean);
+function seedFrom(text) {
+  const t = text.trim();
+  if (!t) return "";
+  if (t.startsWith("{")) { try { return JSON.parse(t).private_key_b64 || ""; } catch { return ""; } }
+  return t;
+}
+$("c-gen").onclick = async () => {
+  await ready;
+  const seed = b64(crypto.getRandomValues(new Uint8Array(32)));
+  const key = JSON.stringify({ private_key_b64: seed, public_key_b64: public_key(seed), note: "Keep private_key_b64 secret." }, null, 2);
+  $("c-key").value = key;
+  saveFile("my-key.json", key);
+};
+$("c-sign").onclick = async () => {
+  await ready;
+  const err = $("c-err"); err.textContent = "";
+  const seed = seedFrom($("c-key").value);
+  if (!seed) { err.textContent = "Generate a key first, or paste yours."; return; }
+  const from = new Date($("c-from").value).getTime(), until = new Date($("c-until").value).getTime();
+  if (!(from < until)) { err.textContent = "The end of the period must be after its start."; return; }
+  const rules = { allowed_actions: list($("c-actions").value) };
+  if ($("c-field").value.trim() && $("c-limit").value !== "") rules.max_amount = { field: $("c-field").value.trim(), limit: Math.floor(Number($("c-limit").value)) };
+  if ($("c-count").value !== "") rules.max_per_period = { count: Math.floor(Number($("c-count").value)), period_secs: Number($("c-period").value) };
+  if ($("c-vfield").value.trim() && list($("c-values").value).length) rules.allowed_values = { [$("c-vfield").value.trim()]: list($("c-values").value) };
+  const id = "perm-" + b64(crypto.getRandomValues(new Uint8Array(6))).replace(/[^A-Za-z0-9]/g, "x");
+  const body = { format: "hsip-mandate/1", mandate_id: id, grantor_key: "", agent: $("c-agent").value.trim(), valid_from_ms: from, valid_until_ms: until, rules };
+  const r = JSON.parse(sign_permission(seed, JSON.stringify(body)));
+  if (r.error) { err.textContent = r.error; return; }
+  $("c-signed").value = JSON.stringify(r.mandate, null, 2);
+  $("c-out").style.display = "block";
+};
+$("c-dl").onclick = () => saveFile("permission.json", $("c-signed").value);
+$("c-use").onclick = () => { $("perm").value = $("c-signed").value; $("perm").scrollIntoView(); };
 $("go").onclick = () => run($("input").value);
 $("s1").onclick = () => { $("input").value = GOOD; run(GOOD); };
 $("s2").onclick = () => { $("input").value = BAD; run(BAD); };

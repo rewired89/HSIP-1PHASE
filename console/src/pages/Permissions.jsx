@@ -30,7 +30,7 @@ function AddPermission({ onClose, onDone }) {
   return (
     <Modal title="Add a permission" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" form="add-perm" disabled={busy || !text.trim()}>{busy ? 'Checking…' : 'Add permission'}</button></>}>
       <form id="add-perm" className="col" onSubmit={submit}>
-        <p className="muted" style={{ margin: 0 }}>A permission is signed on your own machine, so HSIP never holds the key that grants it. Write the rules in a file, then sign it:</p>
+        <p className="muted" style={{ margin: 0 }}>A permission is signed on your own machine, so HSIP never holds the key that grants it. The easiest way is the “Create a permission” form on the Proof Check page (`verifier/`), which signs in your browser. Or from the command line, write the rules in a file, then sign it:</p>
         <pre className="code" style={{ margin: 0 }}>{`hsip-proof keygen > my-key.json
 hsip-proof mandate-sign my-key.json rules.json > permission.json`}</pre>
         <label className="f">Paste permission.json<textarea rows={9} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} style={{ fontFamily: 'monospace' }} /></label>
