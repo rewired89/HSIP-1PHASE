@@ -12,6 +12,10 @@ Guidance for Claude Code when working in this repository (HSIP-1PHASE, the produ
 6. Windows users: give CLI instructions in PowerShell.
 7. Do not use em dashes in text; use a comma, colon or period.
 
+## Licensing
+
+Platform (`crates/hsip-platform`, `console/`): AGPL-3.0-only plus a paid commercial license (`COMMERCIAL-LICENSE.md`). Open verifier, format and SDKs (`hsip-proof`, `hsip-verify-web`, `verifier/`, `sdk/prove-*`): Apache-2.0. Older protocol crates: HSIP Community License (non-commercial). Summary in `LICENSE-NOTICE.md`. The platform depends on `hsip-proof`, which is why that stays permissive. Do not accept outside code without a contributor agreement, or the commercial license cannot be offered. Not legal advice; a lawyer should review.
+
 ## Strategic direction
 
 HSIP's Phase 2 protocol work (consent, identity, secure messaging) stays as is. The commercial product is now **HSIP: a platform sold to companies that gives them tamper-evident, independently verifiable proof of what their automated systems decided and when.** Customers send SHA-256 fingerprints, the platform signs, chains, batches and anchors them, and anyone can verify the result offline with open code. We sell proof, not a protocol.

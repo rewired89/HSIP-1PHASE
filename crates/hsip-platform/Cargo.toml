@@ -3,7 +3,7 @@ name = "hsip-platform"
 version = "0.1.0"
 edition = "2021"
 description = "HSIP: multi-tenant proof platform for businesses (REST API + console)"
-license = "SEE LICENSE IN LICENSE-ENTERPRISE"
+license = "AGPL-3.0-only"
 authors = ["Nyx Systems LLC"]
 
 [lib]

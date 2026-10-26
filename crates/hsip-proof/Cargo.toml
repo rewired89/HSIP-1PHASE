@@ -3,7 +3,7 @@ name = "hsip-proof"
 version = "0.1.0"
 edition = "2021"
 description = "HSIP: open proof format and pure, DB-free verifier (RFC 6962 Merkle, RFC 8785 JCS, Ed25519)"
-license = "SEE LICENSE IN LICENSE-ENTERPRISE"
+license = "Apache-2.0"
 authors = ["Nyx Systems LLC"]
 
 [[bin]]

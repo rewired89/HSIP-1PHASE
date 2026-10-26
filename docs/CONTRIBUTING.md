@@ -141,9 +141,11 @@ License Agreement
 
 By contributing to HSIP, you agree that:
 
-    Your contributions will be licensed under the same dual-license model:
-        Community License (non-commercial)
-        Enterprise License (commercial)
+    Your contributions to the platform are licensed under the GNU AGPL-3.0, and you also grant
+    Nyx Systems LLC the right to offer them under its commercial license (see COMMERCIAL-LICENSE.md).
+    Contributions to the verifier, proof format and SDKs are licensed under Apache-2.0.
+    Because of the commercial license, a written contributor agreement is required before
+    Nyx Systems LLC can accept code from outside contributors: contact us before sending a pull request.
 
     You have the right to submit the contribution (no copyright violations)
 

@@ -77,4 +77,4 @@ Cryptography: Ed25519 signatures, SHA-256, RFC 6962 Merkle trees, ChaCha20-Poly1
 
 ## License
 
-HSIP Community License (non-commercial): free for personal, educational, research and open-source use. Commercial use requires an Enterprise License from Nyx Systems LLC. See [LICENSE](LICENSE). Commercial inquiries: nyxsystemsllc@gmail.com.
+The platform (`crates/hsip-platform`, `console/`) is free under the GNU AGPL-3.0, or available under a paid commercial license if you want to build it into your own product without the AGPL's source-sharing terms. The open verifier, proof format and SDKs are Apache-2.0. The older protocol crates remain under the HSIP Community License (non-commercial). See [LICENSE-NOTICE.md](LICENSE-NOTICE.md) and [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md). Commercial inquiries: nyxsystemsllc@gmail.com.

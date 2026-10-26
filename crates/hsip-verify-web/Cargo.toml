@@ -3,7 +3,7 @@ name = "hsip-verify-web"
 version = "0.1.0"
 edition = "2021"
 description = "HSIP: the open proof verifier compiled to WebAssembly for the in-browser verifier page"
-license = "SEE LICENSE IN LICENSE-ENTERPRISE"
+license = "Apache-2.0"
 authors = ["Nyx Systems LLC"]
 
 [lib]
