@@ -40,7 +40,7 @@ pub const PLANS: &[Plan] = &[
         streams: 10,
         seats: 10,
         evidence_max_proofs: 5_000,
-        price_usd_month: Some(499),
+        price_usd_month: Some(79),
         highlights: &[
             "Everything in Starter",
             "Batch anchoring + OpenTimestamps",
@@ -55,7 +55,7 @@ pub const PLANS: &[Plan] = &[
         streams: 50,
         seats: 50,
         evidence_max_proofs: 20_000,
-        price_usd_month: Some(2_500),
+        price_usd_month: Some(399),
         highlights: &[
             "Everything in Team",
             "Evidence packs up to 20,000 proofs",
@@ -145,6 +145,18 @@ pub const SERVICES: &[Service] = &[
         name: "Customer-held signing keys",
         summary: "Your organization signs its own records so the platform never holds your key. Turn it on yourself in Settings.",
         status: "available",
+    },
+    Service {
+        id: "case_pack",
+        name: "Per-case evidence pack",
+        summary: "A one-off signed export and printable report for a single dispute, investigation or expert engagement, without a subscription.",
+        status: "on_request",
+    },
+    Service {
+        id: "partner",
+        name: "Partner program for consultants, auditors and vendors",
+        summary: "Record client or customer decisions under your own organization, with revenue share and white-label options.",
+        status: "on_request",
     },
     Service {
         id: "sso",

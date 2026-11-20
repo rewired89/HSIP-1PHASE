@@ -54,7 +54,7 @@ First run creates `./data/platform.db` and `./data/master.key` (mode 0600). **Ba
 - **Stream**: one independent hash chain, normally one system or workflow. A hidden `system` stream per organization records the platform's own audit trail (sign-ins, key and team changes, exports) as signed, chained proofs.
 - **Roles**: `owner`, `admin` (manage streams, keys, people), `developer` (create streams, record, read), `auditor` (read-only, can export evidence). Non-members get 404, not 403.
 - **API keys**: `hsp_...`, scope `ingest` or `read`, optionally bound to one stream. Stored as SHA-256 only; shown once.
-- **Plans**: `free`, `team`, `business`, `enterprise` (`crates/hsip-platform/src/plans.rs`). Limits on proofs/month, streams, seats and evidence-pack size are enforced by the API (HTTP 402). **Prices there are placeholders; set them before selling.** There is no payment processor: customers request a plan in the console and the operator applies it (`/operator`). Wire Stripe or similar into `routes/operator.rs::set_plan` when ready.
+- **Plans**: `free`, `team`, `business`, `enterprise` (`crates/hsip-platform/src/plans.rs`). Limits on proofs/month, streams, seats and evidence-pack size are enforced by the API (HTTP 402). Display prices: Team $79, Business $399 per month, Enterprise by quote (about $24k/year). They are display-only until a processor is wired. There is no payment processor: customers request a plan in the console and the operator applies it (`/operator`). Wire Stripe or similar into `routes/operator.rs::set_plan` when ready.
 
 ## Prospects and enterprise services
 

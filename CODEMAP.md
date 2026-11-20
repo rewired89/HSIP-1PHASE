@@ -28,7 +28,7 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 - `audit.rs` `log(state, org, actor, action, subject, detail)` best-effort proof into the org's system stream. called_by: most mutating routes.
 - `anchor.rs` OpenTimestamps client (ported from the retired Phase 1 repo: `submit_digest_to`, `check_for_upgrade`, `extract_pending_calendar_uri`, `contains_bitcoin_attestation`), `run_cycle` (batch unanchored proofs into a Merkle tree, sign root with anchor key, optional OTS, atomic claim), `retry_unreachable`, `run_upgrade_cycle`, `spawn` (5 s due-check loop, 15 min upgrade loop). mutates: `anchors`, `proofs.anchor_id/merkle_index`.
 - `qb.rs` `Where` builder (`eq_s`, `cmp_i`, `contains_any`, `raw`) and `bind_args` for dynamic filters on both backends.
-- `plans.rs` `PLANS`, `get(id)`, `exists(id)`; limits and display prices (placeholders). `SERVICES` enterprise catalogue (`available`/`on_request`/`roadmap`), `service_exists`.
+- `plans.rs` `PLANS`, `get(id)`, `exists(id)`; limits and display prices (Team 79, Business 399 USD/month; still display-only, no processor). `SERVICES` enterprise catalogue (`available`/`on_request`/`roadmap`, incl. `case_pack`, `partner`), `service_exists`.
 - `report.rs` `render(...)` printable HTML evidence report (escaped, CSP meta).
 - `ui.rs` `serve(uri, dir)` console static files (embedded with `embed-console`, else from disk), SPA fallback, no path traversal.
 
@@ -65,3 +65,5 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 - `sdk/prove-python/hsip_prove.py`, `sdk/prove-node/index.mjs` ingest/read/verify clients; identical `hash_payload` output across languages for ASCII keys.
 - `docs/PROVE_PLATFORM.md`, `docs/PROVE_PROOF_FORMAT.md`, `docs/examples/prove/` (real fixtures).
 - `Dockerfile.platform`, `docker-compose.platform.yml`, `.env.platform.example`, `.github/workflows/prove.yml`.
+
+- `sdk/prove-action/` GitHub Action (`action.yml`, `record.mjs`): hashes a file or the commit SHA locally and records it via the Node SDK. `docs/PROVE_AI_ACT_LOGGING.md`: recording template for high-risk AI decisions.

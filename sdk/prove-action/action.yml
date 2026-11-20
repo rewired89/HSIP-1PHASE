@@ -1,0 +1,15 @@
+name: 'HSIP record'
+description: 'Record a SHA-256 fingerprint of a file or text as a signed, chained HSIP proof. Content never leaves the runner.'
+inputs:
+  url: { description: 'HSIP platform base URL', required: true }
+  api-key: { description: 'HSIP API key (hsp_...)', required: true }
+  stream: { description: 'Stream name', required: false }
+  actor: { description: 'Who or what made the decision', required: false, default: 'github-actions' }
+  action: { description: 'Action label, for example deploy.release', required: true }
+  subject: { description: 'Subject of the decision', required: false, default: '' }
+  file: { description: 'File to fingerprint (default: the commit SHA text)', required: false }
+outputs:
+  proof-id: { description: 'ID of the created proof' }
+runs:
+  using: 'node20'
+  main: 'record.mjs'

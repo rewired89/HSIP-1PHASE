@@ -52,8 +52,8 @@ export default function Landing() {
       <header className="hero">
         <div>
           <span className="badge brand">For AI agents, automated decisions and regulated workflows</span>
-          <h1 style={{ marginTop: 14 }}>Prove what your systems decided, and when.</h1>
-          <p className="lead">HSIP turns every automated decision into a signed, chained, independently verifiable record. When a regulator, customer or court asks “how do you know?”, you hand them a proof instead of a log file.</p>
+          <h1 style={{ marginTop: 14 }}>When someone asks what your AI did, hand them proof.</h1>
+          <p className="lead">When a regulator, customer or court asks what your system decided on a given day, give them one file they can check without trusting you. Your data never leaves your systems.</p>
           <div className="row wrap">
             <Link to="/signup" className="btn primary" style={{ padding: '11px 20px' }}>Start free</Link>
             <a href="#contact" className="btn" style={{ padding: '11px 20px' }}>Talk to sales</a>
