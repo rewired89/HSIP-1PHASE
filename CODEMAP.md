@@ -68,3 +68,4 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 
 - `sdk/prove-action/` GitHub Action (`action.yml`, `record.mjs`): hashes a file or the commit SHA locally and records it via the Node SDK. `docs/PROVE_AI_ACT_LOGGING.md`: recording template for high-risk AI decisions.
 - `sdk/prove-python/hsip_otel.py` `HsipSpanProcessor`: OpenTelemetry span processor, selected spans are hashed locally and recorded on a background thread (only hash, trace and span ids sent). Tests: `test_hsip_otel.py`.
+- `sdk/prove-python/hsip_langchain.py` `HsipCallbackHandler`: LangChain/LangGraph callback, records tool calls (and optionally model calls) as hash-only proofs on a background thread. Tests: `test_hsip_langchain.py`.
