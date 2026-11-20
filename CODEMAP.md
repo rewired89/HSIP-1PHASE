@@ -67,3 +67,4 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 - `Dockerfile.platform`, `docker-compose.platform.yml`, `.env.platform.example`, `.github/workflows/prove.yml`.
 
 - `sdk/prove-action/` GitHub Action (`action.yml`, `record.mjs`): hashes a file or the commit SHA locally and records it via the Node SDK. `docs/PROVE_AI_ACT_LOGGING.md`: recording template for high-risk AI decisions.
+- `sdk/prove-python/hsip_otel.py` `HsipSpanProcessor`: OpenTelemetry span processor, selected spans are hashed locally and recorded on a background thread (only hash, trace and span ids sent). Tests: `test_hsip_otel.py`.
