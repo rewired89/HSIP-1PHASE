@@ -7,6 +7,7 @@ use axum::{
 use crate::state::AppState;
 
 pub mod account;
+pub mod billing;
 pub mod evidence;
 pub mod keys;
 pub mod mandates;
@@ -96,6 +97,10 @@ pub fn api(state: AppState) -> Router {
             "/v1/orgs/:org/evidence/:id/report",
             get(evidence::report_html),
         )
+        // billing (Stripe)
+        .route("/v1/orgs/:org/billing/checkout", post(billing::checkout))
+        .route("/v1/orgs/:org/billing/portal", post(billing::portal))
+        .route("/v1/stripe/webhook", post(billing::webhook))
         // operator
         .route("/v1/operator/overview", get(operator::overview))
         .route("/v1/operator/leads", get(operator::leads))

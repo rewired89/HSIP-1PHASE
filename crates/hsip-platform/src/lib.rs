@@ -10,6 +10,7 @@ pub mod auth;
 pub mod config;
 pub mod crypto;
 pub mod db;
+pub mod email;
 pub mod engine;
 pub mod errors;
 pub mod plans;

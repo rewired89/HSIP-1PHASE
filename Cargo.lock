@@ -1665,6 +1665,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "hsip-proof",
  "http-body-util",
  "mime_guess",

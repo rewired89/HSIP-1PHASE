@@ -109,10 +109,25 @@ pub async fn invite(
         .bind(&id).bind(&org).bind(&email).bind(role.as_str()).bind(crypto::sha256_hex(&token)).bind(&m.user.id).bind(now).bind(now + INVITE_TTL_MS)
         .execute(&s.db).await?;
     audit::log(&s, &org, &m.actor(), "team.invited", &email, role.as_str()).await;
+    let invite_url = format!("{}/invite/{}", s.cfg.public_url, token);
+    let emailed = crate::email::send(
+        &s,
+        &email,
+        &format!("You are invited to {} on HSIP", info.name),
+        &format!(
+            "{} invited you to join {} on HSIP as {}.\n\nAccept the invitation (expires in 7 days):\n{}\n\nIf you were not expecting this, ignore this email.",
+            m.user.email, info.name, role.as_str(), invite_url
+        ),
+    )
+    .await;
+    let note = if emailed {
+        "An invitation email was sent. The link also works if you share it yourself; it expires in 7 days."
+    } else {
+        "Email delivery is not configured. Send this link to the invitee yourself; it expires in 7 days."
+    };
     Ok(Json(json!({
         "id": id, "email": email, "role": role.as_str(),
-        "invite_url": format!("{}/invite/{}", s.cfg.public_url, token),
-        "note": "Email delivery is not configured. Send this link to the invitee yourself; it expires in 7 days.",
+        "invite_url": invite_url, "emailed": emailed, "note": note,
     })))
 }
 

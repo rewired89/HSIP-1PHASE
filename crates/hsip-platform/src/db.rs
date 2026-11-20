@@ -46,6 +46,8 @@ const SCHEMA: &[&str] = &[
         signing_key_enc TEXT NOT NULL,
         verify_key_b64 TEXT NOT NULL,
         customer_verify_key TEXT,
+        stripe_customer_id TEXT,
+        stripe_subscription_id TEXT,
         created_at BIGINT NOT NULL
     )",
     "CREATE TABLE IF NOT EXISTS users (
@@ -203,6 +205,8 @@ const SCHEMA: &[&str] = &[
 /// column" error just means the column is already there, so errors are ignored.
 const ADD_COLUMNS: &[&str] = &[
     "ALTER TABLE organizations ADD COLUMN customer_verify_key TEXT",
+    "ALTER TABLE organizations ADD COLUMN stripe_customer_id TEXT",
+    "ALTER TABLE organizations ADD COLUMN stripe_subscription_id TEXT",
     "ALTER TABLE proofs ADD COLUMN signer_key TEXT",
 ];
 

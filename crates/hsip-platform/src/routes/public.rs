@@ -34,6 +34,8 @@ pub async fn meta(State(s): State<AppState>) -> Json<Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "signup_open": s.cfg.signup_open,
         "ots_enabled": s.cfg.ots_enabled,
+        "billing_enabled": s.cfg.stripe.is_some(),
+        "email_enabled": s.cfg.email.is_some(),
         "anchor_verify_key": base64_std(&s.anchor_key.verifying_key().to_bytes()),
         "proof_format": hp::BUNDLE_FORMAT,
         "plans": plans::PLANS,

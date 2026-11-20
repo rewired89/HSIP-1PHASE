@@ -54,7 +54,7 @@ First run creates `./data/platform.db` and `./data/master.key` (mode 0600). **Ba
 - **Stream**: one independent hash chain, normally one system or workflow. A hidden `system` stream per organization records the platform's own audit trail (sign-ins, key and team changes, exports) as signed, chained proofs.
 - **Roles**: `owner`, `admin` (manage streams, keys, people), `developer` (create streams, record, read), `auditor` (read-only, can export evidence). Non-members get 404, not 403.
 - **API keys**: `hsp_...`, scope `ingest` or `read`, optionally bound to one stream. Stored as SHA-256 only; shown once.
-- **Plans**: `free`, `team`, `business`, `enterprise` (`crates/hsip-platform/src/plans.rs`). Limits on proofs/month, streams, seats and evidence-pack size are enforced by the API (HTTP 402). Display prices: Team $79, Business $399 per month, Enterprise by quote (about $24k/year). They are display-only until a processor is wired. There is no payment processor: customers request a plan in the console and the operator applies it (`/operator`). Wire Stripe or similar into `routes/operator.rs::set_plan` when ready.
+- **Plans**: `free`, `team`, `business`, `enterprise` (`crates/hsip-platform/src/plans.rs`). Limits on proofs/month, streams, seats and evidence-pack size are enforced by the API (HTTP 402). Display prices: Team $79, Business $399 per month, Enterprise by quote (about $24k/year). Online billing and email are built but off until configured: set `HSP_STRIPE_*` (Checkout subscriptions for Team and Business, customer portal, signed webhook at `/v1/stripe/webhook` that is the only thing that changes a plan) and `HSP_EMAIL_*` (Resend-compatible API; used for invites and plan confirmations). Without Stripe config, customers request a plan and the operator applies it (`/operator`); Enterprise is always by quote. Neither has been exercised against live Stripe or a live email provider yet, only against mocks.
 
 ## Prospects and enterprise services
 
@@ -113,7 +113,7 @@ What this is and is not: it **proves after the fact** what was recorded against 
 2. **Without `HSP_OTS`, "time" is only as trustworthy as the operator**: the anchor key is the platform's own.
 3. **Low-entropy records are guessable from their hash.** If a record is just `"approve"`, anyone can hash candidates. Include a random salt inside the hashed record (the SDKs and samples do) and keep the salt with the original.
 4. A proof shows a record existed, unaltered, at a time. It does not show the decision was right, and only covers what the customer chooses to send.
-5. No master-key rotation yet. No outbound email (invites are links the inviter shares). Rate limits are per node.
+5. No master-key rotation yet. Email is optional (without `HSP_EMAIL_*`, invites are links the inviter shares). Rate limits are per node.
 
 ## Operations
 

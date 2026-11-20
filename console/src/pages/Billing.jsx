@@ -10,11 +10,15 @@ export default function Billing() {
   const toast = useToast()
   const st = useLoad(async () => {
     const [u, meta] = await Promise.all([org.get('/usage'), api.get('/v1/meta', { token: null })])
-    return { u, plans: meta.plans }
+    return { u, plans: meta.plans, billing: !!meta.billing_enabled }
   }, [org.id])
   const [req, setReq] = useState(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+
+  const go = async (path, body) => {
+    try { window.location.href = (await org.post(path, body)).url } catch (x) { toast(x.message) }
+  }
 
   const send = async (e) => {
     e.preventDefault()
@@ -32,7 +36,7 @@ export default function Billing() {
     <>
       <PageHeader title="Plan & usage" sub="What you have used this period and what each plan includes." />
       <Gate state={st}>
-        {({ u, plans }) => {
+        {({ u, plans, billing }) => {
           const cur = u.plan
           const max = Math.max(1, ...u.history.map((h) => h.proofs))
           return (
@@ -68,11 +72,14 @@ export default function Billing() {
                     <div className="small muted">{fmtNum(p.proofs_per_month)} proofs/mo<br />{fmtNum(p.streams)} streams · {fmtNum(p.seats)} seats<br />Exports up to {fmtNum(p.evidence_max_proofs)} records</div>
                     <ul>{p.highlights.map((h) => <li key={h}>{h}</li>)}</ul>
                     <span className="grow" />
-                    {p.id !== cur.id && org.isAdmin && <button className="btn" onClick={() => setReq(p)}>{p.price_usd_month === null ? 'Contact sales' : 'Request this plan'}</button>}
+                    {p.id !== cur.id && org.isAdmin && (billing && org.isOwner && (p.id === 'team' || p.id === 'business')
+                      ? <button className="btn primary" onClick={() => go('/billing/checkout', { plan: p.id })}>Upgrade</button>
+                      : <button className="btn" onClick={() => setReq(p)}>{p.price_usd_month === null ? 'Contact sales' : 'Request this plan'}</button>)}
+                    {p.id === cur.id && billing && (p.id === 'team' || p.id === 'business') && org.isOwner && <button className="btn" onClick={() => go('/billing/portal')}>Manage subscription</button>}
                   </div>
                 ))}
               </div>
-              <div className="note">Plan changes are confirmed by our team, usually within one business day. Existing records always stay verifiable, whatever your plan.</div>
+              <div className="note">{billing ? 'Paid plans are billed through Stripe and apply as soon as payment succeeds. Enterprise is by quote.' : 'Plan changes are confirmed by our team, usually within one business day.'} Existing records always stay verifiable, whatever your plan.</div>
             </div>
           )
         }}

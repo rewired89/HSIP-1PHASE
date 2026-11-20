@@ -3,6 +3,35 @@
 
 use std::path::PathBuf;
 
+/// Outbound email through an HTTP API compatible with Resend (`POST {api_url}/emails`).
+#[derive(Clone)]
+pub struct EmailCfg {
+    pub api_url: String,
+    pub api_key: String,
+    pub from: String,
+}
+
+/// Stripe Checkout subscriptions. Price ids come from the Stripe dashboard.
+#[derive(Clone)]
+pub struct StripeCfg {
+    pub api_url: String,
+    pub secret_key: String,
+    pub webhook_secret: String,
+    pub price_team: Option<String>,
+    pub price_business: Option<String>,
+}
+
+impl std::fmt::Debug for EmailCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EmailCfg(..)")
+    }
+}
+impl std::fmt::Debug for StripeCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StripeCfg(..)")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind: String,
@@ -17,6 +46,8 @@ pub struct Config {
     pub anchor_interval_secs: u64,
     pub anchor_batch_trigger: i64,
     pub console_dir: Option<PathBuf>,
+    pub email: Option<EmailCfg>,
+    pub stripe: Option<StripeCfg>,
     /// Cheap Argon2 parameters, for tests only.
     pub fast_password_hash: bool,
 }
@@ -63,6 +94,33 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500),
             console_dir: env("HSP_CONSOLE_DIR").map(PathBuf::from),
+            email: match (env("HSP_EMAIL_API_KEY"), env("HSP_EMAIL_FROM")) {
+                (Some(api_key), Some(from)) => Some(EmailCfg {
+                    api_url: env("HSP_EMAIL_API_URL")
+                        .unwrap_or_else(|| "https://api.resend.com".into())
+                        .trim_end_matches('/')
+                        .to_string(),
+                    api_key,
+                    from,
+                }),
+                _ => None,
+            },
+            stripe: match (
+                env("HSP_STRIPE_SECRET_KEY"),
+                env("HSP_STRIPE_WEBHOOK_SECRET"),
+            ) {
+                (Some(secret_key), Some(webhook_secret)) => Some(StripeCfg {
+                    api_url: env("HSP_STRIPE_API_URL")
+                        .unwrap_or_else(|| "https://api.stripe.com".into())
+                        .trim_end_matches('/')
+                        .to_string(),
+                    secret_key,
+                    webhook_secret,
+                    price_team: env("HSP_STRIPE_PRICE_TEAM"),
+                    price_business: env("HSP_STRIPE_PRICE_BUSINESS"),
+                }),
+                _ => None,
+            },
             fast_password_hash: flag("HSP_FAST_PASSWORD_HASH", false),
         }
     }
@@ -81,6 +139,8 @@ impl Config {
             anchor_interval_secs: 3600,
             anchor_batch_trigger: 500,
             console_dir: None,
+            email: None,
+            stripe: None,
             fast_password_hash: true,
         }
     }

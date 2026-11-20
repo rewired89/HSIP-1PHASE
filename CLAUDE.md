@@ -86,7 +86,7 @@ Scope Cargo commands with `-p`; building the whole workspace pulls in unrelated 
 
 ## Known gaps (do not claim otherwise)
 
-Signing keys are custodial by default (the platform holds each org key); customer-held keys exist but are opt-in per org and one-way (see `docs/PROVE_PLATFORM.md`); no payment processor (plan changes are applied by the operator); no outbound email (invites are copy-paste links); no master-key rotation; rate limits are per node; Docker image and `embed-console` release flow are written and the embed build is verified, but the image has not been built in CI. See `docs/PROVE_PLATFORM.md` "Honest limits".
+Signing keys are custodial by default (the platform holds each org key); customer-held keys exist but are opt-in per org and one-way (see `docs/PROVE_PLATFORM.md`); Stripe billing and outbound email (HTTP API) are implemented but unverified against live accounts and off until configured (`HSP_STRIPE_*`, `HSP_EMAIL_*`), otherwise plan changes are applied by the operator and invites are copy-paste links; no master-key rotation; rate limits are per node; Docker image and `embed-console` release flow are written and the embed build is verified, but the image has not been built in CI. See `docs/PROVE_PLATFORM.md` "Honest limits".
 
 ## CodeMap protocol
 
