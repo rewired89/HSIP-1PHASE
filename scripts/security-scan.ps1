@@ -33,7 +33,10 @@ try {
   $env:HSP_BIND = "127.0.0.1:$Port"
   $env:HSP_PUBLIC_URL = "http://host.docker.internal:$Port"
   $proc = Start-Process -FilePath (Join-Path $root "target\release\hsip-platform.exe") -PassThru -WindowStyle Hidden
-  1..30 | ForEach-Object { try { Invoke-RestMethod "http://127.0.0.1:$Port/health" | Out-Null; $up = $true; break } catch { Start-Sleep 1 } }
+  $up = $false
+  for ($i = 0; $i -lt 30 -and -not $up; $i++) {
+    try { Invoke-RestMethod "http://127.0.0.1:$Port/health" | Out-Null; $up = $true } catch { Start-Sleep 1 }
+  }
   if (-not $up) { throw "Platform did not start." }
 
   # Two fake tenants so Strix can test tenant isolation.
