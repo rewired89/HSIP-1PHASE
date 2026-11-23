@@ -1,10 +1,12 @@
-name: Proof Check page
+name: Site (landing page and Proof Check)
 
 on:
   push:
     branches: [main]
     paths:
       - "verifier/**"
+      - "site/**"
+      - "docs/examples/prove/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -26,8 +28,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Assemble site
+        run: |
+          mkdir -p _site/samples
+          cp -r site/. _site/
+          cp -r verifier _site/check
+          cp docs/examples/prove/*.json _site/samples/
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: verifier
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4

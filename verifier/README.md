@@ -15,7 +15,7 @@ Or upload the folder to any static host (GitHub Pages works). Anyone can host th
 
 ## Hosting
 
-`.github/workflows/pages.yml` publishes this folder to GitHub Pages on every change. One-time setup: repository Settings, Pages, Source: GitHub Actions. The page then appears at `https://<owner>.github.io/<repo>/`.
+`.github/workflows/pages.yml` publishes this folder to GitHub Pages on every change. One-time setup: repository Settings, Pages, Source: GitHub Actions. The landing page (`site/`) appears at `https://<owner>.github.io/<repo>/` and this page at `/check/`.
 
 ## Rebuild the WebAssembly
 
