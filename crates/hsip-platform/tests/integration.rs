@@ -1345,3 +1345,74 @@ async fn permissions_api_rejects_a_misspelled_rule_and_stores_nothing() {
     .await;
     assert_eq!(st, StatusCode::OK, "{v}");
 }
+
+#[tokio::test]
+async fn invitations_are_rate_limited_per_recipient_and_per_organization() {
+    let e = env().await;
+    let t = signup(&e, "o@inv.test", "Invite Co").await;
+    sqlx::query("UPDATE organizations SET plan = 'enterprise' WHERE id = $1")
+        .bind(&t.org)
+        .execute(&e.state.db)
+        .await
+        .unwrap();
+    let url = format!("/v1/orgs/{}/invites", t.org);
+    let invite = |email: String| {
+        let (app, url, token) = (e.app.clone(), url.clone(), t.token.clone());
+        async move {
+            call(
+                &app,
+                "POST",
+                &url,
+                Some(&token),
+                Some(json!({"email": email, "role": "auditor"})),
+            )
+            .await
+            .0
+        }
+    };
+    // One recipient: three a day, then refused.
+    let mut same = Vec::new();
+    for _ in 0..4 {
+        same.push(invite("same@inv.test".into()).await);
+    }
+    assert_eq!(
+        same,
+        vec![
+            StatusCode::OK,
+            StatusCode::OK,
+            StatusCode::OK,
+            StatusCode::TOO_MANY_REQUESTS
+        ]
+    );
+    // One organization: twenty an hour in total (four were counted above).
+    let mut ok = 0;
+    let mut last = StatusCode::OK;
+    for n in 0..20 {
+        last = invite(format!("person{n}@inv.test")).await;
+        if last == StatusCode::OK {
+            ok += 1;
+        }
+    }
+    assert_eq!(ok, 16);
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn integrity_checks_are_rate_limited_and_report_completeness() {
+    let e = env().await;
+    let t = signup(&e, "o@int.test", "Integrity Co").await;
+    let sid = stream(&e, &t, "Checked stream").await;
+    let path = format!("/v1/orgs/{}/streams/{}/integrity", t.org, sid);
+    let mut ok = 0;
+    let mut last = StatusCode::OK;
+    for _ in 0..8 {
+        let (st, v) = call(&e.app, "GET", &path, Some(&t.token), None).await;
+        if st == StatusCode::OK {
+            ok += 1;
+            assert_eq!(v["complete"], true);
+        }
+        last = st;
+    }
+    assert_eq!(ok, 6, "six integrity checks per minute per organization");
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+}

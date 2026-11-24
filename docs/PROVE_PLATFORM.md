@@ -89,7 +89,7 @@ Errors are `{"error":{"code","message"}}`. Internal error text is logged, never 
 
 - Tokens (sessions, API keys, invites, share links) are 256-bit random and stored only as SHA-256. Passwords use Argon2id.
 - Signing keys are ChaCha20-Poly1305 encrypted with an HKDF-derived key from the master key. The master key file is written 0600.
-- Login (per email and per IP), sign-up, verification and share-view endpoints are rate limited; API keys are limited to 1,200 calls/minute. **Limits are in-memory per node**, so run behind a gateway for multi-node abuse protection.
+- Login (per email and per IP), sign-up, verification and share-view endpoints are rate limited. Invitations are limited to 20 an hour per organization and 3 a day per recipient (they send email from the platform's address). Stream integrity checks are limited to 6 a minute per organization and check at most 100,000 records per run, reporting `complete: false` beyond that (verify the rest offline from an evidence pack); API keys are limited to 1,200 calls/minute. **Limits are in-memory per node**, so run behind a gateway for multi-node abuse protection.
 - Request bodies are capped (2 MB default, 32 MB for `/v1/verify`). Responses carry `nosniff`, frame-deny, no-referrer and a CSP. The printable evidence report is HTML-escaped and carries its own restrictive CSP.
 - Record content never reaches the platform. `actor`, `action`, `subject` and `metadata` **are stored in clear** (they power search); do not put secrets there.
 

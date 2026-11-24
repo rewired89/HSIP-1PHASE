@@ -21,6 +21,13 @@ use crate::{
 
 const INVITE_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
 
+/// Text that goes into an email, with control characters (newlines, escapes) turned into spaces.
+fn plain(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 pub async fn list(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -80,6 +87,18 @@ pub async fn invite(
     {
         return Err(ApiError::Conflict("this person is already a member".into()));
     }
+    // Invitations send email from the platform's own address: cap how many an
+    // organization can send, and how often one recipient can be written to.
+    if !s.allow(&format!("invite:org:{org}"), 20, 3_600_000) {
+        return Err(ApiError::TooManyRequests(
+            "too many invitations sent from this organization, try again later".into(),
+        ));
+    }
+    if !s.allow(&format!("invite:to:{email}"), 3, 86_400_000) {
+        return Err(ApiError::TooManyRequests(
+            "this address has been invited too many times today".into(),
+        ));
+    }
     // A fresh invite replaces any earlier pending one for the same address.
     sqlx::query("DELETE FROM invites WHERE org_id = $1 AND email = $2 AND accepted_at IS NULL")
         .bind(&org)
@@ -113,10 +132,10 @@ pub async fn invite(
     let emailed = crate::email::send(
         &s,
         &email,
-        &format!("You are invited to {} on HSIP", info.name),
+        &format!("You are invited to {} on HSIP", plain(&info.name)),
         &format!(
             "{} invited you to join {} on HSIP as {}.\n\nAccept the invitation (expires in 7 days):\n{}\n\nIf you were not expecting this, ignore this email.",
-            m.user.email, info.name, role.as_str(), invite_url
+            plain(&m.user.email), plain(&info.name), role.as_str(), invite_url
         ),
     )
     .await;

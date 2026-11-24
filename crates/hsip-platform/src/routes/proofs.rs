@@ -503,6 +503,10 @@ pub async fn revoke_share(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Most records one integrity run will check. Longer streams report
+/// `complete: false`; verify the rest from an evidence pack with `hsip-proof`.
+const MAX_INTEGRITY_RECORDS: i64 = 100_000;
+
 /// Recomputes a stream's hash chain from the database and reports the first break.
 pub async fn integrity(
     State(s): State<AppState>,
@@ -510,6 +514,12 @@ pub async fn integrity(
     Path((org, sid)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
     auth::member(&s, &headers, &org).await?;
+    // A full walk of a stream is the most expensive call in the API: bound how often.
+    if !s.allow(&format!("integrity:{org}"), 6, 60_000) {
+        return Err(ApiError::TooManyRequests(
+            "integrity checks are limited to a few per minute, try again shortly".into(),
+        ));
+    }
     sqlx::query("SELECT 1 FROM streams WHERE id = $1 AND org_id = $2")
         .bind(&sid)
         .bind(&org)
@@ -523,6 +533,7 @@ pub async fn integrity(
     let mut prev_hash = String::new();
     let mut expected_seq: i64 = 1;
     let mut break_at: Option<(i64, &'static str)> = None;
+    let mut truncated = false;
     'outer: loop {
         let rows = sqlx::query(&format!("SELECT {PROOF_COLS} FROM proofs WHERE stream_id = $1 AND seq > $2 ORDER BY seq ASC LIMIT 500"))
             .bind(&sid).bind(after).fetch_all(&s.db).await?;
@@ -530,6 +541,10 @@ pub async fn integrity(
             break;
         }
         for r in &rows {
+            if checked >= MAX_INTEGRITY_RECORDS {
+                truncated = true;
+                break 'outer;
+            }
             let p = ProofRow::from_row(r)?;
             after = p.seq;
             checked += 1;
@@ -553,6 +568,7 @@ pub async fn integrity(
     Ok(Json(json!({
         "checked": checked,
         "intact": break_at.is_none(),
+        "complete": !truncated,
         "first_break_seq": break_at.map(|b| b.0),
         "reason": break_at.map(|b| b.1),
     })))

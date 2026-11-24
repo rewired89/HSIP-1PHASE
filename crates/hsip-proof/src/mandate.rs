@@ -245,10 +245,9 @@ pub fn evaluate(m: &Mandate, proofs: &[ProofBundle]) -> MandateReport {
         let mut times: Vec<i64> = covered.iter().map(|(_, t)| *t).collect();
         times.sort_unstable();
         for (b, t) in &covered {
-            let in_window = times
-                .iter()
-                .filter(|x| **x <= *t && **x > t.saturating_sub(window))
-                .count();
+            // Records at or before `t`, minus those at or before the window start.
+            let in_window = times.partition_point(|x| *x <= *t)
+                - times.partition_point(|x| *x <= t.saturating_sub(window));
             if in_window > rate.count as usize {
                 violations.push(v(
                     b,
@@ -432,6 +431,55 @@ mod tests {
         assert!(serde_json::from_value::<Rules>(typo).is_err());
         let ok = serde_json::json!({ "allowed_actions": ["pay"] });
         assert!(serde_json::from_value::<Rules>(ok).is_ok());
+    }
+
+    #[test]
+    fn rate_rule_matches_a_brute_force_count_on_many_records() {
+        // The windowed count uses binary search; check it against the obvious nested loop.
+        let rate = RateRule {
+            count: 3,
+            period_secs: 10,
+        };
+        let mut r = rules();
+        r.max_per_period = Some(rate.clone());
+        r.allowed_actions.clear();
+        r.max_amount = None;
+        r.allowed_values.clear();
+        let m = sign_mandate(body("bot", r), &key(1)).unwrap();
+        let mut ts = Vec::new();
+        let mut x: u64 = 12345;
+        for _ in 0..300 {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ts.push(1_000 + ((x >> 33) % 90_000) as i64);
+        }
+        let proofs: Vec<ProofBundle> = ts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| bundle(i as u32, "bot", "pay", *t, "1"))
+            .collect();
+        let got: std::collections::BTreeSet<String> = evaluate(&m, &proofs)
+            .violations
+            .into_iter()
+            .filter(|v| v.rule == "rate_exceeded")
+            .map(|v| v.seq)
+            .collect();
+        let window = 10_000i64;
+        let want: std::collections::BTreeSet<String> = proofs
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| {
+                let t: i64 = b.envelope.timestamp_ms.parse().unwrap();
+                ts.iter().filter(|x| **x <= t && **x > t - window).count() > rate.count as usize
+            })
+            .map(|(i, _)| i.to_string())
+            .collect();
+        assert!(
+            !want.is_empty(),
+            "the data should exceed the limit somewhere"
+        );
+        assert_eq!(got, want);
     }
 
     #[test]
