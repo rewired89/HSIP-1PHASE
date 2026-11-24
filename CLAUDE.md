@@ -44,6 +44,7 @@ Read `docs/PROVE_PLATFORM.md` (product, config, security model, honest limits) a
 ```powershell
 # Platform + verifier
 cargo test -p hsip-proof -p hsip-platform
+node --test crates/hsip-verify-web/smoke.test.mjs sdk/prove-node/integrations.test.mjs   # verifier + Node SDK
 cargo clippy -p hsip-proof -p hsip-platform --all-targets -- -D warnings
 cargo fmt -p hsip-proof -p hsip-platform
 
@@ -84,7 +85,7 @@ Scope Cargo commands with `-p`; building the whole workspace pulls in unrelated 
 ## Adding an API route
 
 1. Handler in `crates/hsip-platform/src/routes/<area>.rs` (auth first: `auth::member` / `auth::api_key` / `auth::operator`).
-2. Register in `routes/mod.rs` (`grep` for it afterwards; an unregistered handler compiles and silently 404s).
+2. Register in `routes/mod.rs` (`grep` for it afterwards; an unregistered handler compiles and silently 404s), then add it to `tests/access_matrix.rs`: that test fails until every route has a matrix row or an explicit exemption.
 3. State-changing org actions call `audit::log`.
 4. Integration test in `crates/hsip-platform/tests/integration.rs` (helpers in `tests/common/mod.rs`); if it touches SQL, run the Postgres test too.
 5. Update `docs/PROVE_PLATFORM.md` API summary and `CODEMAP.md`.

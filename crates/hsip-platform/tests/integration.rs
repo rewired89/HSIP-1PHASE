@@ -1299,3 +1299,49 @@ async fn trusted_proxy_header_sets_the_client_ip_and_cannot_be_forged() {
     }
     assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn permissions_api_rejects_a_misspelled_rule_and_stores_nothing() {
+    use hsip_proof::{mandate::*, verify_key_b64};
+    let e = env().await;
+    let t = signup(&e, "owner@typo.test", "Typo Co").await;
+    let grantor = hsip_proof::generate_signing_key();
+    let now = hsip_platform::db::now_ms();
+    let body = MandateBody {
+        format: MANDATE_FORMAT.into(),
+        mandate_id: "typo-1".into(),
+        grantor_key: verify_key_b64(&grantor),
+        agent: "bot".into(),
+        valid_from_ms: now - 1_000,
+        valid_until_ms: now + 3_600_000,
+        rules: Rules {
+            allowed_actions: vec!["pay".into()],
+            ..Default::default()
+        },
+    };
+    let m = sign_mandate(body, &grantor).unwrap();
+    let url = format!("/v1/orgs/{}/mandates", t.org);
+
+    // `allowed_action` (no "s") used to parse as "no rules", which allows everything.
+    let mut typo = serde_json::to_value(&m).unwrap();
+    let rules = typo["rules"].as_object_mut().unwrap();
+    let list = rules.remove("allowed_actions").unwrap();
+    rules.insert("allowed_action".into(), list);
+    let (st, _) = call(&e.app, "POST", &url, Some(&t.token), Some(typo)).await;
+    assert!(
+        st.is_client_error(),
+        "a misspelled rule must be refused, got {st}"
+    );
+    let (_, listed) = call(&e.app, "GET", &url, Some(&t.token), None).await;
+    assert_eq!(listed["mandates"].as_array().unwrap().len(), 0);
+
+    let (st, v) = call(
+        &e.app,
+        "POST",
+        &url,
+        Some(&t.token),
+        Some(serde_json::to_value(&m).unwrap()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+}

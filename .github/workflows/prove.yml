@@ -5,12 +5,20 @@ on:
     paths:
       - "crates/hsip-proof/**"
       - "crates/hsip-platform/**"
+      - "crates/hsip-verify-web/**"
+      - "verifier/**"
+      - "sdk/**"
+      - "docs/examples/prove/**"
       - "console/**"
       - ".github/workflows/prove.yml"
   pull_request:
     paths:
       - "crates/hsip-proof/**"
       - "crates/hsip-platform/**"
+      - "crates/hsip-verify-web/**"
+      - "verifier/**"
+      - "sdk/**"
+      - "docs/examples/prove/**"
       - "console/**"
 
 permissions:
@@ -50,6 +58,22 @@ jobs:
         working-directory: console
       - name: Release build with embedded console
         run: cargo build --release -p hsip-platform --features embed-console
+
+  sdks-and-verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Node SDK integrations, and the compiled verifier the Proof Check page loads.
+      - run: node --test sdk/prove-node/integrations.test.mjs crates/hsip-verify-web/smoke.test.mjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - run: python -m pytest -q
+        working-directory: sdk/prove-python
 
   dependency-audit:
     runs-on: ubuntu-latest

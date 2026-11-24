@@ -48,6 +48,8 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 
 - `common/mod.rs` helpers (`env`, `env_with`, `call`, `signup`, `stream`, `api_key`, `ingest`, `hash_of`).
 - `integration.rs` 9 tests: signup rules, full record/anchor/verify/share/evidence flow, DB tampering detection, roles + isolation, key scopes, plan limits + operator, filters + overview, login throttle, concurrent chain safety.
+- `access_matrix.rs` every session route called as no login, outsider, auditor, developer, admin and owner; fails when a role check is missing. A second test reads `routes/mod.rs` and fails when a route is registered without a matrix entry or an `EXEMPT` entry. A third checks that session tokens, API keys and the operator key are not interchangeable. Add a row here whenever you add a route.
+- `crates/hsip-verify-web/smoke.test.mjs` Node test of the compiled verifier in `verifier/pkg` (sample proof and pack verify, altered record fails, garbage never throws, permission typo rejected). CI job `sdks-and-verifier` runs it with the SDK tests.
 - `postgres_compat.rs` same core flow on real PostgreSQL (ignored unless `HSP_TEST_POSTGRES_URL`).
 
 ## console/src (React + Vite)
