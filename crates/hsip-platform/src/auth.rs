@@ -177,9 +177,13 @@ pub async fn api_key(state: &AppState, headers: &HeaderMap) -> ApiResult<ApiKeyA
     .bind(&th)
     .fetch_optional(&state.db)
     .await?
-    .ok_or_else(|| ApiError::Unauthorized("invalid API key".into()))?;
+    .ok_or_else(|| {
+        tracing::warn!(ip = ?client_ip(headers), "unknown API key presented");
+        ApiError::Unauthorized("invalid API key".into())
+    })?;
     let revoked: Option<i64> = row.try_get(5)?;
     if revoked.is_some() {
+        tracing::warn!(ip = ?client_ip(headers), "revoked API key presented");
         return Err(ApiError::Unauthorized("API key has been revoked".into()));
     }
     let auth = ApiKeyAuth {
@@ -191,6 +195,7 @@ pub async fn api_key(state: &AppState, headers: &HeaderMap) -> ApiResult<ApiKeyA
     };
     // 1,200 calls/min per key. Cheap guard, not a billing meter.
     if !state.allow(&format!("key:{}", auth.key_id), 1200, 60_000) {
+        tracing::warn!(key_id = ?auth.key_id, "API key rate limit hit");
         return Err(ApiError::TooManyRequests(
             "rate limit exceeded for this API key".into(),
         ));
@@ -217,6 +222,7 @@ pub fn operator(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
     if crypto::ct_eq(given, expected) {
         Ok(())
     } else {
+        tracing::warn!(ip = ?client_ip(headers), "operator key rejected");
         Err(ApiError::Unauthorized("operator key required".into()))
     }
 }

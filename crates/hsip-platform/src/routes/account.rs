@@ -161,6 +161,12 @@ pub struct SignupReq {
     pub org_name: String,
 }
 
+/// Hash checked when the email is unknown, so a miss costs what a hit costs.
+fn dummy_hash(fast: bool) -> &'static str {
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| crypto::hash_password("not-a-real-password", fast).unwrap_or_default())
+}
+
 fn check_password(p: &str) -> ApiResult<()> {
     if p.len() < 10 || p.len() > 200 {
         return Err(ApiError::BadRequest(
@@ -246,18 +252,24 @@ pub async fn login(
     if !s.allow(&format!("login:{email}"), 10, 15 * 60_000)
         || !s.allow(&format!("loginip:{ip}"), 60, 15 * 60_000)
     {
+        tracing::warn!(ip = ?ip, "sign-in throttled");
         return Err(ApiError::TooManyRequests(
             "too many sign-in attempts, wait a few minutes".into(),
         ));
     }
     let bad = || ApiError::Unauthorized("incorrect email or password".into());
-    let row = sqlx::query("SELECT id, name, password_hash FROM users WHERE email = $1")
+    let Some(row) = sqlx::query("SELECT id, name, password_hash FROM users WHERE email = $1")
         .bind(&email)
         .fetch_optional(&s.db)
         .await?
-        .ok_or_else(bad)?;
+    else {
+        let _ = crypto::verify_password(&r.password, dummy_hash(s.cfg.fast_password_hash));
+        tracing::warn!(ip = ?ip, "sign-in failed");
+        return Err(bad());
+    };
     let hash: String = row.try_get(2)?;
     if !crypto::verify_password(&r.password, &hash) {
+        tracing::warn!(ip = ?ip, "sign-in failed");
         return Err(bad());
     }
     let uid: String = row.try_get(0)?;

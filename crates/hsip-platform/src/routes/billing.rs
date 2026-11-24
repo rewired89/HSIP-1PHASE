@@ -209,6 +209,7 @@ pub async fn webhook(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !verify_signature(&c.webhook_secret, sig, &body, now_ms() / 1000) {
+        tracing::warn!(ip = ?auth::client_ip(&headers), "stripe webhook signature rejected");
         return Err(ApiError::BadRequest("invalid signature".into()));
     }
     let ev: Value =
