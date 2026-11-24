@@ -2,7 +2,7 @@
 
 **A notary for AI decisions.** HSIP gives companies tamper-evident, independently verifiable proof of what their automated systems decided and when.
 
-Your systems send a SHA-256 fingerprint of each decision. HSIP signs it, chains it to the previous one, batches it into a Merkle tree and anchors the root. Anyone, including an auditor, a regulator or a court expert, can then verify the record offline with open code, without trusting us. The content of your decisions never reaches HSIP.
+Your systems send a SHA-256 fingerprint of each decision. HSIP signs it, chains it to the previous one, batches it into a Merkle tree and anchors the root. Anyone, including an auditor, a regulator or a court expert, can then verify the record offline with open code, without trusting our servers. To know whose records they are, they compare the signing key with the one the organization publishes, through a second channel. The content of your decisions never reaches HSIP.
 
 > A proof shows that a record existed, unaltered, at a given time. It does not show the decision was right.
 

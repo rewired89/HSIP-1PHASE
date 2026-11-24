@@ -67,7 +67,8 @@ a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
 <li>It makes no network requests after loading. Turn your wifi off and it still works. Its security policy blocks it from contacting any other site.</li>
 <li>It runs the same open-source verifier as the <code>hsip-proof</code> command-line tool (source: <code>crates/hsip-proof</code> in the HSIP repository). For a result you can rely on in a dispute, run that tool on your own machine.</li>
 <li>This page is plain static files. Anyone can host their own copy.</li>
-<li>A genuine result means the record is unaltered since it was signed. It does not mean the decision it describes was right.</li>
+<li>A genuine result means the record is unaltered since it was signed by the key written in the file. It does not show whose key that is: compare it with the key the organization publishes, through a second channel. It does not mean the decision it describes was right.</li>
+<li>The anchor time shown in a file is reported, not proven here. To check the Bitcoin timestamp, verify the OpenTimestamps proof with an OpenTimestamps client.</li>
 </ul>
 </div>
 </main>
@@ -78,12 +79,12 @@ const GOOD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-3
 const BAD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"something.else\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
 const LABEL = {
   content_hash: "Record unchanged (its fingerprint is recomputed and matches)",
-  signature: "Signed by the organization's key",
+  signature: "Signature matches the key written in the file",
   format: "Known proof format",
-  batch_inclusion: "Included in the batch that was timestamped",
-  anchor_signature: "Batch signed by the timestamping key",
+  batch_inclusion: "Included in the signed batch",
+  anchor_signature: "Batch signature matches the key written in the file",
   manifest_hash: "Pack contents match their summary",
-  manifest_signature: "Pack summary is signed",
+  manifest_signature: "Pack summary signature matches the key written in the file",
 };
 const $ = (id) => document.getElementById(id);
 const out = $("result");
@@ -99,7 +100,7 @@ async function run(text){
   const res = r.result;
   const what = r.kind === "evidence_pack" ? "evidence pack" : "proof";
   let h = r.valid
-    ? '<div class="verdict ok">Genuine</div><p>This ' + what + ' passed every check that applies.</p>'
+    ? '<div class="verdict ok">Genuine</div><p>This ' + what + ' passed every check that applies: it is internally consistent and unaltered since it was signed. This page does not show who owns the signing key, so compare it with the organization\'s published key (below).</p>'
     : '<div class="verdict bad">Altered or invalid</div><p>This ' + what + ' failed at least one check. Do not rely on it.</p>';
   h += "<ul>";
   for (const c of res.checks) {
@@ -107,6 +108,9 @@ async function run(text){
     h += "<li>" + tag + "<strong>" + esc(LABEL[c.name] || c.name) + '</strong><br><span class="mut">' + esc(c.detail) + "</span></li>";
   }
   h += "</ul>";
+  let key = "";
+  try { key = String(JSON.parse(text).org_verify_key || ""); } catch (e) {}
+  if (key) h += '<p class="mut">Signing key in this file: <code>' + esc(key) + '</code><br>Anyone can create a key and a file that passes these checks. Compare this key with the one the organization publishes, through a second channel.</p>';
   out.innerHTML = h;
 }
 $("pgo").onclick = async () => {

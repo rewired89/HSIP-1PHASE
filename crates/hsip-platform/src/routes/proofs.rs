@@ -439,6 +439,7 @@ pub async fn create_share(
     Json(r): Json<ShareReq>,
 ) -> ApiResult<Json<Value>> {
     let m = auth::member(&s, &headers, &org).await?;
+    m.require_write()?;
     let row = engine::fetch_proof(&s.db, &org, &pid).await?;
     let token = crypto::random_token("hsv_");
     let id = Uuid::new_v4().to_string();

@@ -393,6 +393,33 @@ async fn roles_invites_and_tenant_isolation() {
     )
     .await;
     assert_eq!(st, StatusCode::FORBIDDEN);
+    // Auditor cannot publish a proof through a public share link; the owner can.
+    let (ka, _) = api_key(&e, &a, "ingest", Some(&sid_a)).await;
+    let (st, rec) = ingest(&e, &ka, &sid_a, 1).await;
+    assert_eq!(st, StatusCode::OK, "{rec}");
+    let share_path = format!(
+        "/v1/orgs/{}/proofs/{}/shares",
+        a.org,
+        rec["proof_id"].as_str().unwrap()
+    );
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &share_path,
+        Some(&aud.token),
+        Some(json!({"expires_days": 7})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &share_path,
+        Some(&a.token),
+        Some(json!({"expires_days": 7})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
 
     // Last-owner guard.
     let (_, me) = call(&e.app, "GET", "/v1/auth/me", Some(&a.token), None).await;

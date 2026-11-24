@@ -21,6 +21,7 @@ pub const MANDATE_FORMAT: &str = "hsip-mandate/1";
 /// Lets a record's own metadata carry the numbers the rules check. The
 /// sender declares them, so a mandate is only as honest as the recorder.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Rules {
     /// Actions the agent may take. Empty means any action.
     #[serde(default)]
@@ -37,12 +38,14 @@ pub struct Rules {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RateRule {
     pub count: u32,
     pub period_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AmountRule {
     pub field: String,
     pub limit: u64,
@@ -416,6 +419,19 @@ mod tests {
         assert_eq!(r.violations[0].rule, "rate_exceeded");
         assert_eq!(r.violations[0].seq, "3");
         assert!(!r.within_permission);
+    }
+
+    #[test]
+    fn a_misspelled_rule_key_is_rejected_not_silently_dropped() {
+        // `allowed_action` (missing "s") used to parse as "no rules", which allows everything.
+        let typo = serde_json::json!({ "allowed_action": ["pay"] });
+        assert!(serde_json::from_value::<Rules>(typo).is_err());
+        let typo = serde_json::json!({ "max_per_period": { "count": 2, "period": 60 } });
+        assert!(serde_json::from_value::<Rules>(typo).is_err());
+        let typo = serde_json::json!({ "max_amount": { "field": "amount", "limt": 100 } });
+        assert!(serde_json::from_value::<Rules>(typo).is_err());
+        let ok = serde_json::json!({ "allowed_actions": ["pay"] });
+        assert!(serde_json::from_value::<Rules>(ok).is_ok());
     }
 
     #[test]
