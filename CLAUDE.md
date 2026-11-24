@@ -36,7 +36,7 @@ Read `docs/PROVE_PLATFORM.md` (product, config, security model, honest limits) a
 | `console/` | React + Vite business console and public pages (landing, verify, shared proof, operator). | Platform work |
 | `sdk/prove-python`, `sdk/prove-node` | Dependency-free client SDKs for the platform. | Platform work |
 | `docs/PROVE_*.md`, `docs/examples/prove/` | Platform docs, audit guide (`PROVE_AUDIT.md`) and pinned format fixtures. | Platform work |
-| `Dockerfile.platform`, `docker-compose.platform.yml`, `.env.platform.example`, `.github/workflows/prove.yml` | Deployment and CI for the platform. | Platform work |
+| `Dockerfile.platform`, `docker-compose.platform.yml`, `fly.toml` (Fly.io, sets `HSP_CLIENT_IP_HEADER=fly-client-ip`, mounts the `/data` volume; not deployed yet), `.env.platform.example`, `.github/workflows/prove.yml` | Deployment and CI for the platform. | Platform work |
 | `crates/hsip-core` and the other Phase 2 crates | Protocol and crypto core. | **Do not modify** |
 
 ## Build and test

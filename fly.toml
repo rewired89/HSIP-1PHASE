@@ -1,0 +1,37 @@
+# Fly.io configuration for the HSIP platform. Nothing here is deployed yet.
+# The settings below are not secret. Secrets (HSP_MASTER_KEY, HSP_OPERATOR_KEY,
+# Stripe and email keys) are set with `fly secrets set`, never in this file.
+
+app = "hsip-platform"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile.platform"
+
+[env]
+  # Fly's proxy sets this header to the real client address. Without it every
+  # visitor would share one rate-limit bucket. Never use X-Forwarded-For here.
+  HSP_CLIENT_IP_HEADER = "fly-client-ip"
+  HSP_BIND = "0.0.0.0:8080"
+  HSP_DATA_DIR = "/data"
+
+# The database and the generated keys live here. Without a volume they are lost
+# on every deploy, which would destroy the proof chain.
+[mounts]
+  source = "hsip_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The platform anchors batches in the background, so it must keep running.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"

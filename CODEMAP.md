@@ -64,7 +64,7 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 - `hsip-proof` also exposes customer-key helpers: `generate_signing_key`, `verify_key_b64`, `registration_digest`/`sign_registration`/`verify_registration`, `verify_hash_signature`, `check_prepared`; CLI `keygen`, `register-proof`. `PackManifest.issuer_keys` lists extra signer keys.
 - `sdk/prove-python/hsip_prove.py`, `sdk/prove-node/index.mjs` ingest/read/verify clients; identical `hash_payload` output across languages for ASCII keys.
 - `docs/PROVE_PLATFORM.md`, `docs/PROVE_PROOF_FORMAT.md`, `docs/examples/prove/` (real fixtures).
-- `Dockerfile.platform`, `docker-compose.platform.yml`, `.env.platform.example`, `.github/workflows/prove.yml`.
+- `Dockerfile.platform`, `docker-compose.platform.yml`, `.env.platform.example`, `.github/workflows/prove.yml`. `fly.toml`: Fly.io app config (build from `Dockerfile.platform`, `HSP_CLIENT_IP_HEADER=fly-client-ip`, `/data` volume mount `hsip_data`, always-on machine, `/health` check). Secrets are set with `fly secrets set`; nothing is deployed.
 
 - `sdk/prove-action/` GitHub Action (`action.yml`, `record.mjs`): hashes a file or the commit SHA locally and records it via the Node SDK. `docs/PROVE_AI_ACT_LOGGING.md`: recording template for high-risk AI decisions.
 - `sdk/prove-python/hsip_otel.py` `HsipSpanProcessor`: OpenTelemetry span processor, selected spans are hashed locally and recorded on a background thread (only hash, trace and span ids sent). Tests: `test_hsip_otel.py`.
