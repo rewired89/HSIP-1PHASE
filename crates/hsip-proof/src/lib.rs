@@ -16,7 +16,7 @@ pub mod mandate;
 pub mod merkle;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -182,9 +182,11 @@ fn check(name: &str, ok: Option<bool>, detail: impl Into<String>) -> Check {
     }
 }
 
+/// A well-formed Ed25519 public key that is not a small-order point. Small-order
+/// keys can "sign" any message, so they are never accepted.
 fn vk_from_b64(s: &str) -> Option<VerifyingKey> {
     let b: [u8; 32] = B64.decode(s).ok()?.try_into().ok()?;
-    VerifyingKey::from_bytes(&b).ok()
+    VerifyingKey::from_bytes(&b).ok().filter(|k| !k.is_weak())
 }
 
 fn sig_from_b64(s: &str) -> Option<Signature> {
@@ -213,7 +215,7 @@ pub fn verify_bundle(b: &ProofBundle) -> Verification {
         let vk = vk_from_b64(&b.org_verify_key)?;
         let sig = sig_from_b64(&b.signature)?;
         let h: [u8; 32] = hex::decode(&b.event_hash).ok()?.try_into().ok()?;
-        Some(vk.verify(&h, &sig).is_ok())
+        Some(vk.verify_strict(&h, &sig).is_ok())
     })()
     .unwrap_or(false);
     checks.push(check(
@@ -274,7 +276,7 @@ pub fn verify_bundle(b: &ProofBundle) -> Verification {
                 let vk = vk_from_b64(&a.anchor_verify_key)?;
                 let sig = sig_from_b64(&a.anchor_signature)?;
                 let root: [u8; 32] = hex::decode(&a.merkle_root).ok()?.try_into().ok()?;
-                Some(vk.verify(&root, &sig).is_ok())
+                Some(vk.verify_strict(&root, &sig).is_ok())
             })()
             .unwrap_or(false);
             checks.push(check(
@@ -375,7 +377,7 @@ pub fn verify_pack(p: &EvidencePack) -> PackVerification {
         let vk = vk_from_b64(&p.org_verify_key)?;
         let sig = sig_from_b64(&p.manifest_signature)?;
         let h: [u8; 32] = hex::decode(&p.manifest_hash).ok()?.try_into().ok()?;
-        Some(vk.verify(&h, &sig).is_ok())
+        Some(vk.verify_strict(&h, &sig).is_ok())
     })()
     .unwrap_or(false);
     checks.push(check(
@@ -533,7 +535,7 @@ pub fn verify_hash_signature(vk_b64: &str, hash_hex: &str, sig_b64: &str) -> boo
         let vk = vk_from_b64(vk_b64)?;
         let sig = sig_from_b64(sig_b64)?;
         let h: [u8; 32] = hex::decode(hash_hex).ok()?.try_into().ok()?;
-        Some(vk.verify(&h, &sig).is_ok())
+        Some(vk.verify_strict(&h, &sig).is_ok())
     })()
     .unwrap_or(false)
 }
@@ -717,6 +719,28 @@ mod tests {
         t2.anchor.as_mut().unwrap().anchor_verify_key =
             B64.encode(key(8).verifying_key().to_bytes());
         assert!(!verify_bundle(&t2).valid);
+    }
+
+    #[test]
+    fn a_weak_public_key_cannot_sign_anything() {
+        // The identity point with the all-zero-scalar signature "verifies" any message
+        // under lenient Ed25519 checks. Strict verification and weak-key rejection stop it.
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut sig = [0u8; 64];
+        sig[0] = 1;
+        let mut b = bundle(env(1, ""), &key(1));
+        b.org_verify_key = B64.encode(identity);
+        b.signature = B64.encode(sig);
+        let v = verify_bundle(&b);
+        assert!(!v.valid);
+        assert_eq!(v.checks[1].ok, Some(false), "the signature check must fail");
+        assert!(!is_valid_verify_key(&B64.encode(identity)));
+        assert!(!verify_hash_signature(
+            &B64.encode(identity),
+            &b.event_hash,
+            &B64.encode(sig)
+        ));
     }
 
     #[test]

@@ -36,7 +36,7 @@ Read `docs/PROVE_PLATFORM.md` (product, config, security model, honest limits) a
 | `console/` | React + Vite business console and public pages (landing, verify, shared proof, operator). | Platform work |
 | `sdk/prove-python`, `sdk/prove-node` | Dependency-free client SDKs for the platform. | Platform work |
 | `docs/PROVE_*.md`, `docs/examples/prove/` | Platform docs, audit guide (`PROVE_AUDIT.md`) and pinned format fixtures. | Platform work |
-| `Dockerfile.platform`, `docker-compose.platform.yml`, `fly.toml` (Fly.io, sets `HSP_CLIENT_IP_HEADER=fly-client-ip`, mounts the `/data` volume; not deployed yet), `.env.platform.example`, `.github/workflows/prove.yml` | Deployment and CI for the platform. | Platform work |
+| `Dockerfile.platform`, `docker-compose.platform.yml`, `fly.toml` (Fly.io, sets `HSP_CLIENT_IP_HEADER=fly-client-ip`, mounts the `/data` volume; not deployed yet), `.env.platform.example`, `.github/workflows/prove.yml` | Deployment and CI for the platform. Every GitHub Action is pinned to a commit SHA (the tag is in a trailing comment); when updating one, look up the new SHA and keep `toolchain: stable` on `dtolnay/rust-toolchain`. | Platform work |
 | `crates/hsip-core` and the other Phase 2 crates | Protocol and crypto core. | **Do not modify** |
 
 ## Build and test
@@ -73,6 +73,7 @@ Scope Cargo commands with `-p`; building the whole workspace pulls in unrelated 
 - **Tenant isolation**: every org-scoped handler starts with `auth::member(...)` (non-members get 404) and every query filters by `org_id`. API-key handlers use `auth::api_key` and the key's own `org_id`/`stream_id`.
 - **Roles**: `owner` > `admin` > `developer` > `auditor` (read-only, may export evidence; may not create share links). Keep the last-owner guards in `routes/team.rs`.
 - **Verifier claims stay honest**: `hsip-proof` verifies against the key written in the file, so a pass proves consistency and integrity, not identity or anchor time. Never write "signed by the organization" or "without trusting us" without the caveat to compare the key fingerprint through a second channel and that the Bitcoin timestamp is checked separately. See `docs/PROVE_PROOF_FORMAT.md`.
+- **Strict signatures**: `hsip-proof` verifies with `verify_strict` and rejects small-order public keys (`vk_from_b64`, `verify_mandate`). Never switch back to lenient `verify`; `a_weak_public_key_cannot_sign_anything` pins it.
 - **Permission rules fail closed on typos**: `Rules`, `RateRule` and `AmountRule` use `deny_unknown_fields`. Do not add `#[serde(flatten)]` to anything that contains them.
 - **Auth failures are visible**: failed sign-in, unknown or revoked API key, rejected operator key and a bad Stripe signature each log a `warn` (client IP, never the secret). The login path hashes a dummy password for unknown emails so timing does not reveal registered addresses; keep both when editing auth.
 - **Errors**: never return library or database error text to callers (`errors.rs` converts and logs). Plan-limit failures are `402`.

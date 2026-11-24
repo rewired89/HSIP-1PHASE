@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -100,10 +100,12 @@ pub fn verify_mandate(m: &Mandate) -> bool {
             .ok()?
             .try_into()
             .ok()?;
-        let vk = VerifyingKey::from_bytes(&vk).ok()?;
+        let vk = VerifyingKey::from_bytes(&vk)
+            .ok()
+            .filter(|k| !k.is_weak())?;
         let sig: [u8; 64] = B64.decode(m.signature.trim()).ok()?.try_into().ok()?;
         let h = mandate_hash(&m.body).ok()?;
-        Some(vk.verify(&h, &Signature::from_bytes(&sig)).is_ok())
+        Some(vk.verify_strict(&h, &Signature::from_bytes(&sig)).is_ok())
     })()
     .unwrap_or(false)
 }

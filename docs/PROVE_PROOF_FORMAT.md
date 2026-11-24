@@ -2,7 +2,7 @@
 
 This is the wire format behind every proof, share link and evidence pack. It is deliberately small so that a third party can reimplement the verifier in an afternoon. The reference implementation is `crates/hsip-proof` (`hsip-proof verify <file>`); checked-in fixtures are in `docs/examples/prove/`, pinned by `crates/hsip-proof/tests/samples.rs`.
 
-Primitives: SHA-256, Ed25519, RFC 8785 JSON Canonicalization (JCS), RFC 6962 Merkle trees. Nothing else.
+Primitives: SHA-256, Ed25519, RFC 8785 JSON Canonicalization (JCS), RFC 6962 Merkle trees. Nothing else. Verifiers must use strict Ed25519 verification (the reference uses `verify_strict`) and must reject small-order public keys, which can "sign" any message under lenient checks. Genuine signatures are unaffected, so issued proofs stay valid.
 
 ## Permission format (`hsip-mandate/1`)
 
