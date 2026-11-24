@@ -1237,3 +1237,65 @@ async fn permissions_flag_records_outside_what_was_allowed() {
     let (_, l) = call(&e.app, "GET", &url, Some(&t.token), None).await;
     assert!(l["mandates"][0]["revoked_at"].is_i64());
 }
+
+async fn signup_from(e: &Env, headers: &[(&str, &str)], n: usize) -> StatusCode {
+    call_headers(
+        &e.app,
+        "POST",
+        "/v1/auth/signup",
+        headers,
+        json!({
+            "email": format!("u{n}@ip.test"), "password": "correct-horse-battery",
+            "name": "Test User", "org_name": format!("IP Org {n}")
+        }),
+    )
+    .await
+    .0
+}
+
+#[tokio::test]
+async fn forwarded_for_header_cannot_bypass_ip_limits() {
+    let e = env().await;
+    let mut ok = 0;
+    let mut last = StatusCode::OK;
+    for n in 0..12 {
+        let xff = format!("10.0.0.{n}");
+        last = signup_from(&e, &[("x-forwarded-for", &xff)], n).await;
+        if last == StatusCode::OK {
+            ok += 1;
+        }
+    }
+    assert_eq!(ok, 10, "the sign-up limit is 10 per hour per address");
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn trusted_proxy_header_sets_the_client_ip_and_cannot_be_forged() {
+    let mut cfg = Config::for_tests();
+    cfg.client_ip_header = Some("fly-client-ip".into());
+    let e = env_with(cfg).await;
+    // Different real clients behind the proxy each get their own allowance.
+    for n in 0..12 {
+        let ip = format!("203.0.113.{n}");
+        assert_eq!(
+            signup_from(&e, &[("fly-client-ip", &ip)], n).await,
+            StatusCode::OK
+        );
+    }
+    // One real client cannot reset its counter by sending the internal header or X-Forwarded-For.
+    let mut last = StatusCode::OK;
+    for n in 100..112 {
+        let fake = format!("198.51.100.{}", n - 100);
+        last = signup_from(
+            &e,
+            &[
+                ("fly-client-ip", "192.0.2.7"),
+                ("x-hsip-client-ip", &fake),
+                ("x-forwarded-for", &fake),
+            ],
+            n,
+        )
+        .await;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+}

@@ -20,12 +20,48 @@ pub mod routes;
 pub mod state;
 pub mod ui;
 
-use axum::{http::HeaderValue, Router};
+use std::net::{IpAddr, SocketAddr};
+
+use axum::{
+    extract::{ConnectInfo, Request, State},
+    http::HeaderValue,
+    middleware::{from_fn_with_state, Next},
+    response::Response,
+    Router,
+};
 use tower_http::set_header::SetResponseHeaderLayer;
+
+/// Resolves the caller's IP once, from a source the caller cannot forge, and
+/// stores it under `auth::CLIENT_IP_HEADER` (replacing anything sent there).
+async fn resolve_client_ip(
+    State(s): State<state::AppState>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let from_proxy = s
+        .cfg
+        .client_ip_header
+        .as_deref()
+        .and_then(|h| req.headers().get(h))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<IpAddr>().ok());
+    let ip = from_proxy
+        .or_else(|| {
+            req.extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|c| c.0.ip())
+        })
+        .map_or_else(|| "local".to_string(), |ip| ip.to_string());
+    if let Ok(v) = HeaderValue::from_str(&ip) {
+        req.headers_mut().insert(auth::CLIENT_IP_HEADER, v);
+    }
+    next.run(req).await
+}
 
 /// Complete application: API routes, security headers, console fallback.
 pub fn app(state: state::AppState) -> Router {
     let console_dir = state.cfg.console_dir.clone();
+    let ip_state = state.clone();
     let h = |name: &'static str, v: &'static str| {
         SetResponseHeaderLayer::if_not_present(
             axum::http::HeaderName::from_static(name),
@@ -41,4 +77,5 @@ pub fn app(state: state::AppState) -> Router {
             "content-security-policy",
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
         ))
+        .layer(from_fn_with_state(ip_state, resolve_client_ip))
 }

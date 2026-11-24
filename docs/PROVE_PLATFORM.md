@@ -44,6 +44,7 @@ First run creates `./data/platform.db` and `./data/master.key` (mode 0600). **Ba
 | `HSP_OPERATOR_KEY` | unset | 24+ chars; enables `/v1/operator/*` and the `/operator` console. Unset = those routes 404 |
 | `HSP_PUBLIC_URL` | derived from bind | Used in share and invite links |
 | `HSP_SIGNUP` | `true` | `false` = invitation-only |
+| `HSP_CLIENT_IP_HEADER` | unset | Header your proxy sets to the real client IP, used for per-IP rate limits. On Fly.io set `fly-client-ip`. Unset means the socket address is used. `X-Forwarded-For` is never trusted. Behind any other proxy, set this to the header it overwrites, or every caller shares the proxy's address. |
 | `HSP_OTS` | `false` | Commit batch roots to Bitcoin through OpenTimestamps calendars |
 | `HSP_ANCHOR_INTERVAL_SECS` / `HSP_ANCHOR_BATCH` | `60` / `500` | Anchor when the oldest unanchored record is this old, or this many are waiting |
 | `HSP_CONSOLE_DIR` | `console/dist` | Console files when not embedded |

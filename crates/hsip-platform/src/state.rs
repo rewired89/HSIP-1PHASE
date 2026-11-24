@@ -8,6 +8,9 @@ use sqlx::{AnyPool, Row};
 
 use crate::{config::Config, crypto, db};
 
+/// Upper bound on live rate-limit windows kept in memory.
+const MAX_THROTTLE_KEYS: usize = 200_000;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: AnyPool,
@@ -104,6 +107,14 @@ impl AppState {
     /// Fixed-window counter. Returns false once `limit` hits within `window_ms`.
     pub fn allow(&self, bucket: &str, limit: u32, window_ms: i64) -> bool {
         let now = db::now_ms();
+        // Keys can include caller-chosen text (an email), so the map is bounded:
+        // at the cap, expired windows are dropped and a new key is refused if none were.
+        if self.throttle.len() >= MAX_THROTTLE_KEYS && !self.throttle.contains_key(bucket) {
+            self.throttle.retain(|_, v| now - v.1 < 3_600_000);
+            if self.throttle.len() >= MAX_THROTTLE_KEYS {
+                return false;
+            }
+        }
         let mut e = self.throttle.entry(bucket.to_string()).or_insert((0, now));
         if now - e.1 >= window_ms {
             *e = (0, now);

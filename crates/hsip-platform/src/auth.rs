@@ -227,11 +227,17 @@ pub fn operator(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
     }
 }
 
+/// Internal header set by `resolve_client_ip` on every request. Any value a
+/// caller sends under this name is overwritten before a handler runs.
+pub const CLIENT_IP_HEADER: &str = "x-hsip-client-ip";
+
+/// The caller's IP as resolved by the middleware: the configured trusted proxy
+/// header, else the socket peer address, else `local` (no socket, as in tests).
+/// `X-Forwarded-For` is deliberately not read: a caller can put anything in it.
 pub fn client_ip(headers: &HeaderMap) -> String {
     headers
-        .get("x-forwarded-for")
+        .get(CLIENT_IP_HEADER)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "local".into())

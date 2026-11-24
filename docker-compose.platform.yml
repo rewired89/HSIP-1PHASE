@@ -15,6 +15,7 @@ services:
       HSP_OPERATOR_KEY: ${HSP_OPERATOR_KEY:-}
       HSP_PUBLIC_URL: ${HSP_PUBLIC_URL:-http://localhost:8080}
       HSP_SIGNUP: ${HSP_SIGNUP:-true}
+      HSP_CLIENT_IP_HEADER: ${HSP_CLIENT_IP_HEADER:-}
       HSP_OTS: ${HSP_OTS:-false}
       RUST_LOG: info
     depends_on:

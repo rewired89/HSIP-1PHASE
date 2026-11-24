@@ -42,6 +42,9 @@ pub struct Config {
     pub operator_key: Option<String>,
     pub public_url: String,
     pub signup_open: bool,
+    /// Header a trusted proxy sets to the real client IP (Fly.io: `fly-client-ip`).
+    /// `None` means use the socket peer address; `X-Forwarded-For` is never trusted.
+    pub client_ip_header: Option<String>,
     pub ots_enabled: bool,
     pub anchor_interval_secs: u64,
     pub anchor_batch_trigger: i64,
@@ -86,6 +89,7 @@ impl Config {
             operator_key: env("HSP_OPERATOR_KEY"),
             public_url,
             signup_open: flag("HSP_SIGNUP", true),
+            client_ip_header: env("HSP_CLIENT_IP_HEADER").map(|h| h.trim().to_ascii_lowercase()),
             ots_enabled: flag("HSP_OTS", false),
             anchor_interval_secs: env("HSP_ANCHOR_INTERVAL_SECS")
                 .and_then(|v| v.parse().ok())
@@ -135,6 +139,7 @@ impl Config {
             operator_key: Some("operator-key-for-tests-0123456789".into()),
             public_url: "http://localhost:8080".into(),
             signup_open: true,
+            client_ip_header: None,
             ots_enabled: false,
             anchor_interval_secs: 3600,
             anchor_batch_trigger: 500,

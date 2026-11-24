@@ -77,7 +77,8 @@ Scope Cargo commands with `-p`; building the whole workspace pulls in unrelated 
 - **Errors**: never return library or database error text to callers (`errors.rs` converts and logs). Plan-limit failures are `402`.
 - **SQL portability (SQLite + PostgreSQL via `sqlx::Any`)**: `$1, $2, ...` placeholders only, never `?`; timestamps and counts are `BIGINT`; binary is `BYTEA`; never `SUM()` (Postgres returns NUMERIC, which `Any` cannot decode); never `$n IS NULL OR col = $n` (untyped NULL binds fail on Postgres), build the WHERE with `qb::Where`; `ADD COLUMN` style migrations are not used, the schema is `CREATE TABLE IF NOT EXISTS` in `db.rs`, so a schema change to an existing deployment needs an explicit new migration step in `db::run_migrations`.
 - **New table**: add it to `db::SCHEMA`; tests in `tests/` build a fresh database each run.
-- **Metric/label hygiene, rate limits**: in-memory per node (`AppState::allow`); do not claim distributed limits.
+- **Metric/label hygiene, rate limits**: in-memory per node (`AppState::allow`, bounded at 200,000 keys); do not claim distributed limits.
+- **Client IP**: never read `X-Forwarded-For` or any caller-supplied header. `auth::client_ip` returns the value `resolve_client_ip` computed from `HSP_CLIENT_IP_HEADER` (set to `fly-client-ip` on Fly.io) or the socket address. A new per-IP limit must use `auth::client_ip`.
 - **Console**: all server calls go through `console/src/api.js`; org-scoped calls through `useOrg()`. `Gate` children must be a single function; modals go outside it. Escape nothing by hand in JSX; the printable report (`report.rs`) escapes manually and must keep its CSP meta tag.
 
 ## Adding an API route
