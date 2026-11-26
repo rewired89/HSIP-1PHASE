@@ -3,43 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
 <title>HSIP Proof Check</title>
+<!-- console.css is the console's own stylesheet (console/src/styles.css). The Pages workflow copies it next to this page; when hosting this folder yourself, copy it here too. -->
+<link rel="stylesheet" href="console.css">
 <style>
-:root{--bg:#fff;--fg:#14171f;--mut:#5b6472;--line:#d9dde5;--ok:#0b7a3b;--bad:#b3261e;--na:#6b7280;--card:#f6f7f9}
-@media (prefers-color-scheme:dark){:root{--bg:#10131a;--fg:#eceff4;--mut:#9aa3b2;--line:#2a303c;--ok:#4cc27f;--bad:#ff7b72;--na:#9aa3b2;--card:#171b24}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
-main{max-width:760px;margin:0 auto;padding:32px 16px 64px}
-h1{font-size:26px;margin:0 0 6px}p{margin:8px 0}.mut{color:var(--mut)}
-textarea{width:100%;min-height:170px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:12px;font:13px/1.45 ui-monospace,monospace}
-button,label.file{background:var(--fg);color:var(--bg);border:0;border-radius:8px;padding:10px 16px;font:inherit;cursor:pointer;display:inline-block}
-button.alt,label.file{background:var(--card);color:var(--fg);border:1px solid var(--line)}
-.row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
-#result{margin-top:20px;display:none;border:1px solid var(--line);border-radius:10px;padding:18px;background:var(--card)}
-.verdict{font-size:22px;font-weight:700}.ok{color:var(--ok)}.bad{color:var(--bad)}
-ul{list-style:none;padding:0;margin:14px 0 0}li{padding:10px 0;border-top:1px solid var(--line)}
-.tag{font-weight:700;margin-right:8px}.na{color:var(--na)}
-.note{margin-top:28px;padding:14px;border:1px solid var(--line);border-radius:10px;font-size:14px}
-a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
-.grid{display:grid;gap:12px}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:560px){.two{grid-template-columns:1fr}}.f{display:block;font-size:14px}.f input,.f select{width:100%;margin-top:4px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px;font:inherit}
+:root{--card:var(--surface-2);--fg:var(--ink);--mut:var(--muted);--na:var(--muted)}
+.check{display:block;max-width:860px;margin:0 auto;padding:8px 20px 64px}
+.check h1{font-size:34px;letter-spacing:-0.02em;margin:18px 0 6px}
+.check h2{font-size:20px;margin:0 0 4px}
+.check .card{margin-top:20px}.check .card-b{padding:22px}
+.check p{margin:8px 0}.mut{color:var(--muted)}
+.check textarea{width:100%;font:13px/1.45 var(--mono)}
+.check .row{margin:12px 0;flex-wrap:wrap}
+#result,#presult{margin-top:18px;border:1px solid var(--line);border-radius:var(--radius);padding:18px;background:var(--surface-2)}
+#result{display:none}
+.check ul{list-style:none;padding:0;margin:14px 0 0}.check li{padding:10px 0;border-top:1px solid var(--line)}
+.tag{font-weight:700;margin-right:8px}.tag.ok{color:var(--ok)}.tag.bad{color:var(--bad)}.tag.na{color:var(--muted)}
+.check .verdict.ok,.check .verdict.bad{font-size:20px;font-weight:700}
+.check .grid{display:grid;gap:12px}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.note ul{list-style:disc;padding-left:20px}.note li{border:0;padding:3px 0}
+@media(max-width:720px){.two{grid-template-columns:1fr}.land-nav{gap:12px}.land-nav a:not(.brand):not(.btn){display:none}.badge{white-space:normal}}
 </style>
 </head>
 <body>
-<main>
-<h1>HSIP Proof Check</h1>
-<p class="mut">Drop in an HSIP proof file or evidence pack and see whether it is genuine or has been altered. The check runs inside this page, on your computer. Nothing is uploaded.</p>
+<nav class="land-nav" aria-label="Site">
+  <a href="../" class="brand"><svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#1f4fd8"/><path d="M9 16.5l4.5 4.5L23 11" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg> <span>HSIP</span></a>
+  <span class="grow"></span>
+  <a href="../">Home</a>
+  <a href="https://github.com/rewired89/HSIP-1PHASE">Source code</a>
+</nav>
+<main class="check">
+<span class="badge brand">Runs in your browser, offline after it loads</span>
+<h1>Proof Check</h1>
+<p class="lead mut" style="font-size:17px;max-width:680px">Drop in an HSIP proof file or evidence pack and see whether it is genuine or has been altered. The check runs inside this page, on your computer. Nothing is uploaded.</p>
+
+<div class="card"><div class="card-b">
 
 <textarea id="input" spellcheck="false" placeholder="Paste the proof JSON here, or choose a file."></textarea>
 <div class="row">
-  <button id="go">Check it</button>
-  <label class="file">Choose file<input id="file" type="file" accept=".json,application/json" hidden></label>
-  <button class="alt" id="s1">Try a genuine sample</button>
-  <button class="alt" id="s2">Try a tampered sample</button>
+  <button class="btn primary" id="go">Check it</button>
+  <label class="btn">Choose file<input id="file" type="file" accept=".json,application/json" hidden></label>
+  <button class="btn" id="s1">Try a genuine sample</button>
+  <button class="btn" id="s2">Try a tampered sample</button>
 </div>
 
 <div id="result" role="status" aria-live="polite"></div>
+</div></div>
 
-<h2 style="font-size:20px;margin:36px 0 4px">Create a permission</h2>
+<div class="card"><div class="card-b">
+<h2>Create a permission</h2>
 <p class="mut">Say what an agent may do and sign it with your own key. The key is made and kept in this page, on your computer. Nothing is sent anywhere.</p>
 <div class="grid">
 <label class="f">Agent name <span class="mut">(the name it records its actions under)</span><input id="c-agent" placeholder="pay-bot"></label>
@@ -50,16 +63,19 @@ a{color:inherit}code{background:var(--card);padding:1px 5px;border-radius:4px}
 <div class="two"><label class="f">Only these values for a field <span class="mut">(field name)</span><input id="c-vfield" placeholder="payee"></label><label class="f">Allowed values <span class="mut">(comma separated)</span><input id="c-values" placeholder="acme, globex"></label></div>
 <label class="f">Your private key <span class="mut">(keep it secret and backed up; whoever holds it can grant permissions as you)</span><textarea id="c-key" spellcheck="false" style="min-height:70px" placeholder="Click Generate a new key, or paste a key file made by hsip-proof keygen"></textarea></label>
 </div>
-<div class="row"><button class="alt" id="c-gen">Generate a new key</button><button id="c-sign">Sign permission</button></div>
-<div id="c-out" style="display:none;margin-top:12px"><textarea id="c-signed" spellcheck="false" readonly style="min-height:150px"></textarea><div class="row"><button class="alt" id="c-dl">Download permission.json</button><button class="alt" id="c-use">Use it in the check below</button></div></div>
+<div class="row"><button class="btn" id="c-gen">Generate a new key</button><button class="btn primary" id="c-sign">Sign permission</button></div>
+<div id="c-out" style="display:none;margin-top:12px"><textarea id="c-signed" spellcheck="false" readonly style="min-height:150px"></textarea><div class="row"><button class="btn" id="c-dl">Download permission.json</button><button class="btn" id="c-use">Use it in the check below</button></div></div>
 <div id="c-err" class="bad" style="margin-top:8px"></div>
+</div></div>
 
-<h2 style="font-size:20px;margin:36px 0 4px">Check records against a permission</h2>
+<div class="card"><div class="card-b">
+<h2>Check records against a permission</h2>
 <p class="mut">Paste a signed permission (made with <code>hsip-proof mandate-sign</code>) and the proofs or evidence pack. The page lists every record that falls outside what was allowed. Same offline check, same rules.</p>
 <textarea id="perm" spellcheck="false" placeholder="Signed permission (JSON)" style="min-height:110px"></textarea>
 <textarea id="perm-proofs" spellcheck="false" placeholder="Proofs: one proof, a list of proofs, or an evidence pack (JSON)" style="min-height:110px;margin-top:10px"></textarea>
-<div class="row"><button id="pgo">Check against the permission</button></div>
-<div id="presult" role="status" aria-live="polite" style="display:none;margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:18px;background:var(--card)"></div>
+<div class="row"><button class="btn primary" id="pgo">Check against the permission</button></div>
+<div id="presult" role="status" aria-live="polite" style="display:none"></div>
+</div></div>
 
 <div class="note">
 <strong>Don't just trust this page.</strong>

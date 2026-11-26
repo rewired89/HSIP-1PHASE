@@ -11,7 +11,7 @@ cd verifier
 python3 -m http.server 8000    # use `python` on Windows; then open http://127.0.0.1:8000
 ```
 
-Or upload the folder to any static host (GitHub Pages works). Anyone can host their own copy.
+Or upload the folder to any static host (GitHub Pages works). Anyone can host their own copy. The page's look comes from the console's stylesheet: copy `console/src/styles.css` into this folder as `console.css` (the Pages workflow does this for you); without it the page still works, only unstyled.
 
 ## Hosting
 
