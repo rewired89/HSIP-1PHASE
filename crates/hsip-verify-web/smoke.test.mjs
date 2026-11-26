@@ -63,3 +63,16 @@ test('permission check passes an allowed action and flags a disallowed one', () 
   assert.equal(r2.report.within_permission, false)
   assert.equal(r2.report.violations[0].rule, 'action_not_allowed')
 })
+
+test('time evidence is reported for a proof and summarized for a pack', () => {
+  const r = JSON.parse(verify(proof))
+  assert.equal(r.result.time_evidence.state, 'batch_only')
+  const pk = JSON.parse(verify(pack))
+  assert.deepEqual(Object.keys(pk.result.time_summary), ['batch_only'])
+})
+
+test('the pack with a removed record fails', () => {
+  const removed = read('../../docs/examples/prove/sample-evidence-pack-removed-record.json').toString('utf8')
+  const r = JSON.parse(verify(removed))
+  assert.equal(r.valid, false)
+})

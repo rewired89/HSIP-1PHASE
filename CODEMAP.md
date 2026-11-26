@@ -5,6 +5,7 @@ Entries cover the HSIP platform code. The Phase 2 protocol crates are untouched 
 ## crates/hsip-proof (open format + verifier, no I/O)
 
 - `src/lib.rs` Signatures are checked with `verify_strict` and small-order public keys are rejected (`vk_from_b64`).
+- `time_evidence(bundle)` in `crates/hsip-proof/src/lib.rs`: reports a record's external-time state without checking it; `Verification.time_evidence` and `PackVerification.time_summary` carry it to the CLI (`[TIME]` line), wasm and API. Fixtures: `docs/examples/prove/sample-evidence-pack-removed-record.json` (must fail). Docs: `docs/PROVE_CLAIMS.md` (what a proof covers), `docs/CAPTURE_BOUNDARY_TEMPLATE.md`, `docs/examples/prove/README.md`.
   - `Envelope` the signed statement (format `hsip-proof/1`). `canonical_bytes`/`event_hash` JCS + SHA-256. `sign_envelope(env, key)` returns `(event_hash_hex, signature_b64)`. called_by: `platform::engine::record`, tests.
   - `ProofBundle`, `AnchorBlock`, `ProofStepDto` wire types for a proof and its batch evidence.
   - `verify_bundle(&ProofBundle) -> Verification` checks content hash, signature, format, Merkle inclusion, anchor signature. called_by: `routes::{proofs,public}`, `evidence`, CLI.

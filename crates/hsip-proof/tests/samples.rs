@@ -35,3 +35,34 @@ fn any_single_byte_change_to_the_sample_is_detected() {
     b.envelope.subject.push('x');
     assert!(!verify_bundle(&b).valid);
 }
+
+#[test]
+fn sample_pack_with_a_record_removed_is_caught() {
+    // Same signed manifest, but the middle record has been taken out.
+    let p: EvidencePack =
+        serde_json::from_str(&sample("sample-evidence-pack-removed-record.json")).unwrap();
+    let v = verify_pack(&p);
+    assert!(!v.valid);
+    let failed = |name: &str| {
+        v.checks
+            .iter()
+            .any(|c| c.name == name && c.ok == Some(false))
+    };
+    let passed = |name: &str| {
+        v.checks
+            .iter()
+            .any(|c| c.name == name && c.ok == Some(true))
+    };
+    assert!(failed("manifest_matches_proofs"), "{:?}", v.checks);
+    assert!(failed("hash_chain"), "{:?}", v.checks);
+    // The signed manifest itself was not touched, which is why the removal shows.
+    assert!(passed("manifest_signature"), "{:?}", v.checks);
+}
+
+#[test]
+fn sample_reports_its_time_evidence_state() {
+    let b: ProofBundle = serde_json::from_str(&sample("sample-proof.json")).unwrap();
+    let t = verify_bundle(&b).time_evidence.unwrap();
+    // The sample was made with Bitcoin timestamps off: batch signature only.
+    assert_eq!(t.state, "batch_only");
+}

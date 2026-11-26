@@ -170,6 +170,12 @@ fn main() -> ExitCode {
                     v.proof_count, v.anchored_count
                 );
                 print_checks(&v.checks);
+                let summary: Vec<String> = v
+                    .time_summary
+                    .iter()
+                    .map(|(state, n)| format!("{n} {state}"))
+                    .collect();
+                println!("  [TIME] {}", summary.join(", "));
                 v.valid
             }
             Err(e) => {
@@ -191,6 +197,9 @@ fn main() -> ExitCode {
                     }
                 );
                 print_checks(&v.checks);
+                if let Some(t) = &v.time_evidence {
+                    println!("  [TIME] {:<22} {}", t.state, t.detail);
+                }
                 v.valid
             }
             Err(e) => {

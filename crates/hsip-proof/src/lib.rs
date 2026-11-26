@@ -161,16 +161,71 @@ pub struct Verification {
     pub valid: bool,
     pub anchored: bool,
     pub checks: Vec<Check>,
+    /// What the file says about external time. Reported, never checked here.
+    #[serde(default)]
+    pub time_evidence: Option<TimeEvidence>,
 }
 
 impl Verification {
-    fn finish(checks: Vec<Check>, anchored: bool) -> Self {
+    fn finish(checks: Vec<Check>, anchored: bool, time: TimeEvidence) -> Self {
         let valid = checks.iter().all(|c| c.ok != Some(false));
         Self {
             valid,
             anchored,
             checks,
+            time_evidence: Some(time),
         }
+    }
+}
+
+/// The state of a record's external time evidence, as the file reports it.
+/// Nothing here is verified: a Bitcoin proof is checked with an OpenTimestamps client.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimeEvidence {
+    /// `not_anchored`, `batch_only`, `unavailable`, `pending`, `bitcoin_proof_attached`,
+    /// `missing_proof` or `unknown`.
+    pub state: String,
+    pub detail: String,
+}
+
+/// Reads the time-evidence state from a bundle without trusting or checking it.
+#[must_use]
+pub fn time_evidence(b: &ProofBundle) -> TimeEvidence {
+    let (state, detail) = match &b.anchor {
+        None => (
+            "not_anchored",
+            "Not anchored yet: no batch signature and no external time evidence. Only the signer's own timestamp exists.",
+        ),
+        Some(a) => match (a.ots_status.as_str(), a.ots_proof.is_some()) {
+            ("" | "disabled", _) => (
+                "batch_only",
+                "Anchored in a signed batch. No Bitcoin timestamp was requested, so the batch time rests on whoever holds the anchor key.",
+            ),
+            ("calendar_unreachable", _) => (
+                "unavailable",
+                "A Bitcoin timestamp was requested but the calendars could not be reached. It may be retried.",
+            ),
+            ("pending", true) => (
+                "pending",
+                "A Bitcoin timestamp was requested and is not confirmed yet. Until it is, time rests on whoever holds the anchor key.",
+            ),
+            ("confirmed", true) => (
+                "bitcoin_proof_attached",
+                "A Bitcoin proof is attached. This verifier does not check it: verify it with an OpenTimestamps client.",
+            ),
+            ("pending" | "confirmed", false) => (
+                "missing_proof",
+                "The file reports a Bitcoin timestamp but carries no proof data. Treat it as no external time evidence.",
+            ),
+            _ => (
+                "unknown",
+                "Unrecognized timestamp status. Treat it as no external time evidence.",
+            ),
+        },
+    };
+    TimeEvidence {
+        state: state.into(),
+        detail: detail.into(),
     }
 }
 
@@ -290,7 +345,7 @@ pub fn verify_bundle(b: &ProofBundle) -> Verification {
             ));
         }
     }
-    Verification::finish(checks, anchored)
+    Verification::finish(checks, anchored, time_evidence(b))
 }
 
 /// A bundle that proves a record against a *specific* expected payload.
@@ -351,6 +406,9 @@ pub struct PackVerification {
     pub invalid_proofs: Vec<String>,
     pub anchored_count: usize,
     pub checks: Vec<Check>,
+    /// How many records are in each time-evidence state (see `TimeEvidence`).
+    #[serde(default)]
+    pub time_summary: BTreeMap<String, usize>,
 }
 
 /// Verifies a whole pack: manifest signature, manifest/proof agreement,
@@ -406,7 +464,9 @@ pub fn verify_pack(p: &EvidencePack) -> PackVerification {
     let mut invalid = Vec::new();
     let mut anchored_count = 0;
     let mut issuers_ok = true;
+    let mut time_summary: BTreeMap<String, usize> = BTreeMap::new();
     for b in &p.proofs {
+        *time_summary.entry(time_evidence(b).state).or_insert(0) += 1;
         let v = verify_bundle(b);
         if !v.valid {
             invalid.push(b.envelope.proof_id.clone());
@@ -484,6 +544,7 @@ pub fn verify_pack(p: &EvidencePack) -> PackVerification {
         invalid_proofs: invalid,
         anchored_count,
         checks,
+        time_summary,
     }
 }
 
@@ -741,6 +802,37 @@ mod tests {
             &b.event_hash,
             &B64.encode(sig)
         ));
+    }
+
+    #[test]
+    fn time_evidence_names_each_state_and_never_overclaims() {
+        let k = key(1);
+        let mut bs = vec![bundle(env(1, ""), &k)];
+        assert_eq!(time_evidence(&bs[0]).state, "not_anchored");
+        anchor_all(&mut bs, &key(9));
+        assert_eq!(time_evidence(&bs[0]).state, "batch_only");
+        let set = |b: &mut ProofBundle, status: &str, proof: Option<&str>| {
+            let a = b.anchor.as_mut().unwrap();
+            a.ots_status = status.into();
+            a.ots_proof = proof.map(String::from);
+        };
+        set(&mut bs[0], "pending", Some("AAAA"));
+        assert_eq!(time_evidence(&bs[0]).state, "pending");
+        set(&mut bs[0], "confirmed", Some("AAAA"));
+        assert_eq!(time_evidence(&bs[0]).state, "bitcoin_proof_attached");
+        // A claim with nothing behind it is not time evidence.
+        set(&mut bs[0], "confirmed", None);
+        assert_eq!(time_evidence(&bs[0]).state, "missing_proof");
+        set(&mut bs[0], "pending", None);
+        assert_eq!(time_evidence(&bs[0]).state, "missing_proof");
+        set(&mut bs[0], "calendar_unreachable", None);
+        assert_eq!(time_evidence(&bs[0]).state, "unavailable");
+        set(&mut bs[0], "something-new", Some("AAAA"));
+        assert_eq!(time_evidence(&bs[0]).state, "unknown");
+        // It is reported on the verification, and never changes validity.
+        let v = verify_bundle(&bs[0]);
+        assert!(v.valid);
+        assert_eq!(v.time_evidence.unwrap().state, "unknown");
     }
 
     #[test]

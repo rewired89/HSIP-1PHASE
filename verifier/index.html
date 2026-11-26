@@ -84,6 +84,7 @@
 <li>It runs the same open-source verifier as the <code>hsip-proof</code> command-line tool (source: <code>crates/hsip-proof</code> in the HSIP repository). For a result you can rely on in a dispute, run that tool on your own machine.</li>
 <li>This page is plain static files. Anyone can host their own copy.</li>
 <li>A genuine result means the record is unaltered since it was signed by the key written in the file. It does not show whose key that is: compare it with the key the organization publishes, through a second channel. It does not mean the decision it describes was right.</li>
+<li>A valid result does not show that everything was recorded, or that the decision was right. See <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/docs/PROVE_CLAIMS.md">what a proof covers</a>.</li>
 <li>The anchor time shown in a file is reported, not proven here. To check the Bitcoin timestamp, verify the OpenTimestamps proof with an OpenTimestamps client.</li>
 </ul>
 </div>
@@ -122,6 +123,17 @@ async function run(text){
   for (const c of res.checks) {
     const tag = c.ok === true ? '<span class="tag ok">Passed</span>' : c.ok === false ? '<span class="tag bad">Failed</span>' : '<span class="tag na">Not applicable</span>';
     h += "<li>" + tag + "<strong>" + esc(LABEL[c.name] || c.name) + '</strong><br><span class="mut">' + esc(c.detail) + "</span></li>";
+  }
+  const TIME = {
+    not_anchored: "Not anchored yet", batch_only: "Signed batch, no Bitcoin timestamp", unavailable: "Timestamp unavailable",
+    pending: "Bitcoin timestamp pending", bitcoin_proof_attached: "Bitcoin proof attached (not checked here)",
+    missing_proof: "Claimed timestamp has no proof", unknown: "Unknown timestamp status",
+  };
+  if (res.time_evidence) {
+    h += '<li><span class="tag na">Time</span><strong>' + esc(TIME[res.time_evidence.state] || res.time_evidence.state) + '</strong><br><span class="mut">' + esc(res.time_evidence.detail) + "</span></li>";
+  } else if (res.time_summary) {
+    const parts = Object.entries(res.time_summary).map(([k, n]) => n + " " + (TIME[k] || k).toLowerCase());
+    h += '<li><span class="tag na">Time</span><strong>Time evidence</strong><br><span class="mut">' + esc(parts.join(", ")) + ". Bitcoin proofs are not checked on this page.</span></li>";
   }
   h += "</ul>";
   let key = "";

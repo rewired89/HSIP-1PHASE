@@ -23,6 +23,7 @@
   <a href="./" class="brand"><svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#1f4fd8"/><path d="M9 16.5l4.5 4.5L23 11" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg> <span>HSIP</span></a>
   <span class="grow"></span>
   <a href="#how">How it works</a>
+  <a href="#covers">What it proves</a>
   <a href="#limits">Limits</a>
   <a href="check/">Verify a proof</a>
   <a href="https://github.com/rewired89/HSIP-1PHASE">Source code</a>
@@ -77,7 +78,25 @@
   </div>
 </section>
 
-<section class="section alt" id="limits">
+<section class="section alt" id="covers">
+  <h2>What a proof covers</h2>
+  <p class="lead">A proof is evidence for a reviewer, not a verdict. Each question below has its own answer, and the verifier shows each check separately.</p>
+  <div class="card"><div class="table-wrap"><table class="t">
+    <thead><tr><th>A reviewer asks</th><th>Covered today?</th><th>What a pass shows</th></tr></thead>
+    <tbody>
+      <tr><td>Are these the bytes that were recorded?</td><td><span class="badge ok">Yes</span></td><td>The record matches its signed hash.</td></tr>
+      <tr><td>Who signed it?</td><td><span class="badge warn">Partly</span></td><td>It was signed by the key written in the file. Compare that key with the one the organization publishes.</td></tr>
+      <tr><td>Is it in a signed batch?</td><td><span class="badge ok">Yes</span></td><td>Included in a Merkle batch with a signed root.</td></tr>
+      <tr><td>Is the history unbroken?</td><td><span class="badge warn">Partly</span></td><td>Records link by hash and a removed record shows up in an exported pack. Rollback of the newest records is not detected yet.</td></tr>
+      <tr><td>When did it exist?</td><td><span class="badge warn">Partly</span></td><td>The file reports its time-evidence state. A Bitcoin proof, if present, is checked with an OpenTimestamps client.</td></tr>
+      <tr><td>Was everything recorded?</td><td><span class="badge bad">No</span></td><td>A proof cannot show an action that was never recorded. Each pilot starts with a written capture boundary.</td></tr>
+      <tr><td>Was the decision right or lawful?</td><td><span class="badge bad">No</span></td><td>Evidence for review only.</td></tr>
+    </tbody>
+  </table></div></div>
+  <p class="small muted" style="margin-top:14px">The full wording is in <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/docs/PROVE_CLAIMS.md">what a proof covers</a>, and a <a href="https://github.com/rewired89/HSIP-1PHASE/blob/main/docs/CAPTURE_BOUNDARY_TEMPLATE.md">capture boundary template</a> is public.</p>
+</section>
+
+<section class="section" id="limits">
   <h2>Honest about the limits</h2>
   <p class="lead">A proof shows that a record existed in this exact form at a point in time, was signed by a key, and has not been changed, removed or reordered since. It does not show that the decision was right, and it does not make a system compliant with any rule.</p>
   <div class="grid g2">
@@ -94,6 +113,7 @@
     <a href="check/" class="btn primary">Open Proof Check</a>
     <a href="samples/sample-proof.json" class="btn">Sample proof</a>
     <a href="samples/sample-evidence-pack.json" class="btn">Sample evidence pack</a>
+    <a href="samples/sample-evidence-pack-removed-record.json" class="btn">Pack with a record removed (should fail)</a>
   </div>
 </section>
 
