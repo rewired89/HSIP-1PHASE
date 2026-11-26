@@ -12,6 +12,7 @@
 //! 3. **External time** (optional): OpenTimestamps commitment of that root.
 //!    Carried in the bundle, not checked here.
 
+pub mod checkpoint;
 pub mod mandate;
 pub mod merkle;
 
@@ -21,6 +22,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+pub use checkpoint::{
+    check_checkpoint_set, check_checkpoints, check_checkpoints_text, checkpoint_hash,
+    checkpoints_from_value, sign_checkpoint, verify_checkpoint, Checkpoint, CheckpointBody,
+    CheckpointReport, CheckpointResult, CHECKPOINT_FORMAT,
+};
 pub use mandate::{
     evaluate as evaluate_mandate, proofs_from_value, sign_mandate, verify_mandate, Mandate,
     MandateBody, MandateReport, Violation, MANDATE_FORMAT,

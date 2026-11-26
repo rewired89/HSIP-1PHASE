@@ -143,6 +143,17 @@ const SCHEMA: &[&str] = &[
         ots_status TEXT NOT NULL,
         created_at BIGINT NOT NULL
     )",
+    "CREATE TABLE IF NOT EXISTS checkpoints (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        stream_id TEXT NOT NULL,
+        seq BIGINT NOT NULL,
+        head_hash TEXT NOT NULL,
+        checkpoint_hash TEXT NOT NULL,
+        checkpoint_json TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        UNIQUE (stream_id, seq)
+    )",
     "CREATE TABLE IF NOT EXISTS anchor_identity (
         id INTEGER PRIMARY KEY,
         signing_key_enc TEXT NOT NULL,

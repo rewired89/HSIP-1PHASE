@@ -101,6 +101,12 @@ fn routes() -> Vec<Route> {
             Auditor,
             nobody,
         ),
+        r(
+            "GET",
+            "/v1/orgs/:org/streams/:sid/checkpoints",
+            Auditor,
+            nobody,
+        ),
         r("GET", "/v1/orgs/:org/proofs", Auditor, nobody),
         r("GET", "/v1/orgs/:org/proofs/:pid", Auditor, nobody),
         r(
@@ -185,6 +191,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("POST", "/v1/ingest/commit"),
     ("POST", "/v1/ingest/batch"),
     ("GET", "/v1/proofs/:id"),
+    ("GET", "/v1/checkpoints"),
     ("POST", "/v1/stripe/webhook"),
     ("GET", "/v1/operator/overview"),
     ("GET", "/v1/operator/leads"),
@@ -386,6 +393,8 @@ async fn credentials_are_not_interchangeable() {
         None,
     )
     .await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, _) = call(&e.app, "GET", "/v1/checkpoints", Some(&t.token), None).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
     let (st, _) = call(&e.app, "GET", "/v1/auth/me", Some(&key), None).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);

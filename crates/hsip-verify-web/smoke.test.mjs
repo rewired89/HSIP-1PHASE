@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import init, { verify, check_permission, public_key, sign_permission } from '../../verifier/pkg/hsip_verify_web.js'
+import init, { verify, check_permission, check_checkpoints, public_key, sign_permission } from '../../verifier/pkg/hsip_verify_web.js'
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url))
 await init({ module_or_path: read('../../verifier/pkg/hsip_verify_web_bg.wasm') })
@@ -75,4 +75,28 @@ test('the pack with a removed record fails', () => {
   const removed = read('../../docs/examples/prove/sample-evidence-pack-removed-record.json').toString('utf8')
   const r = JSON.parse(verify(removed))
   assert.equal(r.valid, false)
+})
+
+const sample = (f) => read('../../docs/examples/prove/' + f).toString('utf8')
+
+test('checkpoints you kept match the honest pack and catch a rewritten or cut-off one', () => {
+  const kept = sample('sample-checkpoints.json')
+  const ok = JSON.parse(check_checkpoints(sample('sample-checkpoint-pack.json'), kept, ''))
+  assert.equal(ok.report.consistent, true)
+  assert.equal(ok.report.checked, 2)
+  const forked = JSON.parse(check_checkpoints(sample('sample-checkpoint-pack-rewritten.json'), kept, ''))
+  assert.equal(forked.report.consistent, false)
+  assert.ok(forked.report.results.some((r) => r.state === 'different_history'))
+  const cut = JSON.parse(check_checkpoints(sample('sample-checkpoint-pack-truncated.json'), kept, ''))
+  assert.equal(cut.report.consistent, false)
+  assert.ok(cut.report.results.some((r) => r.state === 'tail_missing'))
+})
+
+test('a key you pin beats the key written in the pack, and bad input is an error', () => {
+  const pinned = Buffer.alloc(32, 9).toString('base64')
+  const r = JSON.parse(check_checkpoints(sample('sample-checkpoint-pack.json'), sample('sample-checkpoints.json'), pinned))
+  assert.equal(r.report.consistent, false)
+  assert.ok(r.report.results.every((x) => x.state === 'wrong_key'))
+  assert.ok(JSON.parse(check_checkpoints('nope', '[]', '')).error)
+  assert.ok(JSON.parse(check_checkpoints(sample('sample-checkpoint-pack.json'), 'nope', '')).error)
 })

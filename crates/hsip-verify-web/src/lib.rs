@@ -34,6 +34,21 @@ pub fn check_permission_text(mandate: &str, proofs: &str) -> Value {
     }
 }
 
+/// Compares an evidence pack (JSON text) with checkpoints you kept (JSON text:
+/// one checkpoint, a list, or the platform's response). `expected_key` is the
+/// platform key you trust for the organization, or empty. Pure function.
+#[wasm_bindgen]
+pub fn check_checkpoints(pack: &str, checkpoints: &str, expected_key: &str) -> String {
+    check_checkpoints_value(pack, checkpoints, expected_key).to_string()
+}
+
+pub fn check_checkpoints_value(pack: &str, checkpoints: &str, expected_key: &str) -> Value {
+    match hsip_proof::check_checkpoints_text(pack, checkpoints, expected_key) {
+        Ok(r) => json!({ "report": r }),
+        Err(e) => json!({ "error": e }),
+    }
+}
+
 /// Public key (base64) for a 32-byte seed (base64) made by the browser's
 /// secure random generator. Returns an empty string for a bad seed.
 #[wasm_bindgen]

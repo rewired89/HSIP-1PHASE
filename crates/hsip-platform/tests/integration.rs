@@ -1416,3 +1416,122 @@ async fn integrity_checks_are_rate_limited_and_report_completeness() {
     assert_eq!(ok, 6, "six integrity checks per minute per organization");
     assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn anchoring_writes_signed_checkpoints_a_customer_can_keep_and_check() {
+    use hsip_proof::{check_checkpoints, checkpoints_from_value, verify_checkpoint, EvidencePack};
+    let e = env().await;
+    let t = signup(&e, "o@cp.test", "Checkpoint Co").await;
+    let sid = stream(&e, &t, "Decisions").await;
+    let (key, _) = api_key(&e, &t, "ingest", Some(&sid)).await;
+    let (read_key, _) = api_key(&e, &t, "read", Some(&sid)).await;
+    let mut heads = Vec::new();
+    for n in 1..=3 {
+        let (st, v) = ingest(&e, &key, &sid, n).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        heads.push(v["event_hash"].as_str().unwrap().to_string());
+    }
+    anchor::run_cycle(&e.state, &[]).await.unwrap();
+
+    let url = format!("/v1/orgs/{}/streams/{}/checkpoints", t.org, sid);
+    let (st, v) = call(&e.app, "GET", &url, Some(&t.token), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let first = checkpoints_from_value(v.clone()).unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].body.seq, "3");
+    assert_eq!(first[0].body.head_hash, heads[2]);
+    verify_checkpoint(&first[0]).unwrap();
+    // Signed by the organization's published platform key.
+    let (_, org) = call(
+        &e.app,
+        "GET",
+        &format!("/v1/orgs/{}", t.org),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    assert_eq!(first[0].body.signer_key, org["org"]["verify_key"]);
+
+    // More records, another cycle: a second checkpoint that links to the first.
+    for n in 4..=5 {
+        ingest(&e, &key, &sid, n).await;
+    }
+    anchor::run_cycle(&e.state, &[]).await.unwrap();
+    let (_, v) = call(
+        &e.app,
+        "GET",
+        &format!("{url}?after_seq=3"),
+        Some(&t.token),
+        None,
+    )
+    .await;
+    let second = checkpoints_from_value(v.clone()).unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].body.seq, "5");
+    assert_eq!(
+        second[0].body.prev_checkpoint_hash,
+        first[0].checkpoint_hash
+    );
+    assert_eq!(v["next_after_seq"], "5");
+
+    // A machine with a read key can sync them too; an ingest key cannot.
+    let (st, v) = call(&e.app, "GET", "/v1/checkpoints", Some(&read_key), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(checkpoints_from_value(v).unwrap().len(), 2);
+    let (st, _) = call(&e.app, "GET", "/v1/checkpoints", Some(&key), None).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+
+    // The checkpoints the customer kept agree with an evidence pack exported later,
+    // and disagree with one whose history was rewritten in the database.
+    let kept: Vec<_> = first.iter().chain(second.iter()).cloned().collect();
+    let export = |e: &Env| {
+        let (app, org, token, sid) = (e.app.clone(), t.org.clone(), t.token.clone(), sid.clone());
+        async move {
+            let (st, ev) = call(
+                &app,
+                "POST",
+                &format!("/v1/orgs/{org}/evidence"),
+                Some(&token),
+                Some(json!({"stream_id": sid})),
+            )
+            .await;
+            assert_eq!(st, StatusCode::OK, "{ev}");
+            let (st, pack) = call(
+                &app,
+                "GET",
+                &format!(
+                    "/v1/orgs/{org}/evidence/{}/pack",
+                    ev["id"].as_str().unwrap()
+                ),
+                Some(&token),
+                None,
+            )
+            .await;
+            assert_eq!(st, StatusCode::OK);
+            serde_json::from_value::<EvidencePack>(pack).unwrap()
+        }
+    };
+    let pack = export(&e).await;
+    let report = check_checkpoints(&pack, &kept, None);
+    assert!(report.consistent && report.checked == 2, "{report:?}");
+
+    // The platform operator rewrites record 4 and re-signs nothing: the chain and the
+    // anchored pack now differ from what the customer's checkpoint 5 committed to.
+    sqlx::query("UPDATE proofs SET event_hash = $1 WHERE stream_id = $2 AND seq = 5")
+        .bind("e".repeat(64))
+        .bind(&sid)
+        .execute(&e.state.db)
+        .await
+        .unwrap();
+    let (st, _) = call(
+        &e.app,
+        "POST",
+        &format!("/v1/orgs/{}/evidence", t.org),
+        Some(&t.token),
+        Some(json!({"stream_id": sid})),
+    )
+    .await;
+    // The platform refuses to hand out a pack that does not verify itself, which is the
+    // first line of defence; the checkpoint check is the one a customer controls.
+    assert_eq!(st, StatusCode::CONFLICT);
+}

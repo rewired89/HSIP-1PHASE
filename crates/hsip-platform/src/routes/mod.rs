@@ -8,6 +8,7 @@ use crate::state::AppState;
 
 pub mod account;
 pub mod billing;
+pub mod checkpoints;
 pub mod evidence;
 pub mod keys;
 pub mod mandates;
@@ -45,6 +46,7 @@ pub fn api(state: AppState) -> Router {
         .route("/v1/ingest/commit", post(proofs::ingest_commit))
         .route("/v1/ingest/batch", post(proofs::ingest_batch))
         .route("/v1/proofs/:id", get(proofs::api_get))
+        .route("/v1/checkpoints", get(checkpoints::list_api))
         // organization console
         .route("/v1/orgs/:org", get(orgs::get).patch(orgs::rename))
         .route("/v1/orgs/:org/key-custody", post(orgs::set_custody))
@@ -64,6 +66,10 @@ pub fn api(state: AppState) -> Router {
         .route(
             "/v1/orgs/:org/streams/:sid/integrity",
             get(proofs::integrity),
+        )
+        .route(
+            "/v1/orgs/:org/streams/:sid/checkpoints",
+            get(checkpoints::list_stream),
         )
         .route("/v1/orgs/:org/proofs", get(proofs::list))
         .route("/v1/orgs/:org/proofs/:pid", get(proofs::get_one))

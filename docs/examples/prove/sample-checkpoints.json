@@ -1,0 +1,30 @@
+{
+  "checkpoints": [
+    {
+      "checkpoint_hash": "6adf8c89b5a8cb83a9afa898f749e4b475132153c34fbd269b611e680738ec9c",
+      "format": "hsip-checkpoint/1",
+      "head_hash": "0ac2cdb447759814a0b2fceaa52f4fc3a80f95bf3bfef6a9b7c5afc5d1dac3e0",
+      "org_id": "sample-org",
+      "prev_checkpoint_hash": "",
+      "seq": "2",
+      "signature": "lbX7SBKg8gQ0Kn+KwLacno1iTpNjdM7xYXZVjGcnRmHD6S3Ci/Ay8V9sDKNIqkE5TjLT0+bM04IlFUy6WoPwBA==",
+      "signer_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+      "stream_id": "sample-stream",
+      "timestamp_iso": "2027-01-15T08:01:00.000Z",
+      "timestamp_ms": "1800000060000"
+    },
+    {
+      "checkpoint_hash": "44149ad84b3f5cfd7c18f7958c010c920f84a2286e5b1a611aa58a40ae8e568f",
+      "format": "hsip-checkpoint/1",
+      "head_hash": "076335296199abe3d4ad58bff92d84f7184457d014e9bd0bda4df7344f484303",
+      "org_id": "sample-org",
+      "prev_checkpoint_hash": "6adf8c89b5a8cb83a9afa898f749e4b475132153c34fbd269b611e680738ec9c",
+      "seq": "5",
+      "signature": "vlEpUmi+rberXWKqUJtBfCZng6ElzvpKdT48PX8i0YhEPlPcP5cuT1OSchh/7Ew/ulgHmrH4RFcvrfG7xVbMCw==",
+      "signer_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+      "stream_id": "sample-stream",
+      "timestamp_iso": "2027-01-15T08:01:00.000Z",
+      "timestamp_ms": "1800000120000"
+    }
+  ]
+}

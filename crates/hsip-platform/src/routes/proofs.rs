@@ -47,7 +47,7 @@ pub struct BatchReq {
     pub items: Vec<IngestItem>,
 }
 
-async fn resolve_stream(
+pub(crate) async fn resolve_stream(
     s: &AppState,
     org: &str,
     bound: Option<&str>,

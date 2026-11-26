@@ -80,6 +80,34 @@ if (!('encodeInto' in cachedTextEncoder)) {
 let WASM_VECTOR_LEN = 0;
 
 /**
+ * Compares an evidence pack (JSON text) with checkpoints you kept (JSON text:
+ * one checkpoint, a list, or the platform's response). `expected_key` is the
+ * platform key you trust for the organization, or empty. Pure function.
+ * @param {string} pack
+ * @param {string} checkpoints
+ * @param {string} expected_key
+ * @returns {string}
+ */
+export function check_checkpoints(pack, checkpoints, expected_key) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(pack, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(checkpoints, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(expected_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.check_checkpoints(ptr0, len0, ptr1, len1, ptr2, len2);
+        deferred4_0 = ret[0];
+        deferred4_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * Checks recorded proofs (a proof, a list, or an evidence pack, as JSON text)
  * against a signed permission (JSON text). Pure function, no network.
  * @param {string} mandate

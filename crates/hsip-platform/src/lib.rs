@@ -7,6 +7,7 @@
 pub mod anchor;
 pub mod audit;
 pub mod auth;
+pub mod checkpoints;
 pub mod config;
 pub mod crypto;
 pub mod db;

@@ -121,7 +121,7 @@ const MAX_PENDING_AGE_MS: i64 = 7 * 24 * 3600 * 1000;
 
 /// Anchors whatever is waiting. Returns the number of proofs anchored.
 pub async fn run_cycle(state: &AppState, calendars: &[&str]) -> Result<usize> {
-    let rows = sqlx::query("SELECT id, event_hash FROM proofs WHERE anchor_id IS NULL ORDER BY created_at ASC, seq ASC LIMIT $1")
+    let rows = sqlx::query("SELECT id, event_hash, org_id, stream_id, seq FROM proofs WHERE anchor_id IS NULL ORDER BY created_at ASC, seq ASC LIMIT $1")
         .bind(MAX_BATCH)
         .fetch_all(&state.db)
         .await?;
@@ -130,9 +130,18 @@ pub async fn run_cycle(state: &AppState, calendars: &[&str]) -> Result<usize> {
     }
     let mut ids = Vec::with_capacity(rows.len());
     let mut leaves: Vec<Vec<u8>> = Vec::with_capacity(rows.len());
+    let mut heads = crate::checkpoints::Heads::new();
     for r in &rows {
         ids.push(r.try_get::<String, _>(0)?);
-        leaves.push(hex::decode(r.try_get::<String, _>(1)?)?);
+        let event_hash: String = r.try_get(1)?;
+        let seq: i64 = r.try_get(4)?;
+        let slot = heads
+            .entry((r.try_get::<String, _>(2)?, r.try_get::<String, _>(3)?))
+            .or_insert((0, String::new()));
+        if seq > slot.0 {
+            *slot = (seq, event_hash.clone());
+        }
+        leaves.push(hex::decode(event_hash)?);
     }
     let tree = MerkleTree::from_leaves(&leaves);
     let root = tree.root();
@@ -179,6 +188,7 @@ pub async fn run_cycle(state: &AppState, calendars: &[&str]) -> Result<usize> {
         }
     }
     tx.commit().await?;
+    crate::checkpoints::record_heads(state, &heads).await;
     tracing::info!(anchor = %anchor_id, proofs = ids.len(), ots = ots_status, "anchored batch");
     Ok(ids.len())
 }

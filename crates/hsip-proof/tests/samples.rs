@@ -66,3 +66,29 @@ fn sample_reports_its_time_evidence_state() {
     // The sample was made with Bitcoin timestamps off: batch signature only.
     assert_eq!(t.state, "batch_only");
 }
+
+fn checkpoint_report(pack_file: &str) -> hsip_proof::CheckpointReport {
+    hsip_proof::check_checkpoints_text(&sample(pack_file), &sample("sample-checkpoints.json"), "")
+        .unwrap()
+}
+
+#[test]
+fn checkpoint_samples_pin_the_checkpoint_format_and_the_three_outcomes() {
+    // The honest pack is valid and matches both checkpoints the customer kept.
+    let honest: EvidencePack =
+        serde_json::from_str(&sample("sample-checkpoint-pack.json")).unwrap();
+    assert!(verify_pack(&honest).valid);
+    let r = checkpoint_report("sample-checkpoint-pack.json");
+    assert!(r.consistent && r.checked == 2, "{r:?}");
+    // A rewritten history is valid on its own, and still caught.
+    let rewritten: EvidencePack =
+        serde_json::from_str(&sample("sample-checkpoint-pack-rewritten.json")).unwrap();
+    assert!(verify_pack(&rewritten).valid);
+    let r = checkpoint_report("sample-checkpoint-pack-rewritten.json");
+    assert!(!r.consistent);
+    assert!(r.results.iter().any(|x| x.state == "different_history"));
+    // An export with the newest records cut off.
+    let r = checkpoint_report("sample-checkpoint-pack-truncated.json");
+    assert!(!r.consistent);
+    assert!(r.results.iter().any(|x| x.state == "tail_missing"));
+}

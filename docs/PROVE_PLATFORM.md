@@ -75,6 +75,7 @@ POST /v1/ingest/prepare    same body as /v1/ingest; customer-held keys only: ret
 POST /v1/ingest/commit     {stream?, envelope, signature}  customer-held keys: verifies your Ed25519 signature, then chains and stores   ingest key
 POST /v1/orgs/:org/key-custody  {verify_key, proof}  owner: register your own public key (proof from `hsip-proof register-proof`)   session
 GET  /v1/proofs/:id        full bundle + verification                                      read key
+GET  /v1/checkpoints       signed stream heads (?stream=&after_seq=&limit=), keep them      read key
 ```
 
 Public (no auth): `POST /v1/verify` (bundle or evidence pack), `POST /v1/verify/match` (compare original content with a bundle), `GET /v1/public/shares/:token`, `GET /v1/public/orgs/:slug` (published key), `POST /v1/leads`, `GET /v1/meta` (plans and services), `GET /health`.

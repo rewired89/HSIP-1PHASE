@@ -1,0 +1,94 @@
+{
+  "format": "hsip-evidence-pack/1",
+  "org_name": "Acme Lending (sample)",
+  "org_verify_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+  "stream_name": "Loan decisions",
+  "generated_at_iso": "2027-01-15T09:00:00.000Z",
+  "manifest": {
+    "org_id": "sample-org",
+    "stream_id": "sample-stream",
+    "from_ms": 0,
+    "to_ms": 1800000600000,
+    "event_hashes": [
+      "6a63a0e59547a388336716009e1200ef0113181503c72cabdaf457f965bb28ed",
+      "0ac2cdb447759814a0b2fceaa52f4fc3a80f95bf3bfef6a9b7c5afc5d1dac3e0",
+      "210282a121c4c54e29ca2abc973714e9fad8e0a9b12b05c540aa52421da59e78"
+    ]
+  },
+  "manifest_hash": "1b3399300b701852ce7ca988e5da26b8913150beb53e6a3609b66a7a589c2842",
+  "manifest_signature": "OVx/hlPhJl46x3VCArWTa6VcI6D8sxn1b0/W5TDWa2SeD/pX/4VGATsBV4nNEoLZj1DRvK+m+uRxSDsItKITAw==",
+  "proofs": [
+    {
+      "format": "hsip-proof-bundle/1",
+      "envelope": {
+        "format": "hsip-proof/1",
+        "proof_id": "00000000-0000-4000-8000-000000000001",
+        "org_id": "sample-org",
+        "stream_id": "sample-stream",
+        "seq": "1",
+        "actor": "underwriting-model-v3",
+        "action": "loan.decision",
+        "subject": "application-a-1",
+        "payload_hash": "2ffce2f7015d056baf581a2207462824b30768e88a8aff0cc0e0d163244e363d",
+        "metadata": {},
+        "prev_hash": "",
+        "timestamp_iso": "2027-01-15T08:00:01.000Z",
+        "timestamp_ms": "1800000001000"
+      },
+      "event_hash": "6a63a0e59547a388336716009e1200ef0113181503c72cabdaf457f965bb28ed",
+      "signature": "ZstOjk0sFsP4YtOnFdIE1GWRKG4deVgmK16ecZ63c1C/T1pDfP0rqHpPeWengGgA3RbahAY8gLT9q7ZEwpg6Cg==",
+      "sign_algo": "ED25519",
+      "org_verify_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+      "org_name": "Acme Lending (sample)",
+      "anchor": null
+    },
+    {
+      "format": "hsip-proof-bundle/1",
+      "envelope": {
+        "format": "hsip-proof/1",
+        "proof_id": "00000000-0000-4000-8000-000000000002",
+        "org_id": "sample-org",
+        "stream_id": "sample-stream",
+        "seq": "2",
+        "actor": "underwriting-model-v3",
+        "action": "loan.decision",
+        "subject": "application-a-2",
+        "payload_hash": "03a12a18b56a8a50367231cca3e90d2df8cd6c7d5848fdef1d5b051810180cd5",
+        "metadata": {},
+        "prev_hash": "6a63a0e59547a388336716009e1200ef0113181503c72cabdaf457f965bb28ed",
+        "timestamp_iso": "2027-01-15T08:00:02.000Z",
+        "timestamp_ms": "1800000002000"
+      },
+      "event_hash": "0ac2cdb447759814a0b2fceaa52f4fc3a80f95bf3bfef6a9b7c5afc5d1dac3e0",
+      "signature": "D2fyWDZu5ovU9F+zQd6FvqPSVSo+cIlDHyS2INU+Gn+p9DljvqTp4dN7uW0MbUc0jJ5+V6vTLPkxHo3D2W5jAg==",
+      "sign_algo": "ED25519",
+      "org_verify_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+      "org_name": "Acme Lending (sample)",
+      "anchor": null
+    },
+    {
+      "format": "hsip-proof-bundle/1",
+      "envelope": {
+        "format": "hsip-proof/1",
+        "proof_id": "00000000-0000-4000-8000-000000000003",
+        "org_id": "sample-org",
+        "stream_id": "sample-stream",
+        "seq": "3",
+        "actor": "underwriting-model-v3",
+        "action": "loan.decision",
+        "subject": "application-a-3",
+        "payload_hash": "f833b3aa820f5aa05fdcdd9818bfc87092abd62996e422a28f2e18d5fa05d56f",
+        "metadata": {},
+        "prev_hash": "0ac2cdb447759814a0b2fceaa52f4fc3a80f95bf3bfef6a9b7c5afc5d1dac3e0",
+        "timestamp_iso": "2027-01-15T08:00:03.000Z",
+        "timestamp_ms": "1800000003000"
+      },
+      "event_hash": "210282a121c4c54e29ca2abc973714e9fad8e0a9b12b05c540aa52421da59e78",
+      "signature": "wAJGQUpOfDpu52Efe2sj1W3JkMIg3DkCteExMWumxqX5x13F4gd9Ba2plspJlknEgAvAuehplstvM1BWgtFSAA==",
+      "sign_algo": "ED25519",
+      "org_verify_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+      "org_name": "Acme Lending (sample)",
+      "anchor": null
+    }
+  ]
+}

@@ -87,7 +87,7 @@
       <tr><td>Are these the bytes that were recorded?</td><td><span class="badge ok">Yes</span></td><td>The record matches its signed hash.</td></tr>
       <tr><td>Who signed it?</td><td><span class="badge warn">Partly</span></td><td>It was signed by the key written in the file. Compare that key with the one the organization publishes.</td></tr>
       <tr><td>Is it in a signed batch?</td><td><span class="badge ok">Yes</span></td><td>Included in a Merkle batch with a signed root.</td></tr>
-      <tr><td>Is the history unbroken?</td><td><span class="badge warn">Partly</span></td><td>Records link by hash and a removed record shows up in an exported pack. Rollback of the newest records is not detected yet.</td></tr>
+      <tr><td>Is the history unbroken?</td><td><span class="badge warn">Partly</span></td><td>Records link by hash and a removed record shows up in an exported pack. If you keep the platform's signed checkpoints, a rewritten, cut-off or rolled-back history is detected too. Without them it is not.</td></tr>
       <tr><td>When did it exist?</td><td><span class="badge warn">Partly</span></td><td>The file reports its time-evidence state. A Bitcoin proof, if present, is checked with an OpenTimestamps client.</td></tr>
       <tr><td>Was everything recorded?</td><td><span class="badge bad">No</span></td><td>A proof cannot show an action that was never recorded. Each pilot starts with a written capture boundary.</td></tr>
       <tr><td>Was the decision right or lawful?</td><td><span class="badge bad">No</span></td><td>Evidence for review only.</td></tr>
@@ -114,6 +114,7 @@
     <a href="samples/sample-proof.json" class="btn">Sample proof</a>
     <a href="samples/sample-evidence-pack.json" class="btn">Sample evidence pack</a>
     <a href="samples/sample-evidence-pack-removed-record.json" class="btn">Pack with a record removed (should fail)</a>
+    <a href="samples/sample-checkpoint-pack-rewritten.json" class="btn">Rewritten history (checkpoints catch it)</a>
   </div>
 </section>
 

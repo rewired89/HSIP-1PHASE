@@ -108,6 +108,27 @@ Proves: each record existed in exactly this form, was signed by the holder of `o
 
 Does not prove: that the decision was correct; that `org_verify_key` belongs to the organization you think (confirm the fingerprint through a second channel); that the customer recorded everything they should have; or the content behind `payload_hash` (that is why you keep the original and compare hashes).
 
+## 7a. Checkpoints (`hsip-checkpoint/1`)
+
+A hash chain does not stop whoever runs the database from cutting off the newest records, rolling back, or showing two people two histories. A checkpoint makes the platform commit to a stream's head at a moment. A customer who keeps checkpoints outside the platform can later catch a history that disagrees with one.
+
+```
+{ "format": "hsip-checkpoint/1", "org_id": "...", "stream_id": "...",
+  "seq": "5",                        // position of the head record
+  "head_hash": "<event_hash of that record, hex>",
+  "timestamp_ms": "...", "timestamp_iso": "...",
+  "prev_checkpoint_hash": "",        // checkpoint_hash of the stream's previous checkpoint
+  "signer_key": "<base64 Ed25519 public key>",
+  "checkpoint_hash": "<hex SHA-256 of JCS(all fields above)>",
+  "signature": "<base64 Ed25519 over the 32 raw bytes of checkpoint_hash>" }
+```
+
+The platform signs one per stream each time it anchors a batch that added records, with the organization's platform key (also for customer-held-key organizations, whose records are signed by the customer: the checkpoint is the platform's statement about the head). Fetch them with `GET /v1/checkpoints?stream=...&after_seq=N` (read API key) or the console route, and store them somewhere the platform cannot change.
+
+Checking: `hsip-proof checkpoint-check pack.json checkpoints.json [--key <platform key>]`, or the Proof Check page. It reports per checkpoint: `consistent`, `different_history` (the pack has another record at that position), `tail_missing` (the pack claims to reach past the checkpoint's time but stops before its position), `bad_signature`, `wrong_key`, `malformed`, or not compared (`beyond_pack`, `before_pack`, `other_stream`). Across checkpoints it flags two heads for one position and a head that moved backwards in time (rollback).
+
+Limits: it only covers positions you hold a checkpoint for, and a platform that signs nothing leaves nothing to compare. Pin the platform key with `--key` to also check who signed.
+
 ## 8. Stability
 
 `hsip-proof/1` is frozen once published: fields are never repurposed. New capabilities arrive as new optional fields or a new format string.

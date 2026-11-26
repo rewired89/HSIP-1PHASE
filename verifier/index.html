@@ -77,6 +77,16 @@
 <div id="presult" role="status" aria-live="polite" style="display:none"></div>
 </div></div>
 
+<div class="card"><div class="card-b">
+<h2>Check against checkpoints you kept</h2>
+<p class="mut">The platform signs the head of each stream every time it anchors a batch. If you saved those checkpoints, paste them here with an evidence pack. This catches a history that was rewritten, cut short or rolled back, even when the pack looks valid on its own. It only checks the positions you hold a checkpoint for.</p>
+<textarea id="ck-pack" spellcheck="false" placeholder="Evidence pack (JSON)" style="min-height:110px"></textarea>
+<textarea id="ck-cps" spellcheck="false" placeholder="Checkpoints you kept: one, a list, or the platform's response (JSON)" style="min-height:110px;margin-top:10px"></textarea>
+<label class="f" style="margin-top:10px">Platform key you trust for this organization <span class="mut">(optional, base64; if empty the key written in the pack is used)</span><input id="ck-key" spellcheck="false"></label>
+<div class="row"><button class="btn primary" id="ckgo">Compare with my checkpoints</button></div>
+<div id="ckresult" role="status" aria-live="polite" style="display:none"></div>
+</div></div>
+
 <div class="note">
 <strong>Don't just trust this page.</strong>
 <ul style="margin-top:8px">
@@ -91,7 +101,7 @@
 </main>
 
 <script type="module">
-import init, { verify, check_permission, public_key, sign_permission } from "./pkg/hsip_verify_web.js";
+import init, { verify, check_permission, check_checkpoints, public_key, sign_permission } from "./pkg/hsip_verify_web.js";
 const GOOD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"loan.decision\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
 const BAD = "{\n  \"anchor\": {\n    \"anchor_id\": \"ae311083-2074-4280-b25b-37efdb31d5db\",\n    \"anchor_signature\": \"lZiNoY2JxE4oYGVR7lX50e4UswhD15eqkb/p51miQs/lezTFNyrAjsMvr33srBZ6tgLtE+9ByvBZ9LuzI1BzAA==\",\n    \"anchor_verify_key\": \"3mvniTJfOkI2ss1RBWmjwsPEowhjqhrMViynKQPsQn4=\",\n    \"anchored_at_iso\": \"2026-10-17T10:03:46.679Z\",\n    \"inclusion_proof\": [\n      {\n        \"hash\": \"ad3393e23ff373c8426cbd10e5bc6973c2298688c70debd7d9d463dad5634ea0\",\n        \"position\": \"left\"\n      },\n      {\n        \"hash\": \"693a239190c5239454491d55b4974812cb09e39858ad0f742b097541ee7933e9\",\n        \"position\": \"right\"\n      },\n      {\n        \"hash\": \"332c8fd0e9538fc03cc728161daf9591e5687765e3af217273edd4437a38f5bc\",\n        \"position\": \"left\"\n      }\n    ],\n    \"leaf_count\": 7,\n    \"merkle_index\": 5,\n    \"merkle_root\": \"62653df44796b3f9da2bffb2a7eb424b65deecaf8e6d089255a8b54df4d6552f\",\n    \"ots_proof\": null,\n    \"ots_status\": \"disabled\"\n  },\n  \"envelope\": {\n    \"action\": \"something.else\",\n    \"actor\": \"underwriting-model-v3\",\n    \"format\": \"hsip-proof/1\",\n    \"metadata\": {\n      \"region\": \"eu\"\n    },\n    \"org_id\": \"bdc9a182-e6c8-4bd0-9ee1-3810ca78f7a0\",\n    \"payload_hash\": \"be6ae3a3b10536c946384fe1a90264c7a6930f8b1cd3d77c9438e256478697b1\",\n    \"prev_hash\": \"0f100da62837515774d2a66beab1ee5db2a20fda15923ffc3cf14b6d44e1c79f\",\n    \"proof_id\": \"6d0589e0-d325-4422-90a5-56c481af6893\",\n    \"seq\": \"2\",\n    \"stream_id\": \"87a8ef8b-ff11-40f3-8641-a847d63a983c\",\n    \"subject\": \"application-1002\",\n    \"timestamp_iso\": \"2026-10-17T10:03:41.154Z\",\n    \"timestamp_ms\": \"1792231421154\"\n  },\n  \"event_hash\": \"d66752a1885dd6cf1bc0ed2dbd862f236d721a3c16e5a2055b994ffbe4bd117b\",\n  \"format\": \"hsip-proof-bundle/1\",\n  \"org_name\": \"Acme Lending (sample)\",\n  \"org_verify_key\": \"p0smfqRbhs26yMzYaBWR4FUDJGnKdJHndK4R3X79Ayg=\",\n  \"sign_algo\": \"ED25519\",\n  \"signature\": \"W0u2nKLfY9ED8y+tUgBYRHWL6arRgOnaXM3xMv2fx0QVKYsL0RmjUh7rGWqrxLIWJU75n+53DQqJ+JyCyS/hBg==\"\n}";
 const LABEL = {
@@ -141,6 +151,31 @@ async function run(text){
   if (key) h += '<p class="mut">Signing key in this file: <code>' + esc(key) + '</code><br>Anyone can create a key and a file that passes these checks. Compare this key with the one the organization publishes, through a second channel.</p>';
   out.innerHTML = h;
 }
+const CK = {
+  consistent: "Matches", beyond_pack: "Not compared (later than the pack)", before_pack: "Not compared (earlier than the pack)",
+  other_stream: "Other stream, ignored", different_history: "Different history", tail_missing: "Newest records missing",
+  bad_signature: "Checkpoint not genuine", wrong_key: "Signed by another key", malformed: "Unreadable checkpoint",
+};
+$("ckgo").onclick = async () => {
+  await ready;
+  const box = $("ckresult");
+  box.style.display = "block";
+  const r = JSON.parse(check_checkpoints($("ck-pack").value, $("ck-cps").value, $("ck-key").value));
+  if (r.error) { box.innerHTML = '<div class="verdict bad">Cannot check</div><p>' + esc(r.error) + "</p>"; return; }
+  const x = r.report;
+  let h = !x.consistent
+    ? '<div class="verdict bad">Does not match your checkpoints</div><p>This history differs from what the platform signed. Do not rely on it.</p>'
+    : x.checked === 0
+      ? '<div class="verdict">Nothing was compared</div><p>No problem was found, but none of your checkpoints fall inside this pack.</p>'
+      : '<div class="verdict ok">Consistent</div><p>' + x.checked + " of your checkpoints match this history. Positions you hold no checkpoint for are not covered.</p>";
+  h += "<ul>";
+  for (const c of x.results) {
+    const bad = ["different_history", "tail_missing", "bad_signature", "wrong_key", "malformed"].includes(c.state);
+    h += '<li><span class="tag ' + (c.state === "consistent" ? "ok" : bad ? "bad" : "na") + '">' + esc(CK[c.state] || c.state) + "</span><strong>Position " + esc(c.seq) + '</strong><br><span class="mut">' + esc(c.detail) + "</span></li>";
+  }
+  for (const p of x.problems) h += '<li><span class="tag bad">Problem</span>' + esc(p) + "</li>";
+  box.innerHTML = h + "</ul>";
+};
 $("pgo").onclick = async () => {
   await ready;
   const r = JSON.parse(check_permission($("perm").value, $("perm-proofs").value));

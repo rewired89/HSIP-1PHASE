@@ -8,6 +8,9 @@
 //! Permissions:
 //!   `hsip-proof mandate-sign my-key.json mandate-body.json > mandate.json`
 //!   `hsip-proof mandate-check mandate.json proofs-or-pack.json`   which records fall outside it
+//!
+//! Checkpoints you kept (signed stream heads the platform gave you earlier):
+//!   `hsip-proof checkpoint-check pack.json checkpoints.json [--key <platform-key>]`   does this history match them
 
 use hsip_proof::{verify_bundle, verify_pack, Check, EvidencePack, ProofBundle};
 use std::process::ExitCode;
@@ -95,6 +98,39 @@ fn mandate_check(mandate_path: &str, proofs_path: &str) -> ExitCode {
     }
 }
 
+fn checkpoint_check(pack_path: &str, cps_path: &str, key: &str) -> ExitCode {
+    let read = |p: &str| std::fs::read_to_string(p).map_err(|e| format!("cannot read {p}: {e}"));
+    let report = match read(pack_path)
+        .and_then(|pack| read(cps_path).map(|c| (pack, c)))
+        .and_then(|(pack, c)| hsip_proof::check_checkpoints_text(&pack, &c, key))
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    for r in &report.results {
+        println!("  [{:<17}] position {:<6} {}", r.state, r.seq, r.detail);
+    }
+    for p in &report.problems {
+        println!("  [PROBLEM] {p}");
+    }
+    if !report.consistent {
+        println!("RESULT: the history does not match the checkpoints you kept");
+        ExitCode::from(1)
+    } else if report.checked == 0 {
+        println!("RESULT: no problem found, but none of the checkpoints fall inside this pack, so nothing was compared");
+        ExitCode::from(3)
+    } else {
+        println!(
+            "RESULT: consistent with {} checkpoint(s) you kept",
+            report.checked
+        );
+        ExitCode::SUCCESS
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 2 && args[1] == "keygen" {
@@ -139,11 +175,23 @@ fn main() -> ExitCode {
     if args.len() == 4 && args[1] == "mandate-sign" {
         return mandate_sign(&args[2], &args[3]);
     }
+    if (args.len() == 4 || args.len() == 6) && args[1] == "checkpoint-check" {
+        let key = if args.len() == 6 && args[4] == "--key" {
+            args[5].as_str()
+        } else {
+            ""
+        };
+        if args.len() == 6 && key.is_empty() {
+            eprintln!("usage: hsip-proof checkpoint-check <pack.json> <checkpoints.json> [--key <platform-key-base64>]");
+            return ExitCode::from(2);
+        }
+        return checkpoint_check(&args[2], &args[3], key);
+    }
     if args.len() == 4 && args[1] == "mandate-check" {
         return mandate_check(&args[2], &args[3]);
     }
     if args.len() != 3 || args[1] != "verify" {
-        eprintln!("usage: hsip-proof verify <bundle-or-pack.json>\n       hsip-proof keygen\n       hsip-proof register-proof <org-id> <key.json>\n       hsip-proof mandate-sign <key.json> <mandate-body.json>\n       hsip-proof mandate-check <mandate.json> <proofs-or-pack.json>");
+        eprintln!("usage: hsip-proof verify <bundle-or-pack.json>\n       hsip-proof keygen\n       hsip-proof register-proof <org-id> <key.json>\n       hsip-proof mandate-sign <key.json> <mandate-body.json>\n       hsip-proof mandate-check <mandate.json> <proofs-or-pack.json>\n       hsip-proof checkpoint-check <pack.json> <checkpoints.json> [--key <platform-key-base64>]");
         return ExitCode::from(2);
     }
     let raw = match std::fs::read_to_string(&args[2]) {
